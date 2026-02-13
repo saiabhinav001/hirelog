@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,10 +15,53 @@ from app.services.seed_data import ensure_seeded
 from app.api.routes.practice import repair_all_practice_list_stats
 from app.api.routes.dashboard import update_dashboard_stats_async
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+)
 logger = logging.getLogger("placement-archive")
 
-app = FastAPI(title=settings.API_TITLE)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup / shutdown lifecycle."""
+    # ── Startup ──────────────────────────────────────────────────────────────
+    try:
+        db.collection("metadata").document("bootstrap").set(
+            {"bootstrapped_at": firestore.SERVER_TIMESTAMP},
+            merge=True,
+        )
+        logger.info("Firestore connection verified")
+    except Exception:
+        logger.exception("Firestore bootstrap write failed — continuing")
+
+    logger.info("FAISS index loaded with %d vectors", faiss_store.index.ntotal)
+
+    try:
+        seed_report = ensure_seeded()
+        logger.info("Seed data status: %s", seed_report)
+    except Exception:
+        logger.exception("Seed data check failed — continuing")
+
+    try:
+        update_dashboard_stats_async()
+        logger.info("Dashboard stats cache refresh triggered")
+    except Exception:
+        logger.exception("Dashboard stats refresh failed — continuing")
+
+    try:
+        repaired = repair_all_practice_list_stats()
+        logger.info("Practice list stats reconciled: %d list(s)", repaired)
+    except Exception:
+        logger.exception("Practice list stats repair failed — continuing")
+
+    logger.info("Startup complete — ENV=%s", settings.ENV)
+    yield
+    # ── Shutdown ─────────────────────────────────────────────────────────────
+    logger.info("Shutting down gracefully")
+
+
+app = FastAPI(title=settings.API_TITLE, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,24 +72,18 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-def bootstrap() -> None:
-    db.collection("metadata").document("bootstrap").set(
-        {"bootstrapped_at": firestore.SERVER_TIMESTAMP},
-        merge=True,
-    )
-    logger.info("FAISS index loaded with %s vectors", faiss_store.index.ntotal)
-    seed_report = ensure_seeded()
-    logger.info("Seed data status: %s", seed_report)
-    update_dashboard_stats_async()
-    logger.info("Dashboard stats cache refreshed")
-    repaired = repair_all_practice_list_stats()
-    logger.info("Practice list stats reconciled: %d list(s)", repaired)
-
-
 @app.get("/")
 def root() -> dict:
-    return {"status": "ok", "service": "placement-archive"}
+    return {"status": "ok", "service": "placement-archive", "env": settings.ENV}
+
+
+@app.get("/health")
+def health() -> dict:
+    return {
+        "status": "healthy",
+        "faiss_vectors": faiss_store.index.ntotal,
+        "env": settings.ENV,
+    }
 
 
 app.include_router(users.router)

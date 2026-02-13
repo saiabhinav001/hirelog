@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from pathlib import Path
 from typing import List, Tuple
@@ -8,17 +9,36 @@ from typing import List, Tuple
 import faiss
 import numpy as np
 
-from app.core.config import settings
+from app.core.config import BASE_DIR, settings
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_data_path(raw: str) -> Path:
+    """Resolve a data path.
+
+    Absolute paths (e.g. /data/faiss/index.faiss on Render) are used as-is.
+    Relative paths are resolved against the backend root dir (local dev).
+    """
+    p = Path(raw)
+    if p.is_absolute():
+        return p
+    return (BASE_DIR / p).resolve()
 
 
 class FaissStore:
     def __init__(self, index_path: str, mapping_path: str, dimension: int) -> None:
-        self.index_path = Path(index_path)
-        self.mapping_path = Path(mapping_path)
+        self.index_path = _resolve_data_path(index_path)
+        self.mapping_path = _resolve_data_path(mapping_path)
         self.dimension = dimension
         self._lock = threading.Lock()
         self.index = self._load_or_create_index()
         self.mapping = self._load_or_create_mapping()
+        logger.info(
+            "FAISS store initialised — index=%s  vectors=%d",
+            self.index_path,
+            self.index.ntotal,
+        )
 
     def _load_or_create_index(self) -> faiss.IndexFlatIP:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)

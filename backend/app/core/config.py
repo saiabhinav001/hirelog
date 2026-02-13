@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -14,7 +15,9 @@ class Settings(BaseSettings):
     API_TITLE: str = "Placement Archive API"
     ENV: str = "development"
 
-    FIREBASE_SERVICE_ACCOUNT_PATH: str
+    # Firebase — production uses JSON env var; local dev uses file path
+    FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
+    FIREBASE_SERVICE_ACCOUNT_PATH: Optional[str] = None
     FIREBASE_PROJECT_ID: str
 
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://localhost:3002"
@@ -26,6 +29,10 @@ class Settings(BaseSettings):
 
     MAX_SEARCH_RESULTS: int = 20
     DASHBOARD_SAMPLE_LIMIT: int = 500
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENV == "production"
 
     def allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]

@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: hirelog-api
+    runtime: python
+    region: oregon
+    plan: starter
+    rootDir: backend
+    buildCommand: |
+      pip install -r requirements.txt
+      python -m spacy download en_core_web_sm
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    autoDeploy: true
+    disk:
+      name: faiss-data
+      mountPath: /data/faiss
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: ENV
+        value: production
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: FAISS_INDEX_PATH
+        value: /data/faiss/index.faiss
+      - key: FAISS_MAPPING_PATH
+        value: /data/faiss/mapping.json
+      - key: EMBEDDING_MODEL
+        value: sentence-transformers/all-MiniLM-L6-v2
+      - key: EMBEDDING_DIM
+        value: "384"
+      - key: MAX_SEARCH_RESULTS
+        value: "20"
+      - key: DASHBOARD_SAMPLE_LIMIT
+        value: "500"
