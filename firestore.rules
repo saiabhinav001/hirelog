@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isContributor() {
+      return signedIn() && userDoc().data.role == 'contributor';
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow create: if signedIn() && request.auth.uid == userId;
+      // Role upgrades are managed server-side via the backend admin SDK.
+      // Client writes only touch name/email; role changes are rejected client-side.
+      allow update: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /interview_experiences/{docId} {
+      allow read: if signedIn();
+      // Contributions are created through the backend API (admin SDK),
+      // which auto-upgrades viewers to contributors on first submit.
+      allow create: if signedIn()
+        && request.resource.data.created_by == request.auth.uid;
+      allow update, delete: if signedIn()
+        && resource.data.created_by == request.auth.uid;
+    }
+
+    match /practice_lists/{listId} {
+      allow read, write: if signedIn() 
+        && request.auth.uid == resource.data.user_id;
+      allow create: if signedIn() 
+        && request.resource.data.user_id == request.auth.uid;
+      
+      match /questions/{questionId} {
+        allow read, write: if signedIn() 
+          && get(/databases/$(database)/documents/practice_lists/$(listId)).data.user_id == request.auth.uid;
+      }
+    }
+
+    match /metadata/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
