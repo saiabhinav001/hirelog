@@ -5,9 +5,10 @@ services:
     region: oregon
     plan: starter
     buildCommand: |
+      cd backend
       pip install -r requirements.txt
       python -m spacy download en_core_web_sm
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /
     autoDeploy: true
     disk:
@@ -15,8 +16,6 @@ services:
       mountPath: /data/faiss
       sizeGB: 1
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.11.9"
       - key: ENV
         value: production
       - key: FIREBASE_PROJECT_ID
