@@ -63,6 +63,9 @@ export type Experience = {
   is_active?: boolean;
   nlp_status?: "pending" | "processing" | "done" | "failed";
   edit_history?: EditHistoryEntry[];
+  allow_contact?: boolean;
+  contact_linkedin?: string;
+  contact_email?: string;
 };
 
 export type SearchResponse = {

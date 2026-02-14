@@ -54,8 +54,8 @@ function EditMetadataModal({
 
       const updated = await updateExperienceMetadata(experience.id, payload, token);
       onSaved(updated);
-    } catch (err: any) {
-      setError(err.message || "Failed to save changes.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to save changes.");
     } finally {
       setSaving(false);
     }
@@ -400,7 +400,7 @@ function ContributionCard({
             <p className="text-xs text-[var(--text-muted)] mt-1">
               {experience.author?.visibility === "public" && experience.author?.public_label
                 ? <>Attributed as: <span className="text-[var(--text-secondary)] font-medium">{experience.author.public_label}</span></>
-                : <>Submitted as: <span className="font-medium">Anonymous (CBIT)</span> — identity permanently hidden</>}
+                : <>Submitted as: <span className="font-medium">Anonymous</span> — identity permanently hidden</>}
             </p>
           </div>
           <div className="flex items-center gap-1 shrink-0">

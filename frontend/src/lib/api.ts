@@ -23,7 +23,6 @@ export async function apiFetch<T>(
   }
 
   let response!: Response;
-  let lastError: unknown;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
@@ -34,8 +33,7 @@ export async function apiFetch<T>(
       });
       // Success — break out of the retry loop
       break;
-    } catch (err) {
-      lastError = err;
+    } catch {
       // Only retry on network errors (server unreachable, CORS pre-flight, etc.)
       if (attempt < MAX_RETRIES - 1) {
         await sleep(RETRY_DELAY_MS * (attempt + 1));
@@ -48,7 +46,7 @@ export async function apiFetch<T>(
   }
 
   const text = await response.text();
-  let data: any = {};
+  let data: Record<string, unknown> = {};
   if (text) {
     try {
       data = JSON.parse(text);
@@ -58,7 +56,7 @@ export async function apiFetch<T>(
   }
 
   if (!response.ok) {
-    const message = data?.detail || data?.message || "Request failed";
+    const message = (data?.detail as string) || (data?.message as string) || "Request failed";
     throw new Error(message);
   }
 

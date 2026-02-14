@@ -12,7 +12,7 @@ ENV_FILE = BASE_DIR / ".env"
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_ignore_empty=True)
 
-    API_TITLE: str = "Placement Archive API"
+    API_TITLE: str = "HireLog API"
     ENV: str = "development"
 
     # Firebase — production uses JSON env var; local dev uses file path

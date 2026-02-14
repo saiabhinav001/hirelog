@@ -14,8 +14,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "The Placement Archive — CBIT Placement Intelligence",
-  description: "An institutional knowledge system that converts interview experiences into searchable, analyzable placement intelligence for CBIT.",
+  title: "HireLog — Campus Placement Intelligence",
+  description: "Turn interview experiences into searchable, analyzable placement intelligence. Semantic search, AI extraction, and analytics for smarter campus preparation.",
 };
 
 export default function RootLayout({
@@ -26,6 +26,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
         <script
           dangerouslySetInnerHTML={{
             __html: `

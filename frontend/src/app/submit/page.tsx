@@ -21,6 +21,9 @@ export default function SubmitPage() {
   const [difficulty, setDifficulty] = useState("Medium");
   const [rawText, setRawText] = useState("");
   const [isAnonymous, setIsAnonymous] = useState(false);
+  const [allowContact, setAllowContact] = useState(false);
+  const [contactLinkedin, setContactLinkedin] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
   const [userQuestions, setUserQuestions] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +59,9 @@ export default function SubmitPage() {
             raw_text: rawText,
             is_anonymous: isAnonymous,
             show_name: !isAnonymous,
+            allow_contact: isAnonymous ? false : allowContact,
+            contact_linkedin: isAnonymous ? null : (contactLinkedin.trim() || null),
+            contact_email: isAnonymous ? null : (contactEmail.trim() || null),
             user_questions: parsedQuestions,
           }),
         },
@@ -220,7 +226,7 @@ export default function SubmitPage() {
           }`}>
             {isAnonymous ? (
               <>
-                This submission will appear as <strong>Anonymous (CBIT)</strong>.
+                This submission will appear as <strong>Anonymous</strong>.
                 This cannot be changed later.
               </>
             ) : (
@@ -235,6 +241,53 @@ export default function SubmitPage() {
           <p className="text-[10px] text-[var(--text-muted)] -mt-4">
             Your public display name is set in your profile. Future name changes do not update past submissions.
           </p>
+        )}
+
+        {/* Contact details — only shown when not anonymous */}
+        {!isAnonymous && (
+          <div className="p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)] space-y-3">
+            <p className="text-sm font-medium">Contact Details <span className="font-normal text-[var(--text-muted)]">(optional)</span></p>
+            <p className="text-xs text-[var(--text-muted)]">
+              Let other students reach out to you about this experience. Contact is never shown without your explicit opt-in.
+            </p>
+
+            <div className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                id="contact-toggle"
+                checked={allowContact}
+                onChange={(e) => setAllowContact(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
+              />
+              <label htmlFor="contact-toggle" className="text-sm cursor-pointer">
+                Allow students to contact me about this experience
+              </label>
+            </div>
+
+            {allowContact && (
+              <div className="grid gap-3 sm:grid-cols-2 pt-1">
+                <div>
+                  <label className="label">LinkedIn <span className="font-normal text-[var(--text-muted)]">(recommended)</span></label>
+                  <input
+                    className="input-field"
+                    value={contactLinkedin}
+                    onChange={(e) => setContactLinkedin(e.target.value)}
+                    placeholder="linkedin.com/in/username"
+                  />
+                </div>
+                <div>
+                  <label className="label">Email <span className="font-normal text-[var(--text-muted)]">(optional)</span></label>
+                  <input
+                    className="input-field"
+                    type="email"
+                    value={contactEmail}
+                    onChange={(e) => setContactEmail(e.target.value)}
+                    placeholder="you@example.com"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {/* Performance note */}

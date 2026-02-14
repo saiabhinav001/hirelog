@@ -169,8 +169,8 @@ export default function ProfilePage() {
       refreshProfile().catch(() => {});
       setEditingName(false);
       toast("Name updated successfully.", "success");
-    } catch (err: any) {
-      toast(err.message || "Failed to update name.", "error");
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : "Failed to update name.", "error");
     } finally {
       setNameSaving(false);
     }
@@ -403,7 +403,7 @@ export default function ProfilePage() {
                     <p className="text-sm font-medium">Anonymous contributions</p>
                     <p className="text-xs text-[var(--text-muted)]">
                       Choosing anonymous is permanent — no identity references are stored, and the decision cannot be reversed.
-                      Anonymous submissions always display as &ldquo;Anonymous (CBIT)&rdquo;.
+                      Anonymous submissions always display as &ldquo;Anonymous&rdquo;.
                     </p>
                   </div>
                 </div>

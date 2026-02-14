@@ -302,6 +302,10 @@ def create_experience(payload: ExperienceCreate, user: dict = Depends(get_curren
         "is_anonymous": payload.is_anonymous,
         "is_active": True,
         "nlp_status": "pending",
+        # Contact details — only stored when non-anonymous and explicitly opted in
+        "allow_contact": False if payload.is_anonymous else payload.allow_contact,
+        "contact_linkedin": None if payload.is_anonymous else (payload.contact_linkedin or None),
+        "contact_email": None if payload.is_anonymous else (payload.contact_email or None),
         "edit_history": [{
             "timestamp": now,
             "field": "creation",

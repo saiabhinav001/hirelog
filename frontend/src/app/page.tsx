@@ -1,18 +1,20 @@
 import Link from "next/link";
+import { FadeIn } from "@/components/Motion";
 
 export default function Home() {
   return (
     <div className="page-container py-16">
       {/* Header */}
+      <FadeIn>
       <div className="max-w-2xl">
-        <p className="text-xs font-medium uppercase tracking-widest text-[var(--primary)] mb-3">CBIT Placement Intelligence</p>
+        <p className="text-xs font-medium uppercase tracking-widest text-[var(--primary)] mb-3">Campus Placement Intelligence</p>
         <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight">
-          The Placement Archive
+          HireLog
         </h1>
         <p className="mt-4 text-lg text-[var(--text-secondary)] leading-relaxed">
-          An institutional knowledge system that turns unstructured interview
-          memories into structured, searchable, and analyzable intelligence —
-          so every batch starts better prepared than the last.
+          Turn unstructured interview memories into structured, searchable,
+          and analyzable intelligence — so every batch starts better prepared
+          than the last.
         </p>
         <div className="mt-6 flex gap-3">
           <Link href="/search" className="btn-primary">
@@ -23,8 +25,10 @@ export default function Home() {
           </Link>
         </div>
       </div>
+      </FadeIn>
 
       {/* Product Pipeline */}
+      <FadeIn delay={0.1}>
       <div className="mt-16 p-6 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
         <p className="text-xs text-[var(--text-muted)] uppercase tracking-wide mb-4">Intelligence pipeline</p>
         <div className="flex flex-wrap items-center justify-center gap-3 text-sm">
@@ -55,8 +59,10 @@ export default function Home() {
           </div>
         </div>
       </div>
+      </FadeIn>
 
       {/* Stats */}
+      <FadeIn delay={0.15}>
       <div className="mt-12 grid gap-px bg-[var(--border)] rounded-lg overflow-hidden sm:grid-cols-3">
         {[
           { value: "100+", label: "Interview experiences archived" },
@@ -69,8 +75,10 @@ export default function Home() {
           </div>
         ))}
       </div>
+      </FadeIn>
 
       {/* Features */}
+      <FadeIn delay={0.2}>
       <div className="mt-16">
         <h2 className="text-lg font-semibold">Capabilities</h2>
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -109,8 +117,10 @@ export default function Home() {
           ))}
         </div>
       </div>
+      </FadeIn>
 
       {/* How it works */}
+      <FadeIn delay={0.25}>
       <div className="mt-16">
         <h2 className="text-lg font-semibold">How it works</h2>
         <div className="mt-6 grid gap-4 sm:grid-cols-4">
@@ -132,6 +142,7 @@ export default function Home() {
           ))}
         </div>
       </div>
+      </FadeIn>
     </div>
   );
 }

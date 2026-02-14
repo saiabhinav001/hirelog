@@ -41,9 +41,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const stored = localStorage.getItem("theme") as Theme | null;
     const initial = stored || "system";
-    setThemeState(initial);
-    applyTheme(initial);
-    setMounted(true);
+    queueMicrotask(() => {
+      setThemeState(initial);
+      applyTheme(initial);
+      setMounted(true);
+    });
 
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = () => {

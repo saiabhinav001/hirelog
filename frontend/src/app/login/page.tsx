@@ -166,8 +166,8 @@ export default function LoginPage() {
     try {
       await signIn(email, password);
       router.push("/search");
-    } catch (err: any) {
-      setError(err.message || "Unable to sign in.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Unable to sign in.");
     } finally {
       setLoading(false);
     }
@@ -179,8 +179,8 @@ export default function LoginPage() {
     try {
       await signInWithGoogle();
       router.push("/search");
-    } catch (err: any) {
-      setError(err.message || "Unable to sign in with Google.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Unable to sign in with Google.");
     } finally {
       setLoading(false);
     }
@@ -193,7 +193,7 @@ export default function LoginPage() {
         <div className="text-center mb-6 sm:mb-8">
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Welcome back</h1>
           <p className="mt-1.5 sm:mt-2 text-sm text-[var(--text-muted)]">
-            Sign in to the Placement Archive
+            Sign in to HireLog
           </p>
         </div>
 
@@ -256,7 +256,7 @@ export default function LoginPage() {
 
         {/* Trust */}
         <p className="mt-6 sm:mt-8 text-center text-[11px] text-[var(--text-disabled)]">
-          Trusted by CBIT students across batches.
+          Trusted by students across campuses.
         </p>
       </div>
     </div>

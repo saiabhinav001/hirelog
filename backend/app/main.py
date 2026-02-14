@@ -19,7 +19,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
 )
-logger = logging.getLogger("placement-archive")
+logger = logging.getLogger("hirelog")
 
 
 @asynccontextmanager
@@ -74,7 +74,7 @@ app.add_middleware(
 
 @app.get("/")
 def root() -> dict:
-    return {"status": "ok", "service": "placement-archive", "env": settings.ENV}
+    return {"status": "ok", "service": "hirelog", "env": settings.ENV}
 
 
 @app.get("/health")

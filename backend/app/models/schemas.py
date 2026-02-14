@@ -24,6 +24,9 @@ class ExperienceCreate(BaseModel):
     raw_text: str = Field(min_length=20)
     is_anonymous: bool = False
     show_name: bool = False
+    allow_contact: bool = False
+    contact_linkedin: Optional[str] = Field(default=None, max_length=200)
+    contact_email: Optional[str] = Field(default=None, max_length=200)
     user_questions: List[str] = Field(
         default_factory=list,
         description="Questions explicitly provided by the user — stored verbatim, never filtered or dropped.",
@@ -101,6 +104,9 @@ class ExperienceResponse(BaseModel):
     nlp_status: Literal["pending", "processing", "done", "failed"] = "done"
     edit_history: List[EditHistoryEntry] = []
     contributor_display: Optional[str] = None
+    allow_contact: bool = False
+    contact_linkedin: Optional[str] = None
+    contact_email: Optional[str] = None
 
 
 class SearchResponse(BaseModel):

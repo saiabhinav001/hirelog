@@ -113,8 +113,13 @@ function MobileMenu() {
   }, []);
 
   // Close on navigation
+  const prevPathname = useRef(pathname);
   useEffect(() => {
-    setOpen(false);
+    if (prevPathname.current !== pathname) {
+      prevPathname.current = pathname;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync menu state with route change
+      setOpen(false);
+    }
   }, [pathname]);
 
   return (
@@ -209,16 +214,30 @@ function MobileMenu() {
 export function Navbar() {
   const pathname = usePathname();
   const { user, loading } = useAuth();
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   return (
-    <header className="sticky top-0 z-40 border-b border-[var(--border)] bg-[var(--bg)]/95 backdrop-blur-sm">
+    <header
+      className={`sticky top-0 z-40 border-b bg-[var(--bg)]/95 backdrop-blur-sm transition-[border-color,box-shadow] duration-200 ${
+        scrolled
+          ? "border-[var(--border)] shadow-[0_1px_3px_rgba(0,0,0,0.08)]"
+          : "border-transparent"
+      }`}
+    >
       <div className="page-container flex items-center justify-between h-14">
         <div className="flex items-center gap-8">
           <Link href="/" className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--primary)] text-xs font-semibold text-white">
-              PA
-            </span>
-            <span className="font-semibold hidden sm:inline">The Placement Archive</span>
+            <svg className="h-7 w-7" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="32" height="32" rx="8" fill="var(--primary)" />
+              <path d="M9 8h4v16H9V8zm10 0h4v16h-4V8zm-10 6h14v4H9v-4z" fill="white" />
+            </svg>
+            <span className="font-semibold hidden sm:inline">HireLog</span>
           </Link>
 
           <nav className="hidden items-center gap-1 text-sm md:flex">

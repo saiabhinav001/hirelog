@@ -165,8 +165,8 @@ export default function SignupPage() {
     try {
       await signUp(name, email, password);
       router.push("/search");
-    } catch (err: any) {
-      setError(err.message || "Unable to create account.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Unable to create account.");
     } finally {
       setLoading(false);
     }
@@ -178,8 +178,8 @@ export default function SignupPage() {
     try {
       await signInWithGoogle();
       router.push("/search");
-    } catch (err: any) {
-      setError(err.message || "Unable to sign in with Google.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Unable to sign in with Google.");
     } finally {
       setLoading(false);
     }
@@ -192,7 +192,7 @@ export default function SignupPage() {
         <div className="text-center mb-6 sm:mb-8">
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Join the Archive</h1>
           <p className="mt-1.5 sm:mt-2 text-sm text-[var(--text-muted)]">
-            Create an account to access CBIT&apos;s placement intelligence
+            Create an account to access placement intelligence
           </p>
         </div>
 
@@ -270,7 +270,7 @@ export default function SignupPage() {
 
         {/* Trust */}
         <p className="mt-6 sm:mt-8 text-center text-[11px] text-[var(--text-disabled)]">
-          Trusted by CBIT students across batches.
+          Trusted by students across campuses.
         </p>
       </div>
     </div>
