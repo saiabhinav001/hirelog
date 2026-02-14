@@ -4,7 +4,6 @@ services:
     runtime: python
     region: oregon
     plan: starter
-    rootDir: backend
     buildCommand: |
       pip install -r requirements.txt
       python -m spacy download en_core_web_sm
