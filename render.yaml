@@ -18,10 +18,6 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         sync: false
-      - key: FAISS_INDEX_PATH
-        value: data/faiss/index.faiss
-      - key: FAISS_MAPPING_PATH
-        value: data/faiss/mapping.json
       - key: EMBEDDING_MODEL
         value: sentence-transformers/all-MiniLM-L6-v2
       - key: EMBEDDING_DIM

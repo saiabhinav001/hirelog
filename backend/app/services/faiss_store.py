@@ -13,23 +13,16 @@ from app.core.config import BASE_DIR, settings
 
 logger = logging.getLogger(__name__)
 
-
-def _resolve_data_path(raw: str) -> Path:
-    """Resolve a data path.
-
-    Absolute paths (e.g. /data/faiss/index.faiss on Render) are used as-is.
-    Relative paths are resolved against the backend root dir (local dev).
-    """
-    p = Path(raw)
-    if p.is_absolute():
-        return p
-    return (BASE_DIR / p).resolve()
+# Hardcoded paths relative to backend root — immune to env var misconfiguration
+_FAISS_DIR = BASE_DIR / "data" / "faiss"
+_INDEX_PATH = _FAISS_DIR / "index.faiss"
+_MAPPING_PATH = _FAISS_DIR / "mapping.json"
 
 
 class FaissStore:
-    def __init__(self, index_path: str, mapping_path: str, dimension: int) -> None:
-        self.index_path = _resolve_data_path(index_path)
-        self.mapping_path = _resolve_data_path(mapping_path)
+    def __init__(self, dimension: int) -> None:
+        self.index_path = _INDEX_PATH
+        self.mapping_path = _MAPPING_PATH
         self.dimension = dimension
         self._lock = threading.Lock()
         self.index = self._load_or_create_index()
@@ -105,8 +98,4 @@ class FaissStore:
             self._persist_mapping(self.mapping)
 
 
-faiss_store = FaissStore(
-    index_path=settings.faiss_index_path,
-    mapping_path=settings.faiss_mapping_path,
-    dimension=settings.EMBEDDING_DIM,
-)
+faiss_store = FaissStore(dimension=settings.EMBEDDING_DIM)

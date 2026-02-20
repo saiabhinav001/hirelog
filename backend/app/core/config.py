@@ -22,20 +22,6 @@ class Settings(BaseSettings):
 
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://localhost:3002"
 
-    FAISS_INDEX_PATH: str = "data/faiss/index.faiss"
-    FAISS_MAPPING_PATH: str = "data/faiss/mapping.json"
-
-    @property
-    def faiss_index_path(self) -> str:
-        """Always return a relative path so ephemeral local storage is used."""
-        p = self.FAISS_INDEX_PATH
-        return p.lstrip("/") if p.startswith("/data/") else p
-
-    @property
-    def faiss_mapping_path(self) -> str:
-        """Always return a relative path so ephemeral local storage is used."""
-        p = self.FAISS_MAPPING_PATH
-        return p.lstrip("/") if p.startswith("/data/") else p
     EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     EMBEDDING_DIM: int = 384
 
