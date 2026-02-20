@@ -6,6 +6,7 @@ import { ThemeProvider } from "@/context/ThemeContext";
 import { ToastProvider } from "@/context/ToastContext";
 import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -27,6 +28,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="preconnect" href={process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"} />
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -49,7 +51,9 @@ export default function RootLayout({
             <ToastProvider>
               <div className="flex min-h-screen flex-col bg-[var(--bg)] text-[var(--text)]">
                 <Navbar />
-                <main className="flex-1">{children}</main>
+                <main className="flex-1">
+                  <ErrorBoundary>{children}</ErrorBoundary>
+                </main>
                 <Footer />
               </div>
             </ToastProvider>

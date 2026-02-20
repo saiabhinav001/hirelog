@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,6 +10,8 @@ from app.api.dependencies import get_current_user
 from app.core.firebase import db
 from app.models.schemas import NameUpdate, UserCreate
 from app.utils.serialization import serialize_doc
+
+_profile_pool = ThreadPoolExecutor(max_workers=3)
 
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -81,17 +84,40 @@ def get_profile(user: dict = Depends(get_current_user)) -> dict:
     """Aggregated user profile with contribution stats, practice activity, and privacy summary."""
     uid = user["uid"]
 
-    # ── User identity ────────────────────────────────────────────────────
-    user_snapshot = db.collection("users").document(uid).get()
+    # ── Parallel Firestore queries (3 → 1 round-trip latency) ────────
+    def _fetch_user():
+        return db.collection("users").document(uid).get()
+
+    def _fetch_experiences():
+        return list(
+            db.collection("interview_experiences")
+            .where("created_by", "==", uid)
+            .stream()
+        )
+
+    def _fetch_practice_lists():
+        return list(
+            db.collection("practice_lists")
+            .where("user_id", "==", uid)
+            .stream()
+        )
+
+    futures = {
+        _profile_pool.submit(_fetch_user): "user",
+        _profile_pool.submit(_fetch_experiences): "experiences",
+        _profile_pool.submit(_fetch_practice_lists): "lists",
+    }
+
+    results: dict = {}
+    for future in as_completed(futures):
+        results[futures[future]] = future.result()
+
+    user_snapshot = results["user"]
+    experience_snapshots = results["experiences"]
+    list_snapshots_raw = results["lists"]
+
     identity = serialize_doc(user_snapshot) if user_snapshot.exists else user
     identity = _enrich_user_response(identity)
-
-    # ── Contribution stats ───────────────────────────────────────────────
-    experience_snapshots = list(
-        db.collection("interview_experiences")
-        .where("created_by", "==", uid)
-        .stream()
-    )
 
     total_experiences = len(experience_snapshots)
     active_count = 0
@@ -135,12 +161,8 @@ def get_profile(user: dict = Depends(get_current_user)) -> dict:
         "topics_covered": sorted(topics_set),
     }
 
-    # ── Practice activity ────────────────────────────────────────────────
-    list_snapshots = list(
-        db.collection("practice_lists")
-        .where("user_id", "==", uid)
-        .stream()
-    )
+    # ── Practice activity (already fetched in parallel) ─────────────────
+    list_snapshots = list_snapshots_raw
 
     total_lists = len(list_snapshots)
     total_questions = 0

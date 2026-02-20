@@ -245,6 +245,7 @@ export function Navbar() {
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch={true}
                 className={`px-3 py-1.5 rounded-md transition-colors ${
                   pathname === item.href
                     ? "text-[var(--text)] bg-[var(--surface-muted)]"

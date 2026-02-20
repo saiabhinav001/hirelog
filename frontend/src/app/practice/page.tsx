@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { useAuth } from "@/context/AuthContext";
@@ -9,6 +9,39 @@ import { auth } from "@/lib/firebase";
 import type { PracticeList, PracticeQuestion, QuestionStatus } from "@/lib/types";
 
 const TOPICS = ["DSA", "DBMS", "OS", "CN", "OOP", "HR", "System Design", "General"];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// localStorage stale-while-revalidate cache
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PRACTICE_CACHE_KEY = "hirelog_practice_cache";
+const PRACTICE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+interface PracticeCache {
+  ts: number;
+  lists: PracticeList[];
+}
+
+function getPracticeCache(): PracticeCache | null {
+  try {
+    const raw = localStorage.getItem(PRACTICE_CACHE_KEY);
+    if (!raw) return null;
+    const cache: PracticeCache = JSON.parse(raw);
+    if (Date.now() - cache.ts > PRACTICE_CACHE_TTL) {
+      localStorage.removeItem(PRACTICE_CACHE_KEY);
+      return null;
+    }
+    return cache;
+  } catch {
+    return null;
+  }
+}
+
+function setPracticeCache(lists: PracticeList[]) {
+  try {
+    localStorage.setItem(PRACTICE_CACHE_KEY, JSON.stringify({ ts: Date.now(), lists }));
+  } catch { /* quota exceeded — ignore */ }
+}
 
 function ListSkeleton() {
   return (
@@ -253,6 +286,27 @@ function QuestionCard({
   );
 }
 
+/** Compute updated list stats from local question state (avoids refetching all lists). */
+function computeListStats(base: PracticeList, questions: PracticeQuestion[]): PracticeList {
+  const total = questions.length;
+  const revised = questions.filter((q) => q.status === "revised").length;
+  const practicing = questions.filter((q) => q.status === "practicing").length;
+  const unvisited = total - revised - practicing;
+  const topicDist: Record<string, number> = {};
+  for (const q of questions) {
+    topicDist[q.topic] = (topicDist[q.topic] || 0) + 1;
+  }
+  return {
+    ...base,
+    question_count: total,
+    revised_count: revised,
+    practicing_count: practicing,
+    unvisited_count: unvisited,
+    topic_distribution: topicDist,
+    revised_percent: total > 0 ? Math.round((revised / total) * 1000) / 10 : 0,
+  };
+}
+
 function ListDetail({ 
   list, 
   onBack,
@@ -268,23 +322,30 @@ function ListDetail({
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
 
-  const refreshListMetadata = useCallback(async () => {
-    if (!auth.currentUser) return;
+  // Keep a ref to current questions so optimistic helpers always see latest
+  const questionsRef = useRef(questions);
+  questionsRef.current = questions;
+
+  // Token caching — avoid repeated getIdToken() calls (~20-50ms each)
+  const tokenRef = useRef<{ token: string; ts: number } | null>(null);
+  const TOKEN_TTL = 5 * 60 * 1000; // 5 minutes
+  const getToken = useCallback(async (): Promise<string> => {
+    const cached = tokenRef.current;
+    if (cached && Date.now() - cached.ts < TOKEN_TTL) return cached.token;
+    if (!auth.currentUser) throw new Error("Not authenticated");
     const token = await auth.currentUser.getIdToken();
-    const lists = await apiFetch<PracticeList[]>(
-      "/api/practice-lists",
-      { method: "GET" },
-      token
-    );
-    const updated = lists.find((l) => l.id === list.id);
-    if (updated) onListUpdate(updated);
-  }, [list.id, onListUpdate]);
+    tokenRef.current = { token, ts: Date.now() };
+    return token;
+  }, []);
+
+  // Request dedup — prevents concurrent duplicate mutations from rapid clicks
+  const pendingOps = useRef(new Set<string>());
 
   const loadQuestions = useCallback(async () => {
     if (!auth.currentUser) return;
     setLoading(true);
     try {
-      const token = await auth.currentUser.getIdToken();
+      const token = await getToken();
       const data = await apiFetch<PracticeQuestion[]>(
         `/api/practice-lists/${list.id}/questions`,
         { method: "GET" },
@@ -294,17 +355,29 @@ function ListDetail({
     } finally {
       setLoading(false);
     }
-  }, [list.id]);
+  }, [list.id, getToken]);
 
   useEffect(() => {
     loadQuestions();
   }, [loadQuestions]);
 
+  /** Push local question array into list stats + parent state. */
+  const syncListStats = useCallback(
+    (nextQuestions: PracticeQuestion[]) => {
+      const updated = computeListStats(list, nextQuestions);
+      onListUpdate(updated);
+    },
+    [list, onListUpdate],
+  );
+
   const handleAddQuestion = async (q: { question_text: string; topic: string; difficulty?: string }) => {
     if (!auth.currentUser) return;
-    const token = await auth.currentUser.getIdToken();
+    const opKey = `add:${q.question_text}`;
+    if (pendingOps.current.has(opKey)) return;
+    pendingOps.current.add(opKey);
     try {
-      await apiFetch(
+      const token = await getToken();
+      const created = await apiFetch<PracticeQuestion>(
         `/api/practice-lists/${list.id}/questions`,
         {
           method: "POST",
@@ -312,19 +385,36 @@ function ListDetail({
         },
         token
       );
-      await loadQuestions();
-      await refreshListMetadata();
+      // Optimistic: append the server-returned question
+      const next = [...questionsRef.current, created];
+      setQuestions(next);
+      syncListStats(next);
+      // Background: reconcile list cache (non-blocking)
       onRefresh();
     } catch (error) {
       console.error("Failed to add question:", error);
       throw error; // Re-throw so modal can show error state
+    } finally {
+      pendingOps.current.delete(opKey);
     }
   };
 
   const handleStatusChange = async (questionId: string, status: QuestionStatus) => {
     if (!auth.currentUser || !questionId) return;
-    const token = await auth.currentUser.getIdToken();
+
+    // Dedup: skip if this exact operation is already in-flight
+    const opKey = `status:${questionId}:${status}`;
+    if (pendingOps.current.has(opKey)) return;
+    pendingOps.current.add(opKey);
+
+    // Optimistic update
+    const prev = questionsRef.current;
+    const next = prev.map((q) => (q.id === questionId ? { ...q, status } : q));
+    setQuestions(next);
+    syncListStats(next);
+
     try {
+      const token = await getToken();
       await apiFetch(
         `/api/practice-lists/${list.id}/questions/${questionId}`,
         {
@@ -333,34 +423,46 @@ function ListDetail({
         },
         token
       );
-      setQuestions((prev) =>
-        prev.map((q) => (q.id === questionId ? { ...q, status } : q))
-      );
-      await refreshListMetadata();
-      onRefresh();
     } catch (error) {
       console.error("Failed to update question status:", error);
-      // Refresh questions to sync with backend state
+      // Rollback + resync
+      setQuestions(prev);
+      syncListStats(prev);
       await loadQuestions();
+    } finally {
+      pendingOps.current.delete(opKey);
     }
   };
 
   const handleDeleteQuestion = async (questionId: string) => {
     if (!auth.currentUser || !questionId) return;
-    const token = await auth.currentUser.getIdToken();
+
+    // Dedup: skip if already deleting
+    const opKey = `delete:${questionId}`;
+    if (pendingOps.current.has(opKey)) return;
+    pendingOps.current.add(opKey);
+
+    // Optimistic update
+    const prev = questionsRef.current;
+    const next = prev.filter((q) => q.id !== questionId);
+    setQuestions(next);
+    syncListStats(next);
+
     try {
+      const token = await getToken();
       await apiFetch(
         `/api/practice-lists/${list.id}/questions/${questionId}`,
         { method: "DELETE" },
         token
       );
-      setQuestions((prev) => prev.filter((q) => q.id !== questionId));
-      await refreshListMetadata();
-      onRefresh();
     } catch (error) {
       console.error("Failed to delete question:", error);
-      // Refresh questions to sync with backend state
+      // Rollback + resync
+      setQuestions(prev);
+      syncListStats(prev);
       await loadQuestions();
+    } finally {
+      pendingOps.current.delete(opKey);
     }
   };
 
@@ -435,10 +537,10 @@ export default function PracticePage() {
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedList, setSelectedList] = useState<PracticeList | null>(null);
+  const fetchedRef = useRef(false);
 
   const loadLists = useCallback(async () => {
     if (!auth.currentUser) return;
-    setLoading(true);
     try {
       const token = await auth.currentUser.getIdToken();
       const data = await apiFetch<PracticeList[]>(
@@ -447,13 +549,26 @@ export default function PracticePage() {
         token
       );
       setLists(data);
+      setPracticeCache(data);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (user) loadLists();
+    if (!user) return;
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
+
+    // 1. Restore stale data from cache for instant paint
+    const cached = getPracticeCache();
+    if (cached?.lists) {
+      setLists(cached.lists);
+      setLoading(false);
+    }
+
+    // 2. Revalidate in background
+    loadLists();
   }, [user, loadLists]);
 
   const handleCreateList = async (name: string) => {

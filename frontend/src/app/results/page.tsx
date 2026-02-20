@@ -1,10 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { SaveToListButton } from "@/components/SaveToListButton";
+// Lazy-load SaveToListButton — only needed when results are displayed
+const SaveToListButton = dynamic(
+  () => import("@/components/SaveToListButton").then((m) => m.SaveToListButton),
+  { ssr: false }
+);
 import { FadeIn, StaggerContainer, StaggerItem } from "@/components/Motion";
 import { apiFetch } from "@/lib/api";
 import type { Experience, SearchResponse } from "@/lib/types";
@@ -25,6 +30,37 @@ function ResultSkeleton() {
       </div>
     </div>
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sessionStorage SWR cache for search results
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SEARCH_CACHE_PREFIX = "hirelog_search_";
+const SEARCH_CACHE_TTL = 3 * 60 * 1000; // 3 minutes
+
+function getSearchCache(qs: string): Experience[] | null {
+  try {
+    const raw = sessionStorage.getItem(SEARCH_CACHE_PREFIX + qs);
+    if (!raw) return null;
+    const { ts, data } = JSON.parse(raw);
+    if (Date.now() - ts > SEARCH_CACHE_TTL) {
+      sessionStorage.removeItem(SEARCH_CACHE_PREFIX + qs);
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function setSearchCache(qs: string, data: Experience[]) {
+  try {
+    sessionStorage.setItem(
+      SEARCH_CACHE_PREFIX + qs,
+      JSON.stringify({ ts: Date.now(), data }),
+    );
+  } catch { /* quota — ignore */ }
 }
 
 // Fetch states: idle → loading → resolved | errored
@@ -63,8 +99,15 @@ function ResultsPageContent() {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // Reset to loading — do NOT clear results yet (avoids flash)
-    setStatus("loading");
+    // Restore cached results for instant paint (SWR)
+    const cached = getSearchCache(qs);
+    if (cached) {
+      setResults(cached);
+      setStatus("resolved");
+    } else {
+      // No cache — show loading skeleton
+      setStatus("loading");
+    }
     setError(null);
 
     try {
@@ -76,12 +119,16 @@ function ResultsPageContent() {
       if (!controller.signal.aborted) {
         setResults(data.results ?? []);
         setStatus("resolved");
+        setSearchCache(qs, data.results ?? []);
       }
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       if (!controller.signal.aborted) {
-        setError("Couldn't load search results. Please try again.");
-        setStatus("errored");
+        // If we had cached results, keep showing them
+        if (!cached) {
+          setError("Couldn't load search results. Please try again.");
+          setStatus("errored");
+        }
       }
     }
   }, []);

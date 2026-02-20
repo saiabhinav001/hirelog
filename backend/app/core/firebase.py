@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import firebase_admin
@@ -11,6 +12,13 @@ from firebase_admin import credentials, firestore
 from app.core.config import BASE_DIR, settings
 
 logger = logging.getLogger(__name__)
+
+# Set gRPC keep-alive environment variables BEFORE any gRPC channel is created.
+# This keeps Firestore connections warm and avoids cold-connect latency on
+# subsequent requests (~50-100ms saved per reconnect).
+os.environ.setdefault("GRPC_KEEPALIVE_TIME_MS", "30000")        # ping every 30s
+os.environ.setdefault("GRPC_KEEPALIVE_TIMEOUT_MS", "10000")      # wait 10s for pong
+os.environ.setdefault("GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS", "1")  # ping even when idle
 
 
 def _build_credential() -> credentials.Certificate:

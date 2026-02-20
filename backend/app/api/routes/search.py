@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import threading
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Query
@@ -22,6 +25,35 @@ def _normalize_topics(topic: Optional[str]) -> list[str]:
     if not topic:
         return []
     return [value.strip().upper() for value in topic.split(",") if value.strip()]
+
+
+# ─── In-memory search result cache ────────────────────────────────────────────
+_search_cache: dict[str, tuple[float, dict]] = {}
+_SEARCH_CACHE_TTL = 120  # 2 minutes
+_SEARCH_CACHE_MAX = 100
+_search_cache_lock = threading.Lock()
+
+
+def _cache_key(*parts: object) -> str:
+    raw = "|".join(str(p) for p in parts)
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+def _get_cached(key: str) -> dict | None:
+    with _search_cache_lock:
+        entry = _search_cache.get(key)
+        if entry and time.time() - entry[0] < _SEARCH_CACHE_TTL:
+            return entry[1]
+        _search_cache.pop(key, None)
+    return None
+
+
+def _set_cached(key: str, data: dict) -> None:
+    with _search_cache_lock:
+        if len(_search_cache) >= _SEARCH_CACHE_MAX:
+            oldest = min(_search_cache, key=lambda k: _search_cache[k][0])
+            del _search_cache[oldest]
+        _search_cache[key] = (time.time(), data)
 
 
 def _generate_match_explanation(
@@ -111,6 +143,9 @@ def _apply_filters(
     return True
 
 
+from fastapi import Response as FastAPIResponse
+
+
 @router.get("")
 def search(
     q: str = "",
@@ -121,12 +156,23 @@ def search(
     topic: Optional[str] = None,
     difficulty: Optional[str] = None,
     limit: int = Query(default=20, ge=1, le=50),
+    response: FastAPIResponse = None,
 ) -> dict:
     limit = min(limit, settings.MAX_SEARCH_RESULTS)
     company = company.strip() if company else None
     role = role.strip() if role else None
     topics = _normalize_topics(topic)
     difficulty_normalized = difficulty.strip().title() if difficulty else None
+
+    # CDN / browser cache header — public search data, safe to cache at edge
+    if response is not None:
+        response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=120"
+
+    # Check in-memory cache
+    ck = _cache_key(q, mode, company, role, year, topic, difficulty_normalized, limit)
+    cached = _get_cached(ck)
+    if cached is not None:
+        return cached
 
     if mode == "semantic" and q.strip():
         query_vector = pipeline.embed(q)
@@ -137,7 +183,9 @@ def search(
         score_map = {doc_id: score for doc_id, score in candidates}
         
         if not doc_ids:
-            return {"results": [], "total": 0}
+            result = {"results": [], "total": 0}
+            _set_cached(ck, result)
+            return result
         
         # Fetch all documents in batch (Firestore batches up to 30 at a time internally)
         doc_refs = [db.collection("interview_experiences").document(doc_id) for doc_id in doc_ids]
@@ -174,7 +222,12 @@ def search(
         
         # Sort by score descending (highest similarity first)
         results.sort(key=lambda x: x.get("score", 0), reverse=True)
-        return {"results": results[:limit], "total": len(results)}
+        final = results[:limit]
+        for r in final:
+            r.pop("raw_text", None)
+        result = {"results": final, "total": len(results)}
+        _set_cached(ck, result)
+        return result
 
     query = db.collection("interview_experiences")
     if year:
@@ -221,4 +274,8 @@ def search(
         if len(results) >= limit:
             break
 
-    return {"results": results, "total": len(results)}
+    for r in results:
+        r.pop("raw_text", None)
+    result = {"results": results, "total": len(results)}
+    _set_cached(ck, result)
+    return result

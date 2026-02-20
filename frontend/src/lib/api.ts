@@ -3,7 +3,7 @@ export const API_BASE =
   rawBase && rawBase.startsWith("http") ? rawBase : "http://localhost:8000";
 
 const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 1000;
+const RETRY_BASE_MS = 500;
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -36,7 +36,10 @@ export async function apiFetch<T>(
     } catch {
       // Only retry on network errors (server unreachable, CORS pre-flight, etc.)
       if (attempt < MAX_RETRIES - 1) {
-        await sleep(RETRY_DELAY_MS * (attempt + 1));
+        // Exponential backoff with jitter to avoid thundering herd
+        const backoff = RETRY_BASE_MS * Math.pow(2, attempt);
+        const jitter = Math.random() * backoff * 0.5;
+        await sleep(backoff + jitter);
         continue;
       }
       throw new Error(

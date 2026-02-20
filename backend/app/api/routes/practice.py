@@ -298,17 +298,22 @@ async def add_question(
     }
     
     # Batched write: create question + update parent counters atomically
+    topic = payload.topic or "General"
     doc_ref = list_ref.collection("questions").document()
     batch = db.batch()
     batch.set(doc_ref, question_data)
     batch.update(list_ref, {
         "question_count": firestore.Increment(1),
         "unvisited_count": firestore.Increment(1),
+        f"topic_distribution.{topic}": firestore.Increment(1),
     })
     batch.commit()
 
-    # Recompute revised_percent and topic_distribution (cheap read-after-write)
-    _recompute_and_store_list_stats(list_id)
+    # Lightweight: 1 parent-doc read to recompute revised_percent
+    updated_data = list_ref.get().to_dict()
+    total = updated_data.get("question_count", 0)
+    revised = updated_data.get("revised_count", 0)
+    list_ref.update({"revised_percent": _compute_revised_percent(revised, total)})
 
     return PracticeQuestionResponse(
         id=doc_ref.id,
@@ -355,7 +360,8 @@ async def update_question(
         updates["status"] = payload.status
     
     if updates:
-        old_status = question_doc.to_dict().get("status", "unvisited")
+        old_data = question_doc.to_dict()
+        old_status = old_data.get("status", "unvisited")
         new_status = updates.get("status")
 
         # If status changed, batch the question update + counter adjustments
@@ -368,19 +374,35 @@ async def update_question(
             }
             batch = db.batch()
             batch.update(question_ref, updates)
-            batch.update(list_ref, {
+            counter_updates: dict = {
                 status_field[old_status]: firestore.Increment(-1),
                 status_field[new_status]: firestore.Increment(1),
-            })
+            }
+            # Handle topic change in the same batch
+            old_topic = old_data.get("topic", "General")
+            new_topic = updates.get("topic")
+            if new_topic and new_topic != old_topic:
+                counter_updates[f"topic_distribution.{old_topic}"] = firestore.Increment(-1)
+                counter_updates[f"topic_distribution.{new_topic}"] = firestore.Increment(1)
+            batch.update(list_ref, counter_updates)
             batch.commit()
 
-            # Recompute revised_percent (depends on revised_count / total)
-            _recompute_and_store_list_stats(list_id)
+            # Lightweight: 1 read to recompute revised_percent
+            updated_data = list_ref.get().to_dict()
+            total = updated_data.get("question_count", 0)
+            revised = updated_data.get("revised_count", 0)
+            list_ref.update({"revised_percent": _compute_revised_percent(revised, total)})
         else:
             question_ref.update(updates)
-            # If topic changed, recompute topic_distribution
+            # If topic changed, update topic_distribution incrementally
             if "topic" in updates:
-                _recompute_and_store_list_stats(list_id)
+                old_topic = old_data.get("topic", "General")
+                new_topic = updates["topic"]
+                if new_topic != old_topic:
+                    list_ref.update({
+                        f"topic_distribution.{old_topic}": firestore.Increment(-1),
+                        f"topic_distribution.{new_topic}": firestore.Increment(1),
+                    })
 
     # Return updated question
     data = question_doc.to_dict()
@@ -426,7 +448,9 @@ async def delete_question(
         raise HTTPException(status_code=404, detail="Question not found")
     
     # Determine counter to decrement based on current status
-    old_status = question_doc.to_dict().get("status", "unvisited")
+    q_data = question_doc.to_dict()
+    old_status = q_data.get("status", "unvisited")
+    old_topic = q_data.get("topic", "General")
     status_field = {
         "unvisited": "unvisited_count",
         "practicing": "practicing_count",
@@ -439,10 +463,18 @@ async def delete_question(
     batch.update(list_ref, {
         "question_count": firestore.Increment(-1),
         status_field[old_status]: firestore.Increment(-1),
+        f"topic_distribution.{old_topic}": firestore.Increment(-1),
     })
     batch.commit()
 
-    # Recompute revised_percent and topic_distribution
-    _recompute_and_store_list_stats(list_id)
+    # Lightweight: 1 parent-doc read to recompute revised_percent + clean up zero-count topics
+    updated_data = list_ref.get().to_dict()
+    total = updated_data.get("question_count", 0)
+    revised = updated_data.get("revised_count", 0)
+    fixups: dict = {"revised_percent": _compute_revised_percent(revised, total)}
+    for t, c in (updated_data.get("topic_distribution") or {}).items():
+        if isinstance(c, (int, float)) and c <= 0:
+            fixups[f"topic_distribution.{t}"] = firestore.DELETE_FIELD
+    list_ref.update(fixups)
 
     return {"status": "deleted"}

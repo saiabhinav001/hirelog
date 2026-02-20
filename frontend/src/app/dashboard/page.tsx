@@ -1,10 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 
 import { ProtectedRoute } from "@/components/ProtectedRoute";
-import { SaveToListButton } from "@/components/SaveToListButton";
+// Lazy-load SaveToListButton — only needed when questions panel is displayed
+const SaveToListButton = dynamic(
+  () => import("@/components/SaveToListButton").then((m) => m.SaveToListButton),
+  { ssr: false }
+);
 import { useAuth } from "@/context/AuthContext";
 import { apiFetch } from "@/lib/api";
 import { auth } from "@/lib/firebase";
@@ -40,6 +45,46 @@ interface FlowsResponse {
     stages: Record<string, { topics: string[]; frequency: number }>;
     total_experiences: number;
   }>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// localStorage stale-while-revalidate cache
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DASH_CACHE_KEY = "hirelog_dashboard_cache";
+const DASH_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+interface DashboardCache {
+  ts: number;
+  stats?: StatsResponse;
+  charts?: ChartsResponse;
+  questions?: QuestionsResponse;
+  flows?: FlowsResponse;
+}
+
+function getDashboardCache(): DashboardCache | null {
+  try {
+    const raw = localStorage.getItem(DASH_CACHE_KEY);
+    if (!raw) return null;
+    const cache: DashboardCache = JSON.parse(raw);
+    if (Date.now() - cache.ts > DASH_CACHE_TTL) {
+      localStorage.removeItem(DASH_CACHE_KEY);
+      return null;
+    }
+    return cache;
+  } catch {
+    return null;
+  }
+}
+
+function updateDashboardCache(updates: Partial<Omit<DashboardCache, "ts">>) {
+  try {
+    const existing = getDashboardCache() ?? { ts: 0 };
+    const merged = { ...existing, ...updates, ts: Date.now() };
+    localStorage.setItem(DASH_CACHE_KEY, JSON.stringify(merged));
+  } catch {
+    /* quota exceeded or private browsing — ignore */
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -240,12 +285,12 @@ export default function DashboardPage() {
   const [flows, setFlows] = useState<FlowsResponse | null>(null);
   const [flowsLoading, setFlowsLoading] = useState(true);
 
-  // Tier 1: Load stats first (critical path) — wait for auth hydration
-  const loadStats = useCallback(async () => {
-    if (!user || !auth.currentUser) {
-      setStatsLoading(false);
-      return;
-    }
+  // Track whether the initial parallel fetch was triggered
+  const fetchedRef = useRef(false);
+
+  // Retry handler for error state (stats only)
+  const retryStats = useCallback(async () => {
+    if (!auth.currentUser) return;
     setStatsLoading(true);
     setStatsError(null);
     try {
@@ -253,56 +298,84 @@ export default function DashboardPage() {
       const response = await apiFetch<StatsResponse>(
         "/api/dashboard/stats",
         { method: "GET" },
-        token
+        token,
       );
       setStats(response);
+      updateDashboardCache({ stats: response });
     } catch {
       setStatsError("Couldn't load analytics. Please try again.");
     } finally {
       setStatsLoading(false);
     }
-  }, [user]);
+  }, []);
 
+  // Single effect: restore cache → fire all 4 API calls in parallel
   useEffect(() => {
     if (authLoading) return;
-    loadStats();
-  }, [authLoading, loadStats]);
+    if (!user || !auth.currentUser) {
+      setStatsLoading(false);
+      return;
+    }
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
 
-  // Derived flag: Tier-2 data should load once stats are ready.
-  // Using useMemo keeps the useEffect dependency array a constant size of 1.
-  const tier2Ready = useMemo(
-    () => !statsLoading && !statsError && !!stats && !!auth.currentUser,
-    [statsLoading, statsError, stats],
-  );
+    // 1. Restore stale data from localStorage immediately (instant paint)
+    const cached = getDashboardCache();
+    if (cached?.stats) { setStats(cached.stats); setStatsLoading(false); }
+    if (cached?.charts) { setCharts(cached.charts); setChartsLoading(false); }
+    if (cached?.questions) { setQuestions(cached.questions); setQuestionsLoading(false); }
+    if (cached?.flows) { setFlows(cached.flows); setFlowsLoading(false); }
 
-  // Tier 2: Load secondary data in parallel after stats succeed
-  useEffect(() => {
-    if (!tier2Ready) return;
-
-    const loadSecondaryData = async () => {
+    // 2. Fire all 4 requests in parallel (revalidate in background)
+    const loadAll = async () => {
       const token = await auth.currentUser!.getIdToken();
 
-      // Load all tier 2 data in parallel — always fetch, never skip
-      const chartsPromise = apiFetch<ChartsResponse>("/api/dashboard/charts", { method: "GET" }, token)
-        .then((data) => setCharts(data))
-        .catch(() => setCharts({ topic_totals: {}, difficulty_distribution: {}, company_topic_counts: {}, insights: [] }))
+      const statsP = apiFetch<StatsResponse>("/api/dashboard/stats", { method: "GET" }, token)
+        .then((data) => {
+          setStats(data);
+          setStatsError(null);
+          updateDashboardCache({ stats: data });
+        })
+        .catch(() => {
+          if (!cached?.stats) setStatsError("Couldn't load analytics. Please try again.");
+        })
+        .finally(() => setStatsLoading(false));
+
+      const chartsP = apiFetch<ChartsResponse>("/api/dashboard/charts", { method: "GET" }, token)
+        .then((data) => {
+          setCharts(data);
+          updateDashboardCache({ charts: data });
+        })
+        .catch(() => {
+          if (!cached?.charts) setCharts({ topic_totals: {}, difficulty_distribution: {}, company_topic_counts: {}, insights: [] });
+        })
         .finally(() => setChartsLoading(false));
 
-      const questionsPromise = apiFetch<QuestionsResponse>("/api/dashboard/questions?limit=5", { method: "GET" }, token)
-        .then((data) => setQuestions(data))
-        .catch(() => setQuestions({ frequent_questions: {} }))
+      const questionsP = apiFetch<QuestionsResponse>("/api/dashboard/questions?limit=5", { method: "GET" }, token)
+        .then((data) => {
+          setQuestions(data);
+          updateDashboardCache({ questions: data });
+        })
+        .catch(() => {
+          if (!cached?.questions) setQuestions({ frequent_questions: {} });
+        })
         .finally(() => setQuestionsLoading(false));
 
-      const flowsPromise = apiFetch<FlowsResponse>("/api/dashboard/flows?limit=4", { method: "GET" }, token)
-        .then((data) => setFlows(data))
-        .catch(() => setFlows({ interview_progression: {} }))
+      const flowsP = apiFetch<FlowsResponse>("/api/dashboard/flows?limit=4", { method: "GET" }, token)
+        .then((data) => {
+          setFlows(data);
+          updateDashboardCache({ flows: data });
+        })
+        .catch(() => {
+          if (!cached?.flows) setFlows({ interview_progression: {} });
+        })
         .finally(() => setFlowsLoading(false));
 
-      await Promise.all([chartsPromise, questionsPromise, flowsPromise]);
+      await Promise.all([statsP, chartsP, questionsP, flowsP]);
     };
 
-    loadSecondaryData();
-  }, [tier2Ready]);
+    loadAll();
+  }, [authLoading, user]);
 
   return (
     <ProtectedRoute>
@@ -321,7 +394,7 @@ export default function DashboardPage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
             </svg>
             <p className="mt-3 text-sm text-[var(--text-muted)]">{statsError}</p>
-            <button className="btn-secondary mt-4" onClick={loadStats}>
+            <button className="btn-secondary mt-4" onClick={retryStats}>
               Try again
             </button>
           </div>

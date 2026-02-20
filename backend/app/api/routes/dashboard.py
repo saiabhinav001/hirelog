@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import re
+import time
 from collections import Counter, defaultdict
-from difflib import SequenceMatcher
 
 from fastapi import APIRouter, Depends
 
@@ -25,14 +26,32 @@ _REQUIRED_CACHE_FIELDS = {
     "interview_progression",
 }
 
+# ── In-memory cache (avoids 4× Firestore reads per page load) ────────────
+_mem_cache: dict = {}
+_mem_cache_ts: float = 0.0
+_MEM_CACHE_TTL: float = 300.0  # 5 minutes
+
 
 def _get_or_compute_stats() -> dict:
     """Get pre-computed stats from cache or compute fresh.
+
+    Resolution order:
+      1. In-memory cache (hot path, < 1 µs)
+      2. Firestore metadata doc
+      3. Full recompute + cache write
 
     If the cached document is missing any required analytics fields
     (e.g. written by an older code version), it is treated as stale
     and recomputed immediately.
     """
+    global _mem_cache, _mem_cache_ts
+
+    # 1. In-memory cache — serves all 4 endpoints from one Firestore read
+    now = time.time()
+    if _mem_cache and (now - _mem_cache_ts) < _MEM_CACHE_TTL:
+        return _mem_cache
+
+    # 2. Firestore cache
     stats_ref = db.collection("metadata").document("dashboard_stats")
     stats_doc = stats_ref.get()
 
@@ -40,10 +59,15 @@ def _get_or_compute_stats() -> dict:
         data = stats_doc.to_dict()
         # Validate cache has all required fields
         if _REQUIRED_CACHE_FIELDS.issubset(data.keys()):
+            _mem_cache = data
+            _mem_cache_ts = now
             return data
         # Stale cache — fall through to recompute
 
-    return _compute_and_cache_stats()
+    result = _compute_and_cache_stats()
+    _mem_cache = result
+    _mem_cache_ts = now
+    return result
 
 
 def _compute_and_cache_stats() -> dict:
@@ -120,8 +144,11 @@ def _compute_and_cache_stats() -> dict:
 
 def update_dashboard_stats_async():
     """Called after new experience submission to refresh cached stats."""
+    global _mem_cache, _mem_cache_ts
     try:
-        _compute_and_cache_stats()
+        result = _compute_and_cache_stats()
+        _mem_cache = result
+        _mem_cache_ts = time.time()
     except Exception:
         pass  # Non-blocking
 
@@ -130,18 +157,29 @@ def update_dashboard_stats_async():
 # Helper functions for expensive operations
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _similar_questions(q1: str, q2: str, threshold: float = 0.75) -> bool:
-    """Check if two questions are similar enough to be considered the same."""
-    return SequenceMatcher(None, q1.lower(), q2.lower()).ratio() >= threshold
+_STRIP_PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
+_COLLAPSE_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_question(q: str) -> str:
+    """Normalize question text for O(1) dedup: lowercase, strip punctuation, collapse whitespace."""
+    q = q.lower().strip()
+    q = _STRIP_PUNCT_RE.sub("", q)
+    q = _COLLAPSE_WS_RE.sub(" ", q).strip()
+    return q
 
 
 def _compute_question_frequencies(snapshots: list, limit: int = 5) -> dict:
     """Compute frequently repeated questions from a list of snapshots (no DB call).
-    
+
+    Uses hash-based O(n) dedup instead of O(n²) pairwise comparison.
     Supports both new (question_text) and legacy (question) field names.
     Only counts questions with confidence >= 0.7 (if confidence is present).
     """
-    question_occurrences = defaultdict(list)
+    # normalized_text → first-seen original text
+    norm_to_original: dict[str, str] = {}
+    # normalized_text → set of experience IDs
+    question_ids: dict[str, set] = defaultdict(set)
 
     for snapshot in snapshots:
         data = snapshot.to_dict() if hasattr(snapshot, 'to_dict') else snapshot
@@ -159,17 +197,19 @@ def _compute_question_frequencies(snapshots: list, limit: int = 5) -> dict:
             if not q_text or confidence < 0.7:
                 continue
 
-            found_similar = False
-            for existing_q in list(question_occurrences.keys()):
-                if _similar_questions(q_text, existing_q):
-                    question_occurrences[existing_q].append(experience_id)
-                    found_similar = True
-                    break
+            norm = _normalize_question(q_text)
+            if not norm:
+                continue
 
-            if not found_similar:
-                question_occurrences[q_text].append(experience_id)
+            if norm not in norm_to_original:
+                norm_to_original[norm] = q_text
+            question_ids[norm].add(experience_id)
 
-    frequent = {q: len(ids) for q, ids in question_occurrences.items() if len(ids) >= 2}
+    frequent = {
+        norm_to_original[norm]: len(ids)
+        for norm, ids in question_ids.items()
+        if len(ids) >= 2
+    }
     return dict(sorted(frequent.items(), key=lambda x: x[1], reverse=True)[:limit])
 
 
