@@ -4,6 +4,7 @@ firebase-admin==6.5.0
 sentence-transformers==3.4.1
 # spaCy does not publish wheels for Python 3.13+ yet; keep 3.10–3.12 for Windows.
 spacy==3.7.4; python_version < "3.13"
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 faiss-cpu==1.13.2; python_version < "3.13"
 numpy==1.26.4
 pydantic==2.7.4
