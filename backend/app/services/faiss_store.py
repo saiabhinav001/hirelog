@@ -25,13 +25,37 @@ class FaissStore:
         self.mapping_path = _MAPPING_PATH
         self.dimension = dimension
         self._lock = threading.Lock()
-        self.index = self._load_or_create_index()
-        self.mapping = self._load_or_create_mapping()
-        logger.info(
-            "FAISS store initialised — index=%s  vectors=%d",
-            self.index_path,
-            self.index.ntotal,
-        )
+        self._index: faiss.IndexFlatIP | None = None
+        self._mapping: List[str] | None = None
+
+    def _ensure_loaded(self) -> None:
+        """Lazy-load FAISS index on first use."""
+        if self._index is None:
+            self._index = self._load_or_create_index()
+            self._mapping = self._load_or_create_mapping()
+            logger.info(
+                "FAISS store initialised — index=%s  vectors=%d",
+                self.index_path,
+                self._index.ntotal,
+            )
+
+    @property
+    def index(self) -> faiss.IndexFlatIP:
+        self._ensure_loaded()
+        return self._index  # type: ignore
+
+    @index.setter
+    def index(self, value: faiss.IndexFlatIP) -> None:
+        self._index = value
+
+    @property
+    def mapping(self) -> List[str]:
+        self._ensure_loaded()
+        return self._mapping  # type: ignore
+
+    @mapping.setter
+    def mapping(self, value: List[str]) -> None:
+        self._mapping = value
 
     def _load_or_create_index(self) -> faiss.IndexFlatIP:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)

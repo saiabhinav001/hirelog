@@ -198,8 +198,28 @@ def _normalize_question(text: str) -> str:
 
 class NlpPipeline:
     def __init__(self) -> None:
-        self.model = SentenceTransformer(settings.EMBEDDING_MODEL)
-        self.nlp = spacy.load("en_core_web_sm")
+        self._model: SentenceTransformer | None = None
+        self._nlp = None
+
+    def _ensure_loaded(self) -> None:
+        """Lazy-load heavy models on first use so the server binds its port before loading."""
+        if self._model is None:
+            logger = __import__("logging").getLogger(__name__)
+            logger.info("Loading SentenceTransformer model...")
+            self._model = SentenceTransformer(settings.EMBEDDING_MODEL)
+            logger.info("Loading spaCy model...")
+            self._nlp = spacy.load("en_core_web_sm")
+            logger.info("NLP models loaded.")
+
+    @property
+    def model(self) -> SentenceTransformer:
+        self._ensure_loaded()
+        return self._model  # type: ignore
+
+    @property
+    def nlp(self):
+        self._ensure_loaded()
+        return self._nlp
 
     def clean_text(self, text: str) -> str:
         # Normalize whitespace so downstream NLP and embeddings stay consistent.

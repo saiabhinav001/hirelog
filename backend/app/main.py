@@ -37,39 +37,38 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Firestore bootstrap write failed — continuing")
 
-    logger.info("FAISS index loaded with %d vectors", faiss_store.index.ntotal)
+    logger.info("FAISS index will load lazily on first request")
 
-    # Warm up sentence-transformer + FAISS so first real query is fast
-    try:
-        _warmup_vec = pipeline.embed("warm up")
-        if faiss_store.index.ntotal > 0:
-            faiss_store.search(_warmup_vec, k=1)
-        logger.info("NLP pipeline + FAISS warm-up complete")
-    except Exception:
-        logger.exception("NLP/FAISS warm-up failed — continuing")
+    # Skip warm-up — models load lazily on first request to stay within 512MB RAM
 
-    try:
-        seed_report = ensure_seeded()
-        logger.info("Seed data status: %s", seed_report)
-    except Exception:
-        logger.exception("Seed data check failed — continuing")
-
-    try:
-        update_dashboard_stats_async()
-        logger.info("Dashboard stats cache refresh triggered")
-    except Exception:
-        logger.exception("Dashboard stats refresh failed — continuing")
-
-    # Repair practice list stats in a background thread to avoid blocking startup
+    # Run all heavy background tasks AFTER port is bound (daemon threads)
     import threading
+
+    def _bg_seed():
+        try:
+            seed_report = ensure_seeded()
+            logger.info("Seed data status: %s", seed_report)
+        except Exception:
+            logger.exception("Seed data check failed — continuing")
+
+    def _bg_dashboard():
+        try:
+            update_dashboard_stats_async()
+            logger.info("Dashboard stats cache refresh triggered")
+        except Exception:
+            logger.exception("Dashboard stats refresh failed — continuing")
+
     def _bg_repair():
         try:
             repaired = repair_all_practice_list_stats()
             logger.info("Practice list stats reconciled: %d list(s)", repaired)
         except Exception:
             logger.exception("Practice list stats repair failed")
+
+    threading.Thread(target=_bg_seed, daemon=True).start()
+    threading.Thread(target=_bg_dashboard, daemon=True).start()
     threading.Thread(target=_bg_repair, daemon=True).start()
-    logger.info("Practice list stats repair started in background")
+    logger.info("Background tasks started")
 
     logger.info("Startup complete — ENV=%s", settings.ENV)
     yield
@@ -100,7 +99,6 @@ def root() -> dict:
 def health() -> dict:
     return {
         "status": "healthy",
-        "faiss_vectors": faiss_store.index.ntotal,
         "env": settings.ENV,
     }
 
