@@ -106,7 +106,7 @@ class FaissStore:
 
 
 faiss_store = FaissStore(
-    index_path=settings.FAISS_INDEX_PATH,
-    mapping_path=settings.FAISS_MAPPING_PATH,
+    index_path=settings.faiss_index_path,
+    mapping_path=settings.faiss_mapping_path,
     dimension=settings.EMBEDDING_DIM,
 )

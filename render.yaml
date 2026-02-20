@@ -9,10 +9,6 @@ services:
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /
     autoDeploy: true
-    disk:
-      name: faiss-data
-      mountPath: /data/faiss
-      sizeGB: 1
     envVars:
       - key: ENV
         value: production
@@ -23,9 +19,9 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false
       - key: FAISS_INDEX_PATH
-        value: /data/faiss/index.faiss
+        value: data/faiss/index.faiss
       - key: FAISS_MAPPING_PATH
-        value: /data/faiss/mapping.json
+        value: data/faiss/mapping.json
       - key: EMBEDDING_MODEL
         value: sentence-transformers/all-MiniLM-L6-v2
       - key: EMBEDDING_DIM
