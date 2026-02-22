@@ -52,7 +52,24 @@ def initialize_firebase() -> firestore.Client:
     return firestore.client()
 
 
-db = initialize_firebase()
+_db = None
 
 
-__all__ = ["db", "firebase_auth"]
+def get_db() -> firestore.Client:
+    """Lazy Firestore client — initializes on first call."""
+    global _db
+    if _db is None:
+        _db = initialize_firebase()
+    return _db
+
+
+class _LazyDB:
+    """Proxy that defers Firebase init until first attribute access."""
+    def __getattr__(self, name):
+        return getattr(get_db(), name)
+
+
+db = _LazyDB()
+
+
+__all__ = ["db", "get_db", "firebase_auth"]

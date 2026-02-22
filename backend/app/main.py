@@ -28,21 +28,18 @@ logger = logging.getLogger("hirelog")
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     # ── Startup ──────────────────────────────────────────────────────────────
-    try:
-        db.collection("metadata").document("bootstrap").set(
-            {"bootstrapped_at": firestore.SERVER_TIMESTAMP},
-            merge=True,
-        )
-        logger.info("Firestore connection verified")
-    except Exception:
-        logger.exception("Firestore bootstrap write failed — continuing")
-
-    logger.info("FAISS index will load lazily on first request")
-
-    # Skip warm-up — models load lazily on first request to stay within 512MB RAM
-
-    # Run all heavy background tasks AFTER port is bound (daemon threads)
+    # ALL heavy work runs in background threads so the port binds immediately.
     import threading
+
+    def _bg_bootstrap():
+        try:
+            db.collection("metadata").document("bootstrap").set(
+                {"bootstrapped_at": firestore.SERVER_TIMESTAMP},
+                merge=True,
+            )
+            logger.info("Firestore connection verified")
+        except Exception:
+            logger.exception("Firestore bootstrap write failed — continuing")
 
     def _bg_seed():
         try:
@@ -65,6 +62,7 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Practice list stats repair failed")
 
+    threading.Thread(target=_bg_bootstrap, daemon=True).start()
     threading.Thread(target=_bg_seed, daemon=True).start()
     threading.Thread(target=_bg_dashboard, daemon=True).start()
     threading.Thread(target=_bg_repair, daemon=True).start()
