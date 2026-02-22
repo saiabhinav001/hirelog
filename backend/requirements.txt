@@ -2,6 +2,7 @@ fastapi==0.115.8
 uvicorn[standard]==0.27.1
 firebase-admin==6.5.0
 sentence-transformers==3.4.1
+optimum[onnxruntime]==1.24.0
 onnxruntime==1.21.1
 # spaCy does not publish wheels for Python 3.13+ yet; keep 3.10–3.12 for Windows.
 spacy==3.7.4; python_version < "3.13"
