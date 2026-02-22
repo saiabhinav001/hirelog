@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import re
-from typing import List
+from typing import List, TYPE_CHECKING
 
 import numpy as np
-import spacy
-from sentence_transformers import SentenceTransformer
 
 from app.core.config import settings
+
+if TYPE_CHECKING:
+    import spacy
+    from sentence_transformers import SentenceTransformer
 
 
 QUESTION_PREFIXES = (
@@ -204,11 +206,13 @@ class NlpPipeline:
     def _ensure_loaded(self) -> None:
         """Lazy-load heavy models on first use so the server binds its port before loading."""
         if self._model is None:
+            import spacy as _spacy
+            from sentence_transformers import SentenceTransformer as _ST
             logger = __import__("logging").getLogger(__name__)
-            logger.info("Loading SentenceTransformer model...")
-            self._model = SentenceTransformer(settings.EMBEDDING_MODEL)
+            logger.info("Loading SentenceTransformer model (ONNX backend)...")
+            self._model = _ST(settings.EMBEDDING_MODEL, backend="onnx")
             logger.info("Loading spaCy model...")
-            self._nlp = spacy.load("en_core_web_sm")
+            self._nlp = _spacy.load("en_core_web_sm")
             logger.info("NLP models loaded.")
 
     @property
