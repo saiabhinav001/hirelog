@@ -40,7 +40,7 @@ function AvatarDropdown() {
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((prev) => !prev)}
-        className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--primary)] text-sm font-semibold text-white transition-shadow hover:ring-2 hover:ring-[var(--primary)]/40 focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/40"
+        className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--primary)] text-sm font-semibold text-white transition-shadow hover:ring-2 hover:ring-[var(--primary)]/40 focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/40"
         aria-label="User menu"
       >
         {initial}
@@ -130,7 +130,7 @@ function MobileMenu() {
     <div className="md:hidden relative" ref={ref}>
       <button
         onClick={() => setOpen((prev) => !prev)}
-        className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-muted)] transition-colors"
+        className="flex h-11 w-11 items-center justify-center rounded-md text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-muted)] transition-colors"
         aria-label="Menu"
       >
         {open ? (

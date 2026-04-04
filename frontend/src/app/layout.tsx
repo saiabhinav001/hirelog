@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import { IBM_Plex_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
 import { ThemeProvider } from "@/context/ThemeContext";
@@ -8,9 +8,9 @@ import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
-const ibmPlexSans = IBM_Plex_Sans({
+const primarySans = Plus_Jakarta_Sans({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: ["400", "500", "600", "700", "800"],
   variable: "--font-plex-sans",
   display: "swap",
 });
@@ -51,7 +51,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className={`${ibmPlexSans.variable} ${ibmPlexMono.variable} antialiased`} suppressHydrationWarning>
+      <body className={`${primarySans.variable} ${ibmPlexMono.variable} antialiased`} suppressHydrationWarning>
         <ThemeProvider>
           <AuthProvider>
             <ToastProvider>
