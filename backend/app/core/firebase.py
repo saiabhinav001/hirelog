@@ -52,7 +52,11 @@ def initialize_firebase() -> firestore.Client:
         with _firebase_init_lock:
             if not firebase_admin._apps:
                 cred = _build_credential()
-                firebase_admin.initialize_app(cred, {"projectId": settings.FIREBASE_PROJECT_ID})
+                options = {"projectId": settings.FIREBASE_PROJECT_ID} if settings.FIREBASE_PROJECT_ID else None
+                if options:
+                    firebase_admin.initialize_app(cred, options)
+                else:
+                    firebase_admin.initialize_app(cred)
     return firestore.client()
 
 

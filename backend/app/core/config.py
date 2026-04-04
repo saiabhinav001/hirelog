@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # Firebase — production uses JSON env var; local dev uses file path
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
     FIREBASE_SERVICE_ACCOUNT_PATH: Optional[str] = None
-    FIREBASE_PROJECT_ID: str
+    FIREBASE_PROJECT_ID: Optional[str] = None
 
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://localhost:3002"
 
