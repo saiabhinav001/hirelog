@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
 
-type Theme = "light" | "dark" | "system";
+type Theme = "light" | "dark";
 
 interface ThemeContextType {
   theme: Theme;
@@ -17,20 +17,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("light");
   const [mounted, setMounted] = useState(false);
 
-  const getSystemTheme = useCallback((): "light" | "dark" => {
-    if (typeof window === "undefined") return "light";
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  const sanitizeTheme = useCallback((raw: string | null): Theme => {
+    return raw === "dark" ? "dark" : "light";
   }, []);
 
   const applyTheme = useCallback((newTheme: Theme) => {
-    const resolved = newTheme === "system" ? getSystemTheme() : newTheme;
-    setResolvedTheme(resolved);
+    setResolvedTheme(newTheme);
     
     const root = document.documentElement;
     root.classList.remove("light", "dark");
-    root.classList.add(resolved);
-    root.style.colorScheme = resolved;
-  }, [getSystemTheme]);
+    root.classList.add(newTheme);
+    root.style.colorScheme = newTheme;
+  }, []);
 
   const setTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme);
@@ -39,23 +37,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [applyTheme]);
 
   useEffect(() => {
-    const stored = localStorage.getItem("theme") as Theme | null;
-    const initial = stored || "light";
+    const initial = sanitizeTheme(localStorage.getItem("theme"));
     queueMicrotask(() => {
       setThemeState(initial);
       applyTheme(initial);
       setMounted(true);
     });
-
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = () => {
-      if (theme === "system") {
-        applyTheme("system");
-      }
-    };
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, [applyTheme, theme]);
+  }, [applyTheme, sanitizeTheme]);
 
   // Prevent flash of incorrect theme
   if (!mounted) {

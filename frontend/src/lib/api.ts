@@ -1,6 +1,31 @@
 const rawBase = process.env.NEXT_PUBLIC_API_BASE_URL;
-export const API_BASE =
-  rawBase && rawBase.startsWith("http") ? rawBase : "http://localhost:8000";
+const PROD_FALLBACK_API_BASE = "https://rockstar00-hirelog-backend.hf.space";
+const DEV_FALLBACK_API_BASE = "http://localhost:8000";
+
+function normalizeApiBase(value: string | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith("http")) return null;
+  return trimmed.replace(/\/+$/, "");
+}
+
+function apiBaseCandidates(): string[] {
+  const candidates: string[] = [];
+  const fromEnv = normalizeApiBase(rawBase);
+  if (fromEnv) {
+    candidates.push(fromEnv);
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    candidates.push(PROD_FALLBACK_API_BASE);
+  } else {
+    candidates.push(DEV_FALLBACK_API_BASE);
+  }
+
+  return [...new Set(candidates)];
+}
+
+export const API_BASE = apiBaseCandidates()[0];
 
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 500;
@@ -22,48 +47,62 @@ export async function apiFetch<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  let response!: Response;
+  const bases = apiBaseCandidates();
+  let lastError = "Unable to reach the server. Please try again.";
 
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      response = await fetch(`${API_BASE}${path}`, {
-        ...options,
-        headers,
-        cache: "no-store",
-      });
-      // Success — break out of the retry loop
-      break;
-    } catch {
-      // Only retry on network errors (server unreachable, CORS pre-flight, etc.)
-      if (attempt < MAX_RETRIES - 1) {
-        // Exponential backoff with jitter to avoid thundering herd
-        const backoff = RETRY_BASE_MS * Math.pow(2, attempt);
-        const jitter = Math.random() * backoff * 0.5;
-        await sleep(backoff + jitter);
-        continue;
+  for (const base of bases) {
+    let response: Response | null = null;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        response = await fetch(`${base}${path}`, {
+          ...options,
+          headers,
+          cache: "no-store",
+        });
+        break;
+      } catch {
+        if (attempt < MAX_RETRIES - 1) {
+          const backoff = RETRY_BASE_MS * Math.pow(2, attempt);
+          const jitter = Math.random() * backoff * 0.5;
+          await sleep(backoff + jitter);
+          continue;
+        }
       }
-      throw new Error(
-        "Unable to reach the server. Please check your connection and try again."
-      );
     }
-  }
 
-  const text = await response.text();
-  let data: Record<string, unknown> = {};
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { message: text };
+    if (!response) {
+      lastError = "Unable to reach the server. Please check your connection and try again.";
+      continue;
     }
-  }
 
-  if (!response.ok) {
+    const text = await response.text();
+    let data: Record<string, unknown> = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { message: text };
+      }
+    }
+
+    if (response.ok) {
+      return data as T;
+    }
+
     const message = (data?.detail as string) || (data?.message as string) || "Request failed";
+    const htmlLike = typeof message === "string" && message.includes("<!DOCTYPE html>");
+    const canTryNextBase = response.status >= 500 || (response.status === 404 && htmlLike);
+
+    if (canTryNextBase && base !== bases[bases.length - 1]) {
+      lastError = "Primary backend is unavailable. Switched to fallback endpoint.";
+      continue;
+    }
+
     throw new Error(message);
   }
 
-  return data as T;
+  throw new Error(lastError);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

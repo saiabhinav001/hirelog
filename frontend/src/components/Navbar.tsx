@@ -8,10 +8,10 @@ import { useAuth } from "@/context/AuthContext";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 const baseNavLinks = [
-  { href: "/search", label: "Search" },
+  { href: "/search", label: "Explore" },
   { href: "/practice", label: "Practice" },
-  { href: "/submit", label: "Contribute" },
-  { href: "/dashboard", label: "Analytics" },
+  { href: "/submit", label: "Share" },
+  { href: "/dashboard", label: "Insights" },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

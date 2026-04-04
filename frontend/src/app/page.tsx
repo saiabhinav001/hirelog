@@ -18,10 +18,10 @@ export default function Home() {
         </p>
         <div className="mt-6 flex flex-wrap gap-3">
           <Link href="/search" className="btn-primary w-full sm:w-auto">
-            Explore the archive
+            Start exploring
           </Link>
           <Link href="/submit" className="btn-secondary w-full sm:w-auto">
-            Contribute an experience
+            Share your experience
           </Link>
         </div>
       </div>
