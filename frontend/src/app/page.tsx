@@ -16,11 +16,11 @@ export default function Home() {
           and analyzable intelligence — so every batch starts better prepared
           than the last.
         </p>
-        <div className="mt-6 flex gap-3">
-          <Link href="/search" className="btn-primary">
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link href="/search" className="btn-primary w-full sm:w-auto">
             Explore the archive
           </Link>
-          <Link href="/submit" className="btn-secondary">
+          <Link href="/submit" className="btn-secondary w-full sm:w-auto">
             Contribute an experience
           </Link>
         </div>
@@ -29,28 +29,28 @@ export default function Home() {
 
       {/* Product Pipeline */}
       <FadeIn delay={0.1}>
-      <div className="mt-16 p-6 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
+      <div className="mt-16 p-4 sm:p-6 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
         <p className="text-xs text-[var(--text-muted)] uppercase tracking-wide mb-4">Intelligence pipeline</p>
         <div className="flex flex-wrap items-center justify-center gap-3 text-sm">
           <div className="flex items-center gap-2">
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--primary)]/10 text-[var(--primary)] text-xs font-medium">1</span>
             <span className="font-medium">Raw Experience</span>
           </div>
-          <svg className="h-4 w-4 text-[var(--text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className="hidden h-4 w-4 text-[var(--text-muted)] sm:block" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
           </svg>
           <div className="flex items-center gap-2">
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--primary)]/10 text-[var(--primary)] text-xs font-medium">2</span>
             <span className="font-medium">AI Structuring</span>
           </div>
-          <svg className="h-4 w-4 text-[var(--text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className="hidden h-4 w-4 text-[var(--text-muted)] sm:block" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
           </svg>
           <div className="flex items-center gap-2">
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--primary)]/10 text-[var(--primary)] text-xs font-medium">3</span>
             <span className="font-medium">Semantic Discovery</span>
           </div>
-          <svg className="h-4 w-4 text-[var(--text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className="hidden h-4 w-4 text-[var(--text-muted)] sm:block" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
           </svg>
           <div className="flex items-center gap-2">

@@ -8,22 +8,22 @@
 :root {
   color-scheme: light;
 
-  --bg: #f8fafc;
-  --bg-subtle: #f1f5f9;
+  --bg: #f9fbff;
+  --bg-subtle: #eef3f9;
   --surface: #ffffff;
   --surface-elevated: #ffffff;
-  --surface-muted: #eef2ff;
-  --surface-hover: #e2e8f0;
+  --surface-muted: #eaf1ff;
+  --surface-hover: #dbe6f5;
 
   --text: #0f172a;
-  --text-secondary: #334155;
-  --text-muted: #64748b;
-  --text-disabled: #94a3b8;
+  --text-secondary: #243247;
+  --text-muted: #475569;
+  --text-disabled: #64748b;
 
-  --primary: #1d4ed8;
-  --primary-hover: #1e40af;
+  --primary: #1e40af;
+  --primary-hover: #1d3b9e;
   --primary-muted: #2563eb;
-  --primary-soft: rgba(37, 99, 235, 0.1);
+  --primary-soft: rgba(30, 64, 175, 0.14);
 
   --success: #15803d;
   --success-soft: rgba(21, 128, 61, 0.1);
@@ -32,12 +32,12 @@
   --warning: #b45309;
   --warning-soft: rgba(180, 83, 9, 0.1);
 
-  --border: rgba(15, 23, 42, 0.1);
-  --border-hover: rgba(15, 23, 42, 0.18);
+  --border: rgba(15, 23, 42, 0.16);
+  --border-hover: rgba(15, 23, 42, 0.28);
   --border-focus: var(--primary);
 
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 6px 20px rgba(15, 23, 42, 0.08);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.12);
   
   /* Radius - Consistent, not round */
   --radius-sm: 6px;
@@ -105,6 +105,7 @@
 html {
   scroll-behavior: smooth;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -119,6 +120,37 @@ body {
   line-height: 1.55;
   letter-spacing: -0.011em;
   font-variant-numeric: tabular-nums;
+  overflow-x: hidden;
+}
+
+main {
+  min-width: 0;
+}
+
+img,
+video,
+canvas,
+svg {
+  max-width: 100%;
+}
+
+p,
+li,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+span,
+small,
+label,
+button,
+a,
+td,
+th {
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 @media (min-width: 768px) {
@@ -182,7 +214,7 @@ h6 { font-size: var(--type-h6); }
 
 @layer utilities {
   .page-container {
-    @apply mx-auto max-w-5xl px-5 sm:px-6;
+    @apply mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8;
   }
 
   /* Cards - Clean, minimal with hover elevation */
@@ -244,6 +276,7 @@ h6 { font-size: var(--type-h6); }
   .stat-card {
     @apply rounded-lg p-4;
     background: var(--surface-muted);
+    min-width: 0;
   }
 
   /* Buttons - Premium, gradient hover */
@@ -252,7 +285,7 @@ h6 { font-size: var(--type-h6); }
     align-items: center;
     justify-content: center;
     gap: 0.375rem;
-    height: 36px;
+    min-height: 40px;
     background: var(--primary);
     color: #ffffff;
     border-radius: var(--radius-md);
@@ -277,7 +310,7 @@ h6 { font-size: var(--type-h6); }
 
   .btn-primary:hover {
     background: var(--primary-hover);
-    box-shadow: 0 2px 12px rgba(99, 102, 241, 0.3);
+    box-shadow: 0 4px 14px rgba(30, 64, 175, 0.3);
   }
 
   .btn-primary:hover::before {
@@ -294,7 +327,7 @@ h6 { font-size: var(--type-h6); }
     align-items: center;
     justify-content: center;
     gap: 0.375rem;
-    height: 36px;
+    min-height: 40px;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
@@ -323,7 +356,7 @@ h6 { font-size: var(--type-h6); }
     align-items: center;
     justify-content: center;
     gap: 0.375rem;
-    height: 36px;
+    min-height: 40px;
     background: transparent;
     border: none;
     border-radius: var(--radius-md);
@@ -347,7 +380,7 @@ h6 { font-size: var(--type-h6); }
 
 .input-field {
   width: 100%;
-  height: 40px;
+  min-height: 42px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface);
@@ -526,7 +559,7 @@ select.input-field {
    ============================================ */
 
 :focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 3px solid var(--primary);
   outline-offset: 2px;
 }
 
@@ -535,8 +568,24 @@ a:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 3px solid var(--primary);
   outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  :root {
+    --type-body: 0.95rem;
+    --type-h1: 1.875rem;
+    --type-h2: 1.5rem;
+    --type-h3: 1.25rem;
+    --type-h4: 1.125rem;
+    --type-h5: 1rem;
+    --type-h6: 0.95rem;
+  }
+
+  .card {
+    border-radius: 10px;
+  }
 }
 
 /* ============================================
