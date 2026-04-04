@@ -5,8 +5,12 @@ import logging
 import threading
 from typing import List, Tuple
 
-import faiss
 import numpy as np
+
+try:
+    import faiss
+except Exception:  # pragma: no cover - exercised only when FAISS native bindings are unavailable
+    faiss = None
 
 from app.core.config import settings
 
@@ -14,6 +18,48 @@ logger = logging.getLogger(__name__)
 
 _INDEX_PATH = settings.faiss_index_path
 _MAPPING_PATH = settings.faiss_mapping_path
+
+
+def _normalize_l2(matrix: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    return matrix / norms
+
+
+class _NumpyIndexFlatIP:
+    """Small fallback index used when FAISS native bindings are unavailable."""
+
+    def __init__(self, dimension: int) -> None:
+        self.dimension = int(dimension)
+        self._vectors = np.empty((0, self.dimension), dtype="float32")
+
+    @property
+    def ntotal(self) -> int:
+        return int(self._vectors.shape[0])
+
+    def add(self, vectors: np.ndarray) -> None:
+        vectors = np.asarray(vectors, dtype="float32")
+        if vectors.ndim == 1:
+            vectors = vectors.reshape(1, -1)
+        if vectors.size == 0:
+            return
+        self._vectors = np.vstack([self._vectors, vectors])
+
+    def search(self, query: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+        query = np.asarray(query, dtype="float32")
+        if query.ndim == 1:
+            query = query.reshape(1, -1)
+        if self.ntotal == 0:
+            return (
+                np.empty((1, 0), dtype="float32"),
+                np.empty((1, 0), dtype="int64"),
+            )
+
+        scores = np.dot(self._vectors, query[0])
+        top_k = max(1, min(int(k), self.ntotal))
+        top_indices = np.argsort(-scores)[:top_k]
+        top_scores = scores[top_indices]
+        return top_scores.reshape(1, -1).astype("float32"), top_indices.reshape(1, -1).astype("int64")
 
 
 class FaissStore:
@@ -56,6 +102,10 @@ class FaissStore:
 
     def _load_or_create_index(self) -> faiss.IndexFlatIP:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
+        if faiss is None:
+            logger.warning("FAISS not available; using numpy similarity fallback index")
+            return _NumpyIndexFlatIP(self.dimension)
+
         if self.index_path.exists():
             return faiss.read_index(str(self.index_path))
 
@@ -79,12 +129,14 @@ class FaissStore:
             json.dump({"mapping": mapping}, file)
 
     def _persist_index(self) -> None:
+        if faiss is None:
+            return
         faiss.write_index(self.index, str(self.index_path))
 
     def add_vector(self, vector: np.ndarray, doc_id: str) -> int:
         with self._lock:
             vector = np.asarray(vector, dtype="float32").reshape(1, -1)
-            faiss.normalize_L2(vector)
+            vector = _normalize_l2(vector)
             self.index.add(vector)
             self.mapping.append(doc_id)
             self._persist_index()
@@ -96,7 +148,7 @@ class FaissStore:
             return []
         with self._lock:
             query = np.asarray(vector, dtype="float32").reshape(1, -1)
-            faiss.normalize_L2(query)
+            query = _normalize_l2(query)
             scores, indices = self.index.search(query, k)
 
         results = []
@@ -109,10 +161,13 @@ class FaissStore:
     def rebuild(self, vectors: List[np.ndarray], doc_ids: List[str]) -> None:
         with self._lock:
             # Rebuild keeps vectors contiguous for fast similarity search.
-            self.index = faiss.IndexFlatIP(self.dimension)
+            if faiss is not None:
+                self.index = faiss.IndexFlatIP(self.dimension)
+            else:
+                self.index = _NumpyIndexFlatIP(self.dimension)
             if vectors:
                 matrix = np.asarray(vectors, dtype="float32")
-                faiss.normalize_L2(matrix)
+                matrix = _normalize_l2(matrix)
                 self.index.add(matrix)
             self.mapping = doc_ids
             self._persist_index()
