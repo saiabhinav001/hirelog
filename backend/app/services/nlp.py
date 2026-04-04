@@ -8,7 +8,6 @@ import numpy as np
 from app.core.config import settings
 
 if TYPE_CHECKING:
-    import spacy
     from sentence_transformers import SentenceTransformer
 
 
@@ -209,8 +208,12 @@ class NlpPipeline:
             import spacy as _spacy
             from sentence_transformers import SentenceTransformer as _ST
             logger = __import__("logging").getLogger(__name__)
-            logger.info("Loading SentenceTransformer model (ONNX backend)...")
-            self._model = _ST(settings.EMBEDDING_MODEL, backend="onnx")
+            try:
+                logger.info("Loading SentenceTransformer model (ONNX backend)...")
+                self._model = _ST(settings.EMBEDDING_MODEL, backend="onnx")
+            except Exception:
+                logger.warning("ONNX runtime unavailable; falling back to default SentenceTransformer backend")
+                self._model = _ST(settings.EMBEDDING_MODEL)
             logger.info("Loading spaCy model...")
             self._nlp = _spacy.load("en_core_web_sm")
             logger.info("NLP models loaded.")

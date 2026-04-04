@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { useAuth } from "@/context/AuthContext";
 import { apiFetch } from "@/lib/api";
-import { auth } from "@/lib/firebase";
+import { getClientAuthToken } from "@/lib/authToken";
 import type { PracticeList, PracticeQuestion, QuestionStatus } from "@/lib/types";
 
 const TOPICS = ["DSA", "DBMS", "OS", "CN", "OOP", "HR", "System Design", "General"];
@@ -332,17 +332,16 @@ function ListDetail({
   const getToken = useCallback(async (): Promise<string> => {
     const cached = tokenRef.current;
     if (cached && Date.now() - cached.ts < TOKEN_TTL) return cached.token;
-    if (!auth.currentUser) throw new Error("Not authenticated");
-    const token = await auth.currentUser.getIdToken();
+    const token = await getClientAuthToken();
+    if (!token) throw new Error("Not authenticated");
     tokenRef.current = { token, ts: Date.now() };
     return token;
-  }, []);
+  }, [TOKEN_TTL]);
 
   // Request dedup — prevents concurrent duplicate mutations from rapid clicks
   const pendingOps = useRef(new Set<string>());
 
   const loadQuestions = useCallback(async () => {
-    if (!auth.currentUser) return;
     setLoading(true);
     try {
       const token = await getToken();
@@ -352,6 +351,8 @@ function ListDetail({
         token
       );
       setQuestions(data);
+    } catch {
+      setQuestions([]);
     } finally {
       setLoading(false);
     }
@@ -371,7 +372,6 @@ function ListDetail({
   );
 
   const handleAddQuestion = async (q: { question_text: string; topic: string; difficulty?: string }) => {
-    if (!auth.currentUser) return;
     const opKey = `add:${q.question_text}`;
     if (pendingOps.current.has(opKey)) return;
     pendingOps.current.add(opKey);
@@ -400,7 +400,7 @@ function ListDetail({
   };
 
   const handleStatusChange = async (questionId: string, status: QuestionStatus) => {
-    if (!auth.currentUser || !questionId) return;
+    if (!questionId) return;
 
     // Dedup: skip if this exact operation is already in-flight
     const opKey = `status:${questionId}:${status}`;
@@ -435,7 +435,7 @@ function ListDetail({
   };
 
   const handleDeleteQuestion = async (questionId: string) => {
-    if (!auth.currentUser || !questionId) return;
+    if (!questionId) return;
 
     // Dedup: skip if already deleting
     const opKey = `delete:${questionId}`;
@@ -540,9 +540,12 @@ export default function PracticePage() {
   const fetchedRef = useRef(false);
 
   const loadLists = useCallback(async () => {
-    if (!auth.currentUser) return;
     try {
-      const token = await auth.currentUser.getIdToken();
+      const token = await getClientAuthToken();
+      if (!token) {
+        setLoading(false);
+        return;
+      }
       const data = await apiFetch<PracticeList[]>(
         "/api/practice-lists",
         { method: "GET" },
@@ -572,8 +575,8 @@ export default function PracticePage() {
   }, [user, loadLists]);
 
   const handleCreateList = async (name: string) => {
-    if (!auth.currentUser) return;
-    const token = await auth.currentUser.getIdToken();
+    const token = await getClientAuthToken();
+    if (!token) return;
     const newList = await apiFetch<PracticeList>(
       "/api/practice-lists",
       {
@@ -586,9 +589,9 @@ export default function PracticePage() {
   };
 
   const handleDeleteList = async (listId: string) => {
-    if (!auth.currentUser) return;
+    const token = await getClientAuthToken();
+    if (!token) return;
     if (!confirm("Delete this list and all its questions?")) return;
-    const token = await auth.currentUser.getIdToken();
     await apiFetch(`/api/practice-lists/${listId}`, { method: "DELETE" }, token);
     setLists((prev) => prev.filter((l) => l.id !== listId));
   };

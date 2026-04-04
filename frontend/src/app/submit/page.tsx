@@ -7,8 +7,8 @@ import Link from "next/link";
 import { LoadingState } from "@/components/States";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
+import { getClientAuthToken } from "@/lib/authToken";
 import { apiFetch } from "@/lib/api";
-import { auth } from "@/lib/firebase";
 
 export default function SubmitPage() {
   const router = useRouter();
@@ -41,11 +41,11 @@ export default function SubmitPage() {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!auth.currentUser) return;
+    const token = await getClientAuthToken();
+    if (!token) return;
     setSubmitting(true);
     setError(null);
     try {
-      const token = await auth.currentUser.getIdToken();
       await apiFetch(
         "/api/experiences",
         {

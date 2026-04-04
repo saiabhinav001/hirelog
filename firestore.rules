@@ -5,30 +5,23 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function userDoc() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid));
-    }
-
-    function isContributor() {
-      return signedIn() && userDoc().data.role == 'contributor';
-    }
-
     match /users/{userId} {
       allow read: if signedIn() && request.auth.uid == userId;
-      allow create: if signedIn() && request.auth.uid == userId;
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && request.resource.data.role == 'viewer';
       // Role upgrades are managed server-side via the backend admin SDK.
       // Client writes only touch name/email; role changes are rejected client-side.
-      allow update: if signedIn() && request.auth.uid == userId;
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == resource.data.role;
     }
 
     match /interview_experiences/{docId} {
       allow read: if signedIn();
-      // Contributions are created through the backend API (admin SDK),
-      // which auto-upgrades viewers to contributors on first submit.
-      allow create: if signedIn()
-        && request.resource.data.created_by == request.auth.uid;
-      allow update, delete: if signedIn()
-        && resource.data.created_by == request.auth.uid;
+      // All writes are backend-only through Firebase Admin SDK.
+      allow create, update, delete: if false;
     }
 
     match /practice_lists/{listId} {

@@ -3,14 +3,22 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from firebase_admin import firestore
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, require_placement_cell
 from app.core.firebase import db
-from app.models.schemas import AddQuestionsRequest, ExperienceCreate, ExperienceMetadataUpdate
+from app.models.schemas import (
+    AddQuestionsRequest,
+    AdminQueueFilter,
+    AdminVisibilityUpdate,
+    ExperienceCreate,
+    ExperienceMetadataUpdate,
+)
 from app.services.faiss_store import faiss_store
+from app.services.index_queue import search_index_queue
 from app.services.nlp import pipeline
+from app.services.search_core import build_search_terms
 from app.utils.serialization import serialize_doc
 from app.api.routes.dashboard import update_dashboard_stats_async
 
@@ -58,6 +66,83 @@ def _build_user_question_objects(question_texts: list[str], now: str) -> list[di
             "updated_at": now,
         })
     return results
+
+
+def _compute_search_terms(
+    *,
+    company: str,
+    role: str,
+    round_name: str,
+    difficulty: str,
+    summary: str,
+    raw_text: str,
+    topics: list[str],
+    questions_flat: list[dict],
+) -> list[str]:
+    question_texts = [
+        q.get("question_text", "")
+        for q in questions_flat
+        if isinstance(q, dict) and q.get("question_text")
+    ]
+    return build_search_terms(
+        company=company,
+        role=role,
+        round_name=round_name,
+        difficulty=difficulty,
+        summary=summary,
+        raw_text=raw_text,
+        topics=topics,
+        question_texts=question_texts,
+    )
+
+
+def _coerce_datetime(value) -> datetime | None:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        except ValueError:
+            return None
+    return None
+
+
+def _collect_user_questions_for_reprocess(data: dict) -> list[dict]:
+    nested = data.get("questions") or {}
+    if isinstance(nested, dict):
+        nested_user = nested.get("user_provided") or []
+        if isinstance(nested_user, list):
+            user_questions = []
+            for question in nested_user:
+                if not isinstance(question, dict):
+                    continue
+                question_text = str(question.get("question_text") or "").strip()
+                if not question_text:
+                    continue
+                user_questions.append(question)
+            if user_questions:
+                return user_questions
+
+    flat = data.get("extracted_questions") or []
+    from_flat: list[dict] = []
+    for question in flat:
+        if not isinstance(question, dict):
+            continue
+        if question.get("source") != "user":
+            continue
+        question_text = str(question.get("question_text") or "").strip()
+        if not question_text:
+            continue
+        from_flat.append(question)
+    return from_flat
 
 
 def _run_background_nlp(doc_id: str, raw_text: str, user_questions: list[dict]) -> None:
@@ -133,12 +218,25 @@ def _run_background_nlp(doc_id: str, raw_text: str, user_questions: list[dict]) 
             embedding_id = None
 
         # Write enrichment back to Firestore
+        current_doc = db.collection("interview_experiences").document(doc_id).get().to_dict() or {}
+        search_terms = _compute_search_terms(
+            company=str(current_doc.get("company", "")),
+            role=str(current_doc.get("role", "")),
+            round_name=str(current_doc.get("round", "")),
+            difficulty=str(current_doc.get("difficulty", "")),
+            summary=processed["summary"],
+            raw_text=raw_text,
+            topics=list(all_topics),
+            questions_flat=combined_flat,
+        )
+
         update_data: dict = {
             "extracted_questions": combined_flat,
             "questions": questions_nested,
             "stats": stats,
             "topics": list(all_topics),
             "summary": processed["summary"],
+            "search_terms": search_terms,
             "nlp_status": "done",
             "edit_history": firestore.ArrayUnion([{
                 "timestamp": now,
@@ -163,11 +261,12 @@ def _run_background_nlp(doc_id: str, raw_text: str, user_questions: list[dict]) 
         )
 
         db.collection("interview_experiences").document(doc_id).update(update_data)
+        search_index_queue.enqueue_upsert(doc_id)
 
         # Refresh dashboard stats after enrichment
         update_dashboard_stats_async()
 
-    except Exception as exc:
+    except Exception:
         # Mark as failed so the UI can show status
         try:
             db.collection("interview_experiences").document(doc_id).update({
@@ -188,7 +287,7 @@ def get_my_contributions(user: dict = Depends(get_current_user)) -> dict:
         # Preferred: uses composite index (created_by ASC, created_at DESC)
         snapshots = list(
             db.collection("interview_experiences")
-            .where("created_by", "==", user["uid"])
+            .where(filter=firestore.FieldFilter("created_by", "==", user["uid"]))
             .order_by("created_at", direction=firestore.Query.DESCENDING)
             .stream()
         )
@@ -197,15 +296,188 @@ def get_my_contributions(user: dict = Depends(get_current_user)) -> dict:
         # server-side ordering and sort in Python instead.
         snapshots = list(
             db.collection("interview_experiences")
-            .where("created_by", "==", user["uid"])
+            .where(filter=firestore.FieldFilter("created_by", "==", user["uid"]))
             .stream()
         )
         snapshots.sort(
             key=lambda s: (s.to_dict() or {}).get("created_at", ""),
             reverse=True,
         )
-    results = [serialize_doc(s) for s in snapshots]
+    results = [serialize_doc(s, include_private=True) for s in snapshots]
     return {"results": results, "total": len(results)}
+
+
+@router.get("/admin/queue")
+def get_admin_moderation_queue(
+    status_filter: str = Query(
+        default="all",
+        alias="status",
+        pattern="^(all|pending|processing|done|failed)$",
+    ),
+    active: str = Query(default="all", pattern="^(all|active|hidden)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    user: dict = Depends(require_placement_cell),
+) -> dict:
+    """Return a moderation queue for placement-cell operations."""
+    filters = AdminQueueFilter(status=status_filter, active=active, limit=limit)
+
+    snapshots = list(
+        db.collection("interview_experiences")
+        .limit(500)
+        .stream()
+    )
+
+    queue_rows = []
+    for snapshot in snapshots:
+        data = snapshot.to_dict() or {}
+        doc_nlp_status = str(data.get("nlp_status") or "unknown").lower()
+        is_active = bool(data.get("is_active", True))
+
+        if filters.status != "all" and doc_nlp_status != filters.status:
+            continue
+        if filters.active == "active" and not is_active:
+            continue
+        if filters.active == "hidden" and is_active:
+            continue
+
+        serialized = serialize_doc(snapshot, include_private=True, include_contributor=True)
+        created_at_raw = serialized.get("created_at")
+        created_at_dt = _coerce_datetime(created_at_raw)
+        stats = serialized.get("stats") or {}
+
+        queue_rows.append(
+            {
+                "id": snapshot.id,
+                "company": serialized.get("company", ""),
+                "role": serialized.get("role", ""),
+                "year": serialized.get("year"),
+                "round": serialized.get("round", ""),
+                "difficulty": serialized.get("difficulty", ""),
+                "is_active": is_active,
+                "nlp_status": doc_nlp_status,
+                "created_at": created_at_raw,
+                "created_by": serialized.get("created_by"),
+                "contributor_display": serialized.get("contributor_display", "Anonymous"),
+                "question_count": int(stats.get("total_question_count") or 0),
+                "user_question_count": int(stats.get("user_question_count") or 0),
+                "raw_text_preview": str(serialized.get("raw_text") or "")[:220],
+                "_sort_ts": created_at_dt.timestamp() if created_at_dt else 0,
+            }
+        )
+
+    queue_rows.sort(key=lambda row: row.get("_sort_ts", 0), reverse=True)
+    trimmed = []
+    for row in queue_rows[: filters.limit]:
+        row.pop("_sort_ts", None)
+        trimmed.append(row)
+
+    return {
+        "filters": {
+            "status": filters.status,
+            "active": filters.active,
+            "limit": filters.limit,
+        },
+        "results": trimmed,
+        "total": len(trimmed),
+        "sampled": len(snapshots),
+    }
+
+
+@router.post("/admin/{experience_id}/reprocess")
+def admin_reprocess_experience(
+    experience_id: str,
+    user: dict = Depends(require_placement_cell),
+) -> dict:
+    """Queue NLP reprocessing for a specific experience document."""
+    snapshot = db.collection("interview_experiences").document(experience_id).get()
+    if not snapshot.exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Experience not found.")
+
+    data = snapshot.to_dict() or {}
+    raw_text = str(data.get("raw_text") or "").strip()
+    if len(raw_text) < 20:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Experience text is too short to reprocess.",
+        )
+
+    user_questions = _collect_user_questions_for_reprocess(data)
+    now = datetime.now(timezone.utc).isoformat()
+    db.collection("interview_experiences").document(experience_id).update(
+        {
+            "nlp_status": "pending",
+            "edit_history": firestore.ArrayUnion(
+                [
+                    {
+                        "timestamp": now,
+                        "field": "classification",
+                        "action": "ai_enrichment",
+                        "old_value": str(data.get("nlp_status") or "unknown"),
+                        "new_value": f"reprocess_queued by {user.get('uid', 'placement_cell')}",
+                    }
+                ]
+            ),
+        }
+    )
+    search_index_queue.enqueue_upsert(experience_id)
+
+    thread = threading.Thread(
+        target=_run_background_nlp,
+        args=(experience_id, raw_text, user_questions),
+        daemon=True,
+    )
+    thread.start()
+
+    return {
+        "status": "queued",
+        "experience_id": experience_id,
+        "user_question_count": len(user_questions),
+    }
+
+
+@router.patch("/admin/{experience_id}/visibility")
+def admin_update_experience_visibility(
+    experience_id: str,
+    payload: AdminVisibilityUpdate,
+    user: dict = Depends(require_placement_cell),
+) -> dict:
+    """Placement-cell moderation control to hide or re-activate an experience."""
+    snapshot = db.collection("interview_experiences").document(experience_id).get()
+    if not snapshot.exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Experience not found.")
+
+    data = snapshot.to_dict() or {}
+    old_active = bool(data.get("is_active", True))
+    now = datetime.now(timezone.utc).isoformat()
+    old_value = "active" if old_active else "hidden"
+    new_value = "active" if payload.is_active else "hidden"
+    note = (payload.note or "").strip()
+    note_suffix = f" | note: {note}" if note else ""
+
+    db.collection("interview_experiences").document(experience_id).update(
+        {
+            "is_active": payload.is_active,
+            "edit_history": firestore.ArrayUnion(
+                [
+                    {
+                        "timestamp": now,
+                        "field": "is_active",
+                        "action": "visibility_change",
+                        "old_value": old_value,
+                        "new_value": f"{new_value} by {user.get('uid', 'placement_cell')}{note_suffix}",
+                    }
+                ]
+            ),
+        }
+    )
+    search_index_queue.enqueue_upsert(experience_id)
+    threading.Thread(target=update_dashboard_stats_async, daemon=True).start()
+
+    return {
+        "status": new_value,
+        "experience_id": experience_id,
+        "changed": old_active != payload.is_active,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -216,11 +488,11 @@ def get_my_contributions(user: dict = Depends(get_current_user)) -> dict:
 def create_experience(payload: ExperienceCreate, user: dict = Depends(get_current_user)) -> dict:
     """Create a new experience contribution.
 
-    PHASE 1 — Ingestion (blocking, fast, <200ms target):
+        Step A — Ingestion (blocking, fast, <200ms target):
       • Save experience metadata + user-provided questions verbatim
       • Return success immediately
 
-    PHASE 2 — NLP enrichment (async, background thread):
+        Step B — NLP enrichment (async, background thread):
       • Extract AI questions from raw text
       • Classify topics on all questions
       • Generate summary & FAISS embedding
@@ -229,7 +501,7 @@ def create_experience(payload: ExperienceCreate, user: dict = Depends(get_curren
     User questions are AUTHORITATIVE — never filtered, merged, or dropped.
     """
     # Auto-upgrade viewer → contributor on first submission
-    if user.get("role") != "contributor":
+    if user.get("role") == "viewer":
         db.collection("users").document(user["uid"]).set(
             {"role": "contributor"}, merge=True
         )
@@ -254,6 +526,17 @@ def create_experience(payload: ExperienceCreate, user: dict = Depends(get_curren
         "ai_extracted": [],  # Populated by background NLP
     }
 
+    initial_search_terms = _compute_search_terms(
+        company=payload.company,
+        role=payload.role,
+        round_name=payload.round,
+        difficulty=payload.difficulty,
+        summary="",
+        raw_text=payload.raw_text,
+        topics=[],
+        questions_flat=user_question_objects,
+    )
+
     contributor_name = user.get("name", "")
 
     # Fetch current display_name from the user document (source of truth)
@@ -269,7 +552,11 @@ def create_experience(payload: ExperienceCreate, user: dict = Depends(get_curren
             display_name = parts[0]
 
     # Build author identity model — IMMUTABLE SNAPSHOT at time of submission
-    if payload.show_name and display_name:
+    if payload.is_anonymous:
+        author = {
+            "visibility": "anonymous",
+        }
+    elif payload.show_name and display_name:
         author = {
             "uid": user["uid"],
             "visibility": "public",
@@ -293,11 +580,12 @@ def create_experience(payload: ExperienceCreate, user: dict = Depends(get_curren
         "stats": initial_stats,
         "topics": [],  # Populated by background NLP
         "summary": "",  # Populated by background NLP
+        "search_terms": initial_search_terms,
         "embedding_id": None,
         "created_by": user["uid"],
         "contributor_name": contributor_name,
         "author": author,
-        "show_name": payload.show_name,
+        "show_name": False if payload.is_anonymous else payload.show_name,
         "created_at": firestore.SERVER_TIMESTAMP,
         "is_anonymous": payload.is_anonymous,
         "is_active": True,
@@ -316,8 +604,9 @@ def create_experience(payload: ExperienceCreate, user: dict = Depends(get_curren
     }
 
     doc_ref.set(doc_data)
+    search_index_queue.enqueue_upsert(doc_ref.id)
 
-    # PHASE 2: Background NLP enrichment — does NOT block the response
+    # Background NLP enrichment — does not block the response
     thread = threading.Thread(
         target=_run_background_nlp,
         args=(doc_ref.id, payload.raw_text, user_question_objects),
@@ -325,7 +614,7 @@ def create_experience(payload: ExperienceCreate, user: dict = Depends(get_curren
     )
     thread.start()
 
-    result = serialize_doc(doc_ref.get())
+    result = serialize_doc(doc_ref.get(), include_private=True)
 
     # Mask the creator ID if anonymous (for public display)
     if payload.is_anonymous:
@@ -365,6 +654,7 @@ def soft_delete_experience(experience_id: str, user: dict = Depends(get_current_
             "new_value": "hidden",
         }]),
     })
+    search_index_queue.enqueue_upsert(experience_id)
     threading.Thread(target=update_dashboard_stats_async, daemon=True).start()
     return {"status": "hidden", "experience_id": experience_id}
 
@@ -384,6 +674,7 @@ def restore_experience(experience_id: str, user: dict = Depends(get_current_user
             "new_value": "active",
         }]),
     })
+    search_index_queue.enqueue_upsert(experience_id)
     threading.Thread(target=update_dashboard_stats_async, daemon=True).start()
     return {"status": "active", "experience_id": experience_id}
 
@@ -439,12 +730,35 @@ def update_experience_metadata(
             detail="No fields to update.",
         )
 
+    merged = {
+        "company": str(existing.get("company", "")),
+        "role": str(updates.get("role", existing.get("role", ""))),
+        "round": str(updates.get("round", existing.get("round", ""))),
+        "difficulty": str(updates.get("difficulty", existing.get("difficulty", ""))),
+        "summary": str(existing.get("summary", "")),
+        "raw_text": str(existing.get("raw_text", "")),
+        "topics": list(existing.get("topics") or []),
+        "questions_flat": list(existing.get("extracted_questions") or []),
+    }
+    updates["search_terms"] = _compute_search_terms(
+        company=merged["company"],
+        role=merged["role"],
+        round_name=merged["round"],
+        difficulty=merged["difficulty"],
+        summary=merged["summary"],
+        raw_text=merged["raw_text"],
+        topics=merged["topics"],
+        questions_flat=merged["questions_flat"],
+    )
+
     updates["edit_history"] = firestore.ArrayUnion(history_entries)
     db.collection("interview_experiences").document(experience_id).update(updates)
+    search_index_queue.enqueue_upsert(experience_id)
     threading.Thread(target=update_dashboard_stats_async, daemon=True).start()
 
     result = serialize_doc(
-        db.collection("interview_experiences").document(experience_id).get()
+        db.collection("interview_experiences").document(experience_id).get(),
+        include_private=True,
     )
     return result
 
@@ -533,24 +847,38 @@ def add_questions(
         "new_value": f"{len(combined_flat)} questions (+{len(new_questions)} added by user)",
     }
 
+    search_terms = _compute_search_terms(
+        company=str(existing.get("company", "")),
+        role=str(existing.get("role", "")),
+        round_name=str(existing.get("round", "")),
+        difficulty=str(existing.get("difficulty", "")),
+        summary=str(existing.get("summary", "")),
+        raw_text=str(existing.get("raw_text", "")),
+        topics=list(existing.get("topics") or []),
+        questions_flat=combined_flat,
+    )
+
     # Fast write — no NLP, no FAISS, no analytics
     db.collection("interview_experiences").document(experience_id).update({
         "extracted_questions": combined_flat,
         "questions": updated_nested,
         "stats": updated_stats,
+        "search_terms": search_terms,
         "edit_history": firestore.ArrayUnion([history_entry]),
     })
+    search_index_queue.enqueue_upsert(experience_id)
 
     # Read back the saved doc for immediate response
     result = serialize_doc(
-        db.collection("interview_experiences").document(experience_id).get()
+        db.collection("interview_experiences").document(experience_id).get(),
+        include_private=True,
     )
 
     # ── TIER 2: Background enrichment ────────────────────────────────────────
 
     thread = threading.Thread(
         target=_run_background_question_enrichment,
-        args=(experience_id, existing),
+        args=(experience_id,),
         daemon=True,
     )
     thread.start()
@@ -558,7 +886,7 @@ def add_questions(
     return result
 
 
-def _run_background_question_enrichment(doc_id: str, existing_data: dict) -> None:
+def _run_background_question_enrichment(doc_id: str) -> None:
     """Background enrichment after adding questions.
 
     Phases:
@@ -630,6 +958,16 @@ def _run_background_question_enrichment(doc_id: str, existing_data: dict) -> Non
             "questions": enriched_nested,
             "stats": enriched_stats,
             "topics": list(all_topics),
+            "search_terms": _compute_search_terms(
+                company=str(data.get("company", "")),
+                role=str(data.get("role", "")),
+                round_name=str(data.get("round", "")),
+                difficulty=str(data.get("difficulty", "")),
+                summary=str(data.get("summary", "")),
+                raw_text=raw_text,
+                topics=list(all_topics),
+                questions_flat=enriched_flat,
+            ),
         }
 
         # ANONYMITY INVARIANT: Background enrichment must NEVER overwrite identity fields.
@@ -640,6 +978,7 @@ def _run_background_question_enrichment(doc_id: str, existing_data: dict) -> Non
         )
 
         db.collection("interview_experiences").document(doc_id).update(_enrichment_update)
+        search_index_queue.enqueue_upsert(doc_id)
 
         update_dashboard_stats_async()
 

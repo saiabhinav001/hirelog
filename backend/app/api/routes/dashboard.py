@@ -3,12 +3,21 @@ from __future__ import annotations
 import re
 import time
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from firebase_admin import firestore
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, require_placement_cell
 from app.core.config import settings
 from app.core.firebase import db
+from app.core.rate_limit import SlidingWindowLimiter, client_identifier
+from app.api.routes.search import (
+    clear_search_caches,
+    get_search_runtime_snapshot,
+    reset_search_runtime_snapshot,
+    trigger_search_warmup,
+)
 from app.utils.serialization import serialize_doc
 
 
@@ -30,6 +39,23 @@ _REQUIRED_CACHE_FIELDS = {
 _mem_cache: dict = {}
 _mem_cache_ts: float = 0.0
 _MEM_CACHE_TTL: float = 300.0  # 5 minutes
+_admin_cache: dict = {}
+_admin_cache_ts: float = 0.0
+_ADMIN_CACHE_TTL: float = 120.0  # 2 minutes
+_dashboard_limiter = SlidingWindowLimiter(settings.DASHBOARD_RATE_LIMIT_PER_MINUTE, 60)
+_admin_dashboard_limiter = SlidingWindowLimiter(max(20, settings.DASHBOARD_RATE_LIMIT_PER_MINUTE // 2), 60)
+
+
+def _benchmark_doc_ref():
+    return db.collection("metadata").document("search_relevance_benchmark")
+
+
+def _enforce_dashboard_rate_limit(request: Request, user: dict, *, admin: bool = False) -> None:
+    limiter = _admin_dashboard_limiter if admin else _dashboard_limiter
+    limiter.check(
+        client_identifier(request, str(user.get("uid") or "unknown")),
+        detail="Dashboard rate limit exceeded. Please retry shortly.",
+    )
 
 
 def _get_or_compute_stats() -> dict:
@@ -134,6 +160,7 @@ def _compute_and_cache_stats() -> dict:
         }
     
     # Cache the stats
+    stats["generated_at"] = datetime.now(timezone.utc).isoformat()
     try:
         db.collection("metadata").document("dashboard_stats").set(stats)
     except Exception:
@@ -144,11 +171,13 @@ def _compute_and_cache_stats() -> dict:
 
 def update_dashboard_stats_async():
     """Called after new experience submission to refresh cached stats."""
-    global _mem_cache, _mem_cache_ts
+    global _mem_cache, _mem_cache_ts, _admin_cache, _admin_cache_ts
     try:
         result = _compute_and_cache_stats()
         _mem_cache = result
         _mem_cache_ts = time.time()
+        _admin_cache = {}
+        _admin_cache_ts = 0.0
     except Exception:
         pass  # Non-blocking
 
@@ -288,15 +317,16 @@ def _build_insights(stats: dict) -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/stats")
-def get_dashboard_stats(user: dict = Depends(get_current_user)) -> dict:
+def get_dashboard_stats(request: Request, user: dict = Depends(get_current_user)) -> dict:
     """Tier 1: Instant stats from cache - < 100ms target."""
+    _enforce_dashboard_rate_limit(request, user)
     stats = _get_or_compute_stats()
     
     # Get user contribution impact
     user_uid = user.get("uid", "")
     user_experiences = list(
         db.collection("interview_experiences")
-        .where("created_by", "==", user_uid)
+        .where(filter=firestore.FieldFilter("created_by", "==", user_uid))
         .limit(100)
         .stream()
     )
@@ -308,10 +338,25 @@ def get_dashboard_stats(user: dict = Depends(get_current_user)) -> dict:
         for doc in user_experiences
     )
     
+    generated_at = str(stats.get("generated_at") or "")
+    freshness_seconds = None
+    if generated_at:
+        try:
+            generated_dt = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+            if generated_dt.tzinfo is None:
+                generated_dt = generated_dt.replace(tzinfo=timezone.utc)
+            freshness_seconds = max(0, int((datetime.now(timezone.utc) - generated_dt).total_seconds()))
+        except ValueError:
+            freshness_seconds = None
+
     return {
         "total_experiences": stats.get("total_experiences", 0),
         "top_company": stats.get("top_company"),
         "top_topic": stats.get("top_topic"),
+        "data_freshness": {
+            "generated_at": generated_at or None,
+            "freshness_seconds": freshness_seconds,
+        },
         "contribution_impact": {
             "experiences_submitted": user_experience_count,
             "questions_extracted": total_questions,
@@ -325,8 +370,9 @@ def get_dashboard_stats(user: dict = Depends(get_current_user)) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/charts")
-def get_dashboard_charts(user: dict = Depends(get_current_user)) -> dict:
+def get_dashboard_charts(request: Request, user: dict = Depends(get_current_user)) -> dict:
     """Tier 2: Charts data - loaded after initial render."""
+    _enforce_dashboard_rate_limit(request, user)
     stats = _get_or_compute_stats()
     insights = _build_insights(stats)
     
@@ -340,10 +386,12 @@ def get_dashboard_charts(user: dict = Depends(get_current_user)) -> dict:
 
 @router.get("/questions")
 def get_frequent_questions(
+    request: Request,
     limit: int = 5,
     user: dict = Depends(get_current_user),
 ) -> dict:
     """Tier 2: Frequently asked questions - served from cache."""
+    _enforce_dashboard_rate_limit(request, user)
     stats = _get_or_compute_stats()
     cached = stats.get("frequent_questions", {})
     # Apply limit (cache stores up to 10)
@@ -355,10 +403,12 @@ def get_frequent_questions(
 
 @router.get("/flows")
 def get_interview_flows(
+    request: Request,
     limit: int = 4,
     user: dict = Depends(get_current_user),
 ) -> dict:
     """Tier 2: Common interview progressions – served from cache."""
+    _enforce_dashboard_rate_limit(request, user)
     stats = _get_or_compute_stats()
     cached = stats.get("interview_progression", {})
     # Apply limit (cache stores up to 6)
@@ -373,15 +423,16 @@ def get_interview_flows(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("")
-def get_dashboard(user: dict = Depends(get_current_user)) -> dict:
+def get_dashboard(request: Request, user: dict = Depends(get_current_user)) -> dict:
     """Legacy: Full dashboard data in one call (kept for backwards compatibility)."""
+    _enforce_dashboard_rate_limit(request, user)
     stats = _get_or_compute_stats()
     insights = _build_insights(stats)
     
     user_uid = user.get("uid", "")
     user_experiences = list(
         db.collection("interview_experiences")
-        .where("created_by", "==", user_uid)
+        .where(filter=firestore.FieldFilter("created_by", "==", user_uid))
         .limit(100)
         .stream()
     )
@@ -405,4 +456,316 @@ def get_dashboard(user: dict = Depends(get_current_user)) -> dict:
             "archive_size": stats.get("total_experiences", 0),
         },
         "insights": insights,
+    }
+
+
+@router.get("/admin")
+def get_admin_dashboard(
+    request: Request,
+    user: dict = Depends(require_placement_cell),
+) -> dict:
+    """Placement-cell analytics with moderation and quality metrics."""
+    global _admin_cache, _admin_cache_ts
+    _enforce_dashboard_rate_limit(request, user, admin=True)
+
+    now_ts = time.time()
+    if _admin_cache and (now_ts - _admin_cache_ts) < _ADMIN_CACHE_TTL:
+        return _admin_cache
+
+    def _coerce_datetime(value) -> datetime | None:
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value
+        if isinstance(value, str):
+            candidate = value.strip()
+            if not candidate:
+                return None
+            try:
+                parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    return parsed.replace(tzinfo=timezone.utc)
+                return parsed
+            except ValueError:
+                return None
+        return None
+
+    snapshots = list(
+        db.collection("interview_experiences")
+        .limit(settings.DASHBOARD_SAMPLE_LIMIT)
+        .stream()
+    )
+
+    active_count = 0
+    hidden_count = 0
+    anonymous_count = 0
+    public_count = 0
+
+    nlp_status = Counter()
+    year_distribution = Counter()
+    submission_role_distribution = Counter()
+    company_distribution = Counter()
+    difficulty_distribution = Counter()
+    contributor_counter = Counter()
+
+    total_questions = 0
+    total_user_questions = 0
+    contact_opt_in = 0
+    last_30_days = 0
+    last_90_days = 0
+    nlp_failed_samples = []
+    now = datetime.now(timezone.utc)
+
+    for snapshot in snapshots:
+        data = snapshot.to_dict() or {}
+        is_active = bool(data.get("is_active", True))
+        if is_active:
+            active_count += 1
+        else:
+            hidden_count += 1
+
+        is_anonymous = bool(data.get("is_anonymous", False))
+        if is_anonymous:
+            anonymous_count += 1
+        else:
+            public_count += 1
+
+        nlp_status[str(data.get("nlp_status") or "unknown")] += 1
+
+        if isinstance(data.get("year"), int):
+            year_distribution[str(data["year"])] += 1
+
+        role_value = str(data.get("role") or "unknown").strip()
+        if role_value:
+            submission_role_distribution[role_value] += 1
+
+        company = str(data.get("company") or "Unknown").strip() or "Unknown"
+        company_distribution[company] += 1
+
+        difficulty = str(data.get("difficulty") or "Unknown").strip() or "Unknown"
+        difficulty_distribution[difficulty] += 1
+
+        contributor_uid = str(data.get("created_by") or "").strip()
+        if contributor_uid and is_active:
+            contributor_counter[contributor_uid] += 1
+
+        stats_data = data.get("stats") or {}
+        extracted = data.get("extracted_questions") or []
+        question_total = int(stats_data.get("total_question_count") or len(extracted))
+        question_user = int(stats_data.get("user_question_count") or 0)
+        total_questions += max(question_total, 0)
+        total_user_questions += max(question_user, 0)
+
+        if bool(data.get("allow_contact", False)):
+            contact_opt_in += 1
+
+        created_at = _coerce_datetime(data.get("created_at"))
+        if created_at:
+            age = now - created_at
+            if age <= timedelta(days=30):
+                last_30_days += 1
+            if age <= timedelta(days=90):
+                last_90_days += 1
+
+        if str(data.get("nlp_status") or "").lower() == "failed" and len(nlp_failed_samples) < 8:
+            nlp_failed_samples.append(
+                {
+                    "id": snapshot.id,
+                    "company": company,
+                    "year": data.get("year"),
+                    "created_at": created_at.isoformat() if created_at else None,
+                }
+            )
+
+    top_contributors = []
+    for contributor_uid, submissions in contributor_counter.most_common(8):
+        user_doc = db.collection("users").document(contributor_uid).get()
+        user_data = user_doc.to_dict() or {}
+        display_name = str(user_data.get("display_name") or user_data.get("name") or contributor_uid[:8])
+        top_contributors.append(
+            {
+                "uid": contributor_uid,
+                "display_name": display_name,
+                "submissions": submissions,
+            }
+        )
+
+    total = len(snapshots)
+    active_base = max(active_count, 1)
+    total_base = max(total, 1)
+    response = {
+        "archive_overview": {
+            "total_sampled": total,
+            "active": active_count,
+            "hidden": hidden_count,
+        },
+        "privacy_breakdown": {
+            "anonymous": anonymous_count,
+            "public": public_count,
+        },
+        "quality_metrics": {
+            "avg_questions_per_experience": round(total_questions / active_base, 2),
+            "avg_user_questions_per_experience": round(total_user_questions / active_base, 2),
+            "contact_opt_in_rate_percent": round((contact_opt_in / total_base) * 100, 1),
+            "nlp_done_rate_percent": round(((nlp_status.get("done", 0)) / total_base) * 100, 1),
+        },
+        "freshness": {
+            "last_30_days": last_30_days,
+            "last_90_days": last_90_days,
+        },
+        "nlp_pipeline": dict(nlp_status),
+        "year_distribution": dict(year_distribution),
+        "submission_role_distribution": dict(submission_role_distribution),
+        "company_distribution": dict(company_distribution.most_common(12)),
+        "difficulty_distribution": dict(difficulty_distribution),
+        "moderation": {
+            "hidden_count": hidden_count,
+            "nlp_failed_count": nlp_status.get("failed", 0),
+            "failed_examples": nlp_failed_samples,
+        },
+        "top_contributors": top_contributors,
+        "search_runtime": get_search_runtime_snapshot(),
+    }
+
+    _admin_cache = response
+    _admin_cache_ts = now_ts
+    return response
+
+
+@router.post("/admin/search/runtime/reset")
+def admin_reset_search_runtime(
+    request: Request,
+    user: dict = Depends(require_placement_cell),
+) -> dict:
+    _enforce_dashboard_rate_limit(request, user, admin=True)
+    return {
+        "status": "ok",
+        "search_runtime": reset_search_runtime_snapshot(),
+    }
+
+
+@router.post("/admin/search/cache/clear")
+def admin_clear_search_cache(
+    request: Request,
+    user: dict = Depends(require_placement_cell),
+) -> dict:
+    _enforce_dashboard_rate_limit(request, user, admin=True)
+    result = clear_search_caches()
+    return {
+        "status": "ok",
+        "cache": result,
+    }
+
+
+@router.post("/admin/search/warmup")
+def admin_run_search_warmup(
+    request: Request,
+    user: dict = Depends(require_placement_cell),
+) -> dict:
+    _enforce_dashboard_rate_limit(request, user, admin=True)
+    result = trigger_search_warmup()
+    return {
+        "status": "ok",
+        "warmup": result,
+        "search_runtime": get_search_runtime_snapshot(),
+    }
+
+
+@router.get("/admin/search/benchmark")
+def admin_get_search_benchmark(
+    request: Request,
+    user: dict = Depends(require_placement_cell),
+) -> dict:
+    _enforce_dashboard_rate_limit(request, user, admin=True)
+    snapshot = _benchmark_doc_ref().get()
+    if not snapshot.exists:
+        return {
+            "status": "empty",
+            "entries": [],
+            "updated_at": None,
+            "updated_by": None,
+        }
+
+    data = snapshot.to_dict() or {}
+    entries = data.get("entries") if isinstance(data.get("entries"), list) else []
+    return {
+        "status": "ok",
+        "entries": entries,
+        "updated_at": data.get("updated_at"),
+        "updated_by": data.get("updated_by"),
+        "note": data.get("note"),
+    }
+
+
+@router.put("/admin/search/benchmark")
+def admin_upsert_search_benchmark(
+    request: Request,
+    payload: dict = Body(...),
+    user: dict = Depends(require_placement_cell),
+) -> dict:
+    _enforce_dashboard_rate_limit(request, user, admin=True)
+
+    entries = payload.get("entries")
+    if not isinstance(entries, list) or not entries:
+        raise HTTPException(status_code=400, detail="'entries' must be a non-empty list.")
+
+    if len(entries) > 400:
+        raise HTTPException(status_code=400, detail="Maximum 400 benchmark entries allowed.")
+
+    sanitized_entries: list[dict] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise HTTPException(status_code=400, detail="Each benchmark entry must be an object.")
+
+        query = str(entry.get("query") or "").strip()
+        filters = entry.get("filters") or {}
+        relevance = entry.get("relevance") or {}
+
+        if len(query) < 2:
+            raise HTTPException(status_code=400, detail="Each benchmark entry requires a query.")
+        if not isinstance(filters, dict):
+            raise HTTPException(status_code=400, detail="'filters' must be an object.")
+        if not isinstance(relevance, dict) or not relevance:
+            raise HTTPException(status_code=400, detail="'relevance' must be a non-empty object.")
+
+        cleaned_relevance: dict[str, float] = {}
+        for doc_id, score in relevance.items():
+            key = str(doc_id).strip()
+            if not key:
+                continue
+            try:
+                cleaned_relevance[key] = float(score)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid relevance score for doc '{key}'.") from exc
+
+        if not cleaned_relevance:
+            raise HTTPException(status_code=400, detail="Each entry needs at least one valid relevance label.")
+
+        sanitized_entries.append(
+            {
+                "query": query,
+                "filters": filters,
+                "relevance": cleaned_relevance,
+            }
+        )
+
+    note = str(payload.get("note") or "").strip()
+    if len(note) > 280:
+        raise HTTPException(status_code=400, detail="'note' must be at most 280 characters.")
+
+    now = datetime.now(timezone.utc).isoformat()
+    _benchmark_doc_ref().set(
+        {
+            "entries": sanitized_entries,
+            "updated_at": now,
+            "updated_by": str(user.get("uid") or "placement_cell"),
+            "note": note or None,
+        },
+        merge=True,
+    )
+
+    return {
+        "status": "ok",
+        "entries_count": len(sanitized_entries),
+        "updated_at": now,
     }

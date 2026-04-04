@@ -6,8 +6,8 @@ import Link from "next/link";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { useAuth } from "@/context/AuthContext";
 import { apiFetch, updateDisplayName } from "@/lib/api";
+import { getClientAuthToken } from "@/lib/authToken";
 import { useToast } from "@/context/ToastContext";
-import { auth } from "@/lib/firebase";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -19,7 +19,7 @@ interface ProfileData {
     name: string;
     display_name?: string;
     email: string;
-    role: "viewer" | "contributor";
+    role: "viewer" | "contributor" | "placement_cell";
     created_at?: string;
     can_edit_name?: boolean;
     next_name_edit_date?: string | null;
@@ -132,7 +132,7 @@ export default function ProfilePage() {
   useEffect(() => {
     // Wait for auth to fully hydrate before making API calls
     if (authLoading) return;
-    if (!user || !auth.currentUser) {
+    if (!user) {
       setLoading(false);
       return;
     }
@@ -141,7 +141,10 @@ export default function ProfilePage() {
       setLoading(true);
       setError(null);
       try {
-        const token = await auth.currentUser!.getIdToken();
+        const token = await getClientAuthToken();
+        if (!token) {
+          throw new Error("Not authenticated.");
+        }
         const result = await apiFetch<ProfileData>("/api/users/profile", { method: "GET" }, token);
         setData(result);
       } catch {
@@ -158,10 +161,13 @@ export default function ProfilePage() {
   const identity = data?.identity;
 
   const handleNameSave = async () => {
-    if (!auth.currentUser || !nameInput.trim()) return;
+    if (!nameInput.trim()) return;
     setNameSaving(true);
     try {
-      const token = await auth.currentUser.getIdToken();
+      const token = await getClientAuthToken();
+      if (!token) {
+        throw new Error("Not authenticated.");
+      }
       await updateDisplayName(nameInput.trim(), token);
       // Reload profile data to reflect new identity
       const result = await apiFetch<ProfileData>("/api/users/profile", { method: "GET" }, token);
@@ -266,7 +272,9 @@ export default function ProfilePage() {
               </div>
               <div className="flex items-center gap-2">
                 <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
-                  identity?.role === "contributor"
+                  identity?.role === "placement_cell"
+                    ? "bg-violet-500/10 text-violet-400"
+                    : identity?.role === "contributor"
                     ? "bg-green-500/10 text-green-400"
                     : "bg-blue-500/10 text-blue-400"
                 }`}>

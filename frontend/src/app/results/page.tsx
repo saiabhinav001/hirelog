@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // Lazy-load SaveToListButton — only needed when results are displayed
@@ -39,7 +39,66 @@ function ResultSkeleton() {
 const SEARCH_CACHE_PREFIX = "hirelog_search_";
 const SEARCH_CACHE_TTL = 3 * 60 * 1000; // 3 minutes
 
-function getSearchCache(qs: string): Experience[] | null {
+type SearchMeta = {
+  totalCount: number;
+  returnedCount: number;
+  hasMore: boolean;
+  nextCursor: string | null;
+  servedMode: string | null;
+  servedEngine: string | null;
+};
+
+const EMPTY_META: SearchMeta = {
+  totalCount: 0,
+  returnedCount: 0,
+  hasMore: false,
+  nextCursor: null,
+  servedMode: null,
+  servedEngine: null,
+};
+
+type SearchCachePayload = {
+  results: Experience[];
+  meta: SearchMeta;
+};
+
+function normalizeSearchMeta(payload: Partial<SearchResponse> | null | undefined): SearchMeta {
+  const totalCount = Number.isFinite(Number(payload?.total_count))
+    ? Number(payload?.total_count)
+    : Number(payload?.total ?? 0);
+  const returnedCount = Number.isFinite(Number(payload?.returned_count))
+    ? Number(payload?.returned_count)
+    : Array.isArray(payload?.results)
+      ? payload.results.length
+      : 0;
+  const nextCursor =
+    typeof payload?.next_cursor === "string" && payload.next_cursor.length > 0
+      ? payload.next_cursor
+      : null;
+  const hasMore =
+    typeof payload?.has_more === "boolean"
+      ? payload.has_more
+      : (nextCursor !== null || (totalCount > returnedCount && returnedCount > 0));
+  const servedMode =
+    typeof payload?.served_mode === "string" && payload.served_mode.length > 0
+      ? payload.served_mode
+      : null;
+  const servedEngine =
+    typeof payload?.served_engine === "string" && payload.served_engine.length > 0
+      ? payload.served_engine
+      : null;
+
+  return {
+    totalCount,
+    returnedCount,
+    hasMore,
+    nextCursor,
+    servedMode,
+    servedEngine,
+  };
+}
+
+function getSearchCache(qs: string): SearchCachePayload | null {
   try {
     const raw = sessionStorage.getItem(SEARCH_CACHE_PREFIX + qs);
     if (!raw) return null;
@@ -48,13 +107,36 @@ function getSearchCache(qs: string): Experience[] | null {
       sessionStorage.removeItem(SEARCH_CACHE_PREFIX + qs);
       return null;
     }
-    return data;
+
+    // Backward compatibility: older cache entries stored an array only.
+    if (Array.isArray(data)) {
+      return {
+        results: data,
+        meta: {
+          totalCount: data.length,
+          returnedCount: data.length,
+          hasMore: false,
+          nextCursor: null,
+          servedMode: null,
+          servedEngine: null,
+        },
+      };
+    }
+
+    if (!data || !Array.isArray(data.results)) {
+      return null;
+    }
+
+    return {
+      results: data.results,
+      meta: data.meta ? data.meta : normalizeSearchMeta(data),
+    };
   } catch {
     return null;
   }
 }
 
-function setSearchCache(qs: string, data: Experience[]) {
+function setSearchCache(qs: string, data: SearchCachePayload) {
   try {
     sessionStorage.setItem(
       SEARCH_CACHE_PREFIX + qs,
@@ -67,8 +149,10 @@ function setSearchCache(qs: string, data: Experience[]) {
 type FetchStatus = "idle" | "loading" | "resolved" | "errored";
 
 function ResultsPageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const [results, setResults] = useState<Experience[]>([]);
+  const [searchMeta, setSearchMeta] = useState<SearchMeta>(EMPTY_META);
   const [status, setStatus] = useState<FetchStatus>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -90,7 +174,22 @@ function ResultsPageContent() {
     return entries.filter(([, value]) => value) as [string, string][];
   }, [searchParams]);
 
-  const mode = searchParams.get("mode") ?? "semantic";
+  const offset = useMemo(() => {
+    const raw = searchParams.get("cursor");
+    const parsed = Number(raw ?? "0");
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return 0;
+    }
+    return Math.floor(parsed);
+  }, [searchParams]);
+
+  const pageSize = useMemo(() => {
+    const raw = Number(searchParams.get("limit") ?? "20");
+    if (!Number.isFinite(raw) || raw <= 0) {
+      return 20;
+    }
+    return Math.floor(raw);
+  }, [searchParams]);
 
   // Retry callback — re-runs the same search without page reload
   const runSearch = useCallback(async (qs: string) => {
@@ -102,7 +201,8 @@ function ResultsPageContent() {
     // Restore cached results for instant paint (SWR)
     const cached = getSearchCache(qs);
     if (cached) {
-      setResults(cached);
+      setResults(cached.results);
+      setSearchMeta(cached.meta);
       setStatus("resolved");
     } else {
       // No cache — show loading skeleton
@@ -117,9 +217,15 @@ function ResultsPageContent() {
       );
       // Only apply if this is still the active request
       if (!controller.signal.aborted) {
-        setResults(data.results ?? []);
+        const normalized = normalizeSearchMeta(data);
+        const payload: SearchCachePayload = {
+          results: data.results ?? [],
+          meta: normalized,
+        };
+        setResults(payload.results);
+        setSearchMeta(payload.meta);
         setStatus("resolved");
-        setSearchCache(qs, data.results ?? []);
+        setSearchCache(qs, payload);
       }
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -145,6 +251,35 @@ function ResultsPageContent() {
   const isError = status === "errored";
   const isEmpty = status === "resolved" && results.length === 0;
   const hasResults = status === "resolved" && results.length > 0;
+  const rangeStart = hasResults ? offset + 1 : 0;
+  const rangeEnd = hasResults ? Math.min(offset + results.length, searchMeta.totalCount) : 0;
+  const canGoPrev = offset > 0;
+  const canGoNext = Boolean(searchMeta.hasMore && searchMeta.nextCursor);
+
+  const pushWithCursor = useCallback((nextCursor: string | null) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (nextCursor && nextCursor !== "0") {
+      params.set("cursor", nextCursor);
+    } else {
+      params.delete("cursor");
+    }
+    router.push(`/results?${params.toString()}`);
+  }, [router, searchParams]);
+
+  const handlePrevPage = useCallback(() => {
+    if (!canGoPrev) {
+      return;
+    }
+    const previous = Math.max(offset - pageSize, 0);
+    pushWithCursor(previous > 0 ? String(previous) : null);
+  }, [canGoPrev, offset, pageSize, pushWithCursor]);
+
+  const handleNextPage = useCallback(() => {
+    if (!canGoNext || !searchMeta.nextCursor) {
+      return;
+    }
+    pushWithCursor(searchMeta.nextCursor);
+  }, [canGoNext, searchMeta.nextCursor, pushWithCursor]);
 
   return (
     <div className="page-container py-12">
@@ -153,11 +288,22 @@ function ResultsPageContent() {
       <div className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Results</h1>
-          <p className="mt-1 text-[var(--text-muted)]">
+          <p className="mt-1 text-[var(--text-muted)] num-tabular" aria-live="polite">
             {isLoading
               ? "Searching..."
-              : `${results.length} experience${results.length !== 1 ? "s" : ""} found`}
+              : `${searchMeta.totalCount} experience${searchMeta.totalCount !== 1 ? "s" : ""} found`}
           </p>
+          {!isLoading && searchMeta.servedMode && (
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
+              Served via {searchMeta.servedMode}
+              {searchMeta.servedEngine ? ` on ${searchMeta.servedEngine}` : ""}
+            </p>
+          )}
+          {hasResults && (
+            <p className="mt-1 text-xs text-[var(--text-muted)] num-tabular">
+              Showing {rangeStart}-{rangeEnd}
+            </p>
+          )}
         </div>
         <Link href="/search" className="btn-ghost text-sm">
           ← Back to search
@@ -168,7 +314,7 @@ function ResultsPageContent() {
       {/* Filters */}
       {appliedFilters.length > 0 && (
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-[var(--text-muted)]">{mode}</span>
+          <span className="text-xs text-[var(--text-muted)]">intelligent mode</span>
           {appliedFilters.map(([label, value]) => (
             <span key={label} className="badge">
               {label}: {value}
@@ -206,6 +352,7 @@ function ResultsPageContent() {
             </Link>
           </div>
         ) : hasResults ? (
+          <>
           <StaggerContainer className="space-y-4">
           {results.map((item, index) => (
             <StaggerItem key={`${item.id}-${index}`}>
@@ -232,8 +379,13 @@ function ResultsPageContent() {
                   }`}>
                     {item.difficulty}
                   </span>
+                  {item.nlp_status && (
+                    <span className="badge">
+                      AI {item.nlp_status}
+                    </span>
+                  )}
                   {item.score !== undefined && (
-                    <span className="text-xs text-[var(--text-muted)]">
+                    <span className="text-xs text-[var(--text-muted)] num-tabular">
                       {(item.score * 100).toFixed(0)}%
                     </span>
                   )}
@@ -320,17 +472,27 @@ function ResultsPageContent() {
                         <div className="flex items-start gap-2 flex-1 min-w-0">
                           <span>• {q.question_text || q.question}</span>
                           {q.source === "user" && (
-                            <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-medium">
+                            <span className="shrink-0 text-xs px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-medium">
                               user
                             </span>
                           )}
+                          {q.source !== "user" && (
+                            <span className="shrink-0 text-xs px-1.5 py-0.5 rounded-full bg-violet-500/10 text-violet-400 font-medium">
+                              ai
+                            </span>
+                          )}
                           {q.added_later && (
-                            <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-400 font-medium">
+                            <span className="shrink-0 text-xs px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-400 font-medium">
                               added
                             </span>
                           )}
+                          {q.source !== "user" && typeof q.confidence === "number" && (
+                            <span className="shrink-0 badge text-xs px-1.5 py-0.5 num-tabular">
+                              confidence {(q.confidence * 100).toFixed(0)}%
+                            </span>
+                          )}
                           {q.topic && q.topic !== "General" && (
-                            <span className="shrink-0 badge text-[10px] px-1.5 py-0.5">{q.topic}</span>
+                            <span className="shrink-0 badge text-xs px-1.5 py-0.5">{q.topic}</span>
                           )}
                         </div>
                         <SaveToListButton
@@ -349,6 +511,32 @@ function ResultsPageContent() {
             </StaggerItem>
           ))}
           </StaggerContainer>
+          <div className="flex items-center justify-between pt-2">
+            <p className="text-xs text-[var(--text-muted)] num-tabular">
+              Showing {rangeStart}-{rangeEnd} of {searchMeta.totalCount}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handlePrevPage}
+                disabled={!canGoPrev}
+                aria-label="Go to previous results page"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleNextPage}
+                disabled={!canGoNext}
+                aria-label="Go to next results page"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+          </>
         ) : null}
       </div>
     </div>

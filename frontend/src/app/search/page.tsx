@@ -1,7 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+
+import { apiFetch } from "@/lib/api";
 
 const difficultyOptions = ["", "Easy", "Medium", "Hard"];
 
@@ -13,10 +15,16 @@ const EXAMPLE_QUERIES = [
   { label: "Companies heavy on OS", params: { topic: "OS" } },
 ];
 
+type SearchFacetsResponse = {
+  generated_at?: string;
+  top_topics?: string[];
+  top_companies?: string[];
+  trending_queries?: Record<string, number>;
+};
+
 export default function SearchPage() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<"semantic" | "keyword">("semantic");
   const [company, setCompany] = useState("");
   const [role, setRole] = useState("");
   const [year, setYear] = useState("");
@@ -24,6 +32,25 @@ export default function SearchPage() {
   const [difficulty, setDifficulty] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [facets, setFacets] = useState<SearchFacetsResponse | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    apiFetch<SearchFacetsResponse>("/api/search/facets", { method: "GET" })
+      .then((data) => {
+        if (mounted) {
+          setFacets(data);
+        }
+      })
+      .catch(() => {
+        if (mounted) {
+          setFacets(null);
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleSearch = useCallback((event: React.FormEvent) => {
     event.preventDefault();
@@ -32,19 +59,17 @@ export default function SearchPage() {
     setIsSearching(true);
     const params = new URLSearchParams();
     if (query.trim()) params.set("q", query.trim());
-    params.set("mode", mode);
     if (company.trim()) params.set("company", company.trim());
     if (role.trim()) params.set("role", role.trim());
     if (year.trim()) params.set("year", year.trim());
     if (topic.trim()) params.set("topic", topic.trim());
     if (difficulty) params.set("difficulty", difficulty);
     router.push(`/results?${params.toString()}`);
-  }, [query, mode, company, role, year, topic, difficulty, router]);
+  }, [query, company, role, year, topic, difficulty, router]);
 
   const handleExampleClick = (example: typeof EXAMPLE_QUERIES[0]) => {
     const params = new URLSearchParams();
     if (example.params.q) params.set("q", example.params.q);
-    params.set("mode", "semantic");
     if (example.params.company) params.set("company", example.params.company);
     if (example.params.role) params.set("role", example.params.role);
     if (example.params.year) params.set("year", example.params.year);
@@ -59,8 +84,13 @@ export default function SearchPage() {
       <div className="max-w-2xl">
         <h1 className="text-2xl font-semibold">Search the Archive</h1>
         <p className="mt-2 text-[var(--text-muted)]">
-          Discover interview experiences by intent. Describe what you&apos;re looking for — the system finds relevant matches across years of institutional data.
+          Search by meaning across the archive. Describe what you are looking for and the system intelligently blends semantic and lexical evidence.
         </p>
+        {facets?.generated_at && (
+          <p className="mt-1 text-xs text-[var(--text-muted)] num-tabular">
+            Fresh data snapshot: {new Date(facets.generated_at).toLocaleString()}
+          </p>
+        )}
       </div>
 
       <form onSubmit={handleSearch} className="mt-8 max-w-2xl">
@@ -71,6 +101,7 @@ export default function SearchPage() {
             placeholder="e.g. OS concepts asked in service companies..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            aria-label="Search query"
           />
           <svg 
             className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--text-muted)]" 
@@ -83,39 +114,16 @@ export default function SearchPage() {
           </svg>
         </div>
 
-        {/* Mode toggle */}
         <div className="mt-4 flex items-center gap-2">
-          <div className="inline-flex rounded-md border border-[var(--border)] bg-[var(--surface)] p-0.5">
-            <button
-              type="button"
-              onClick={() => setMode("semantic")}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                mode === "semantic"
-                  ? "bg-[var(--surface-muted)] text-[var(--text)]"
-                  : "text-[var(--text-muted)] hover:text-[var(--text)]"
-              }`}
-            >
-              Semantic
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("keyword")}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                mode === "keyword"
-                  ? "bg-[var(--surface-muted)] text-[var(--text)]"
-                  : "text-[var(--text-muted)] hover:text-[var(--text)]"
-              }`}
-            >
-              Keyword
-            </button>
-          </div>
           <span className="text-xs text-[var(--text-muted)] hidden sm:inline">
-            {mode === "semantic" ? "Matches by meaning" : "Matches exact terms"}
+            Intelligent mode: semantic ranking with automatic keyword fallback
           </span>
           <button
             type="button"
             onClick={() => setShowFilters(!showFilters)}
             className={`btn-ghost text-sm ${activeFilters > 0 ? "text-[var(--primary)]" : ""}`}
+            aria-expanded={showFilters}
+            aria-controls="search-filters"
           >
             Filters{activeFilters > 0 ? ` (${activeFilters})` : ""}
           </button>
@@ -123,7 +131,7 @@ export default function SearchPage() {
 
         {/* Filters */}
         {showFilters && (
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
+          <div id="search-filters" className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
             <div>
               <label className="label">Company</label>
               <input
@@ -131,6 +139,7 @@ export default function SearchPage() {
                 value={company}
                 onChange={(e) => setCompany(e.target.value)}
                 placeholder="e.g. Google"
+                aria-label="Company filter"
               />
             </div>
             <div>
@@ -140,6 +149,7 @@ export default function SearchPage() {
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
                 placeholder="e.g. SDE"
+                aria-label="Role filter"
               />
             </div>
             <div>
@@ -150,6 +160,7 @@ export default function SearchPage() {
                 value={year}
                 onChange={(e) => setYear(e.target.value)}
                 placeholder="e.g. 2024"
+                aria-label="Year filter"
               />
             </div>
             <div>
@@ -159,6 +170,7 @@ export default function SearchPage() {
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
                 placeholder="DSA, DBMS..."
+                aria-label="Topic filter"
               />
             </div>
             <div>
@@ -167,6 +179,7 @@ export default function SearchPage() {
                 className="input-field"
                 value={difficulty}
                 onChange={(e) => setDifficulty(e.target.value)}
+                aria-label="Difficulty filter"
               >
                 {difficultyOptions.map((opt) => (
                   <option key={opt} value={opt}>{opt || "Any"}</option>
@@ -195,10 +208,42 @@ export default function SearchPage() {
 
         {/* Tips - minimal */}
         <p className="mt-6 text-xs text-[var(--text-muted)]">
-          {mode === "semantic" 
-            ? "Semantic search uses AI embeddings to find conceptually similar experiences — results are ranked by meaning, then filtered by your selected fields."
-            : "Keyword search finds experiences containing your exact terms. All filters (company, role, year, topic, difficulty) are applied strictly."}
+          Intelligent mode runs hybrid retrieval in parallel and surfaces source labels, AI processing state, and confidence-aware ranking.
         </p>
+
+        {(facets?.top_topics?.length || facets?.top_companies?.length) && (
+          <div className="mt-6 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
+            <p className="text-xs font-medium text-[var(--text-muted)] mb-2">Popular filters</p>
+            <div className="flex flex-wrap gap-2">
+              {(facets.top_topics || []).slice(0, 6).map((topicItem) => (
+                <button
+                  key={`topic-${topicItem}`}
+                  type="button"
+                  className="badge hover:border-[var(--primary)]"
+                  onClick={() => {
+                    setTopic(topicItem);
+                    setShowFilters(true);
+                  }}
+                >
+                  Topic: {topicItem}
+                </button>
+              ))}
+              {(facets.top_companies || []).slice(0, 6).map((companyItem) => (
+                <button
+                  key={`company-${companyItem}`}
+                  type="button"
+                  className="badge hover:border-[var(--primary)]"
+                  onClick={() => {
+                    setCompany(companyItem);
+                    setShowFilters(true);
+                  }}
+                >
+                  Company: {companyItem}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Example queries */}
         <div className="mt-8 pt-6 border-t border-[var(--border)]">

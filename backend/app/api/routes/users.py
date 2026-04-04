@@ -18,6 +18,15 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 
 # Name changes are limited to once every 30 days
 _NAME_COOLDOWN_DAYS = 30
+_ROLE_PRIORITY = {
+    "viewer": 0,
+    "contributor": 1,
+    "placement_cell": 2,
+}
+
+
+def _highest_role(*roles: str) -> str:
+    return max(roles, key=lambda value: _ROLE_PRIORITY.get(value, 0))
 
 
 def _derive_display_name(full_name: str) -> str:
@@ -91,14 +100,14 @@ def get_profile(user: dict = Depends(get_current_user)) -> dict:
     def _fetch_experiences():
         return list(
             db.collection("interview_experiences")
-            .where("created_by", "==", uid)
+            .where(filter=firestore.FieldFilter("created_by", "==", uid))
             .stream()
         )
 
     def _fetch_practice_lists():
         return list(
             db.collection("practice_lists")
-            .where("user_id", "==", uid)
+            .where(filter=firestore.FieldFilter("user_id", "==", uid))
             .stream()
         )
 
@@ -263,18 +272,17 @@ def create_or_update_user(payload: UserCreate, user: dict = Depends(get_current_
         "name": payload.name,
         "display_name": display_name,
         "email": user.get("email", ""),
-        "role": payload.role,
+        "role": _highest_role(payload.role, str(user.get("role") or "viewer")),
     }
 
     if snapshot.exists:
-        # Preserve existing identity + role on re-auth — never regress contributor → viewer
+        # Preserve existing identity + role on re-auth — never regress permissions.
         existing = snapshot.to_dict() or {}
         if existing.get("display_name"):
             base["display_name"] = existing["display_name"]
         if existing.get("name"):
             base["name"] = existing["name"]
-        if existing.get("role") == "contributor":
-            base["role"] = "contributor"
+        base["role"] = _highest_role(base["role"], str(existing.get("role") or "viewer"))
         doc_ref.set({**base}, merge=True)
     else:
         doc_ref.set({**base, "created_at": firestore.SERVER_TIMESTAMP}, merge=True)

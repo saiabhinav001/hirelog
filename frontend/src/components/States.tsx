@@ -67,18 +67,28 @@ export function ErrorState({
   );
 }
 
-export function AccessDenied({ onUpgrade }: { onUpgrade?: () => void }) {
+export function AccessDenied({
+  onUpgrade,
+  requiredRole = "contributor",
+}: {
+  onUpgrade?: () => void;
+  requiredRole?: "viewer" | "contributor" | "placement_cell";
+}) {
   const { profile } = useAuth();
+  const title = requiredRole === "placement_cell" ? "Placement cell access required" : "Contributor access required";
+  const guidance = requiredRole === "placement_cell"
+    ? "This view is restricted to placement-cell users."
+    : "Switch to contributor to submit experiences.";
 
   return (
     <div className="page-container py-12">
       <div className="card p-8 text-center max-w-md mx-auto">
-        <h3 className="text-lg font-semibold">Contributor access required</h3>
+        <h3 className="text-lg font-semibold">{title}</h3>
         <p className="mt-2 text-sm text-[var(--text-muted)]">
           Your role is <span className="badge">{profile?.role ?? "viewer"}</span>.
-          Switch to contributor to submit experiences.
+          {" "}{guidance}
         </p>
-        {onUpgrade && (
+        {requiredRole === "contributor" && onUpgrade && (
           <button className="btn-primary mt-4" onClick={onUpgrade}>
             Become contributor
           </button>

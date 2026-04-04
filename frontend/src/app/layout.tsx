@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
 import { ThemeProvider } from "@/context/ThemeContext";
@@ -8,9 +8,17 @@ import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
-const inter = Inter({
+const ibmPlexSans = IBM_Plex_Sans({
   subsets: ["latin"],
-  variable: "--font-inter",
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-plex-sans",
+  display: "swap",
+});
+
+const ibmPlexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-plex-mono",
   display: "swap",
 });
 
@@ -34,7 +42,7 @@ export default function RootLayout({
             __html: `
               (function() {
                 const stored = localStorage.getItem('theme');
-                const theme = stored || 'system';
+                const theme = stored || 'light';
                 const resolved = theme === 'system' 
                   ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
                   : theme;
@@ -45,7 +53,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className={`${inter.variable} antialiased`} suppressHydrationWarning>
+      <body className={`${ibmPlexSans.variable} ${ibmPlexMono.variable} antialiased`} suppressHydrationWarning>
         <ThemeProvider>
           <AuthProvider>
             <ToastProvider>

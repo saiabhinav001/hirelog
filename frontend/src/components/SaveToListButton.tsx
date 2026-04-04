@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
+import { getClientAuthToken } from "@/lib/authToken";
 import { apiFetch } from "@/lib/api";
-import { auth } from "@/lib/firebase";
 import type { PracticeList } from "@/lib/types";
 
 type SaveToListButtonProps = {
@@ -23,6 +23,7 @@ export function SaveToListButton({
   sourceExperienceId,
   sourceCompany,
 }: SaveToListButtonProps) {
+  const panelId = useId();
   const { user } = useAuth();
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
@@ -34,23 +35,29 @@ export function SaveToListButton({
   const [showNewList, setShowNewList] = useState(false);
 
   useEffect(() => {
-    if (isOpen && user && auth.currentUser) {
+    if (isOpen && user) {
       setLoading(true);
-      auth.currentUser.getIdToken().then((token) => {
-        apiFetch<PracticeList[]>("/api/practice-lists", { method: "GET" }, token)
-          .then(setLists)
-          .finally(() => setLoading(false));
-      });
+      getClientAuthToken()
+        .then((token) => {
+          if (!token) {
+            return [] as PracticeList[];
+          }
+          return apiFetch<PracticeList[]>("/api/practice-lists", { method: "GET" }, token);
+        })
+        .then((rows) => {
+          setLists(rows);
+        })
+        .finally(() => setLoading(false));
     }
   }, [isOpen, user]);
 
   if (!user) return null;
 
   const handleSaveToList = async (listId: string) => {
-    if (!auth.currentUser) return;
+    const token = await getClientAuthToken();
+    if (!token) return;
     setSaving(listId);
     try {
-      const token = await auth.currentUser.getIdToken();
       await apiFetch(
         `/api/practice-lists/${listId}/questions`,
         {
@@ -87,10 +94,11 @@ export function SaveToListButton({
   };
 
   const handleCreateList = async () => {
-    if (!auth.currentUser || !newListName.trim()) return;
+    if (!newListName.trim()) return;
+    const token = await getClientAuthToken();
+    if (!token) return;
     setSaving("new");
     try {
-      const token = await auth.currentUser.getIdToken();
       const newList = await apiFetch<PracticeList>(
         "/api/practice-lists",
         {
@@ -111,9 +119,14 @@ export function SaveToListButton({
   return (
     <div className="relative">
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
         className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--primary)] hover:bg-[var(--primary-soft)] transition-colors"
         title="Save to practice list"
+        aria-label={`Save question to practice list: ${questionText.slice(0, 80)}`}
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+        aria-controls={panelId}
       >
         <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -122,8 +135,14 @@ export function SaveToListButton({
 
       {isOpen && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-50 w-64 rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-lg">
+          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} aria-hidden="true" />
+          <div
+            id={panelId}
+            role="dialog"
+            aria-modal="false"
+            aria-label="Save question to practice list"
+            className="absolute right-0 top-full mt-1 z-50 w-64 rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-lg"
+          >
             <div className="p-2 border-b border-[var(--border)]">
               <p className="text-xs font-medium text-[var(--text-muted)] px-2 py-1">
                 Save to practice list
@@ -144,8 +163,10 @@ export function SaveToListButton({
                   <div className="p-3 text-center">
                     <p className="text-sm text-[var(--text-muted)]">No lists yet</p>
                     <button
+                      type="button"
                       onClick={() => setShowNewList(true)}
                       className="mt-2 text-sm text-[var(--primary)] hover:underline"
+                      aria-label="Create your first practice list"
                     >
                       Create your first list
                     </button>
@@ -155,9 +176,11 @@ export function SaveToListButton({
                     {lists.map((list) => (
                       <button
                         key={list.id}
+                        type="button"
                         onClick={() => handleSaveToList(list.id)}
                         disabled={saving !== null}
                         className="w-full px-3 py-2 text-left text-sm hover:bg-[var(--surface-muted)] flex items-center justify-between disabled:opacity-50"
+                        aria-label={`Save question to list ${list.name}`}
                       >
                         <span>{list.name}</span>
                         {saving === list.id && (
@@ -180,19 +203,24 @@ export function SaveToListButton({
                       value={newListName}
                       onChange={(e) => setNewListName(e.target.value)}
                       autoFocus
+                      aria-label="New practice list name"
                     />
                     <button
+                      type="button"
                       onClick={handleCreateList}
                       disabled={!newListName.trim() || saving !== null}
                       className="btn-primary text-xs !h-8"
+                      aria-label="Create list and save question"
                     >
                       {saving === "new" ? "..." : "Add"}
                     </button>
                   </div>
                 ) : (
                   <button
+                    type="button"
                     onClick={() => setShowNewList(true)}
                     className="w-full px-3 py-2 text-left text-sm text-[var(--primary)] hover:bg-[var(--surface-muted)] flex items-center gap-2"
+                    aria-label="Create a new practice list"
                   >
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />

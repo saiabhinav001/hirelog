@@ -3,20 +3,17 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from pathlib import Path
 from typing import List, Tuple
 
 import faiss
 import numpy as np
 
-from app.core.config import BASE_DIR, settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Hardcoded paths relative to backend root — immune to env var misconfiguration
-_FAISS_DIR = BASE_DIR / "data" / "faiss"
-_INDEX_PATH = _FAISS_DIR / "index.faiss"
-_MAPPING_PATH = _FAISS_DIR / "mapping.json"
+_INDEX_PATH = settings.faiss_index_path
+_MAPPING_PATH = settings.faiss_mapping_path
 
 
 class FaissStore:

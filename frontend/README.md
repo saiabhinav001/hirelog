@@ -1,44 +1,65 @@
-# HireLog — Frontend
+# HireLog Frontend
 
-Next.js 16 app with React 19, Tailwind CSS 4, TypeScript, and Firebase Auth.
+Next.js 16 application for search, contribution, dashboard analytics, and practice workflows.
 
-## Local Development
+## Stack
+- Next.js 16 + React 19
+- TypeScript
+- Tailwind CSS 4
+- Firebase Auth (client)
+- Vitest + Testing Library (unit tests)
+- Playwright (e2e smoke tests)
+
+## Local Setup
 
 ```bash
 npm install
 cp .env.example .env.local
-# Edit .env.local with your Firebase config and backend URL
+# Fill .env.local values
 npm run dev
 ```
 
-Open http://localhost:3000
+Open: `http://localhost:3000`
 
 ## Environment Variables
 
-See `.env.example` for the full list. All variables are prefixed with `NEXT_PUBLIC_` for client-side access.
+Defined in `.env.example`:
 
-| Variable | Description |
-|----------|-------------|
-| `NEXT_PUBLIC_API_BASE_URL` | Backend API URL (e.g. `http://localhost:8000`) |
-| `NEXT_PUBLIC_FIREBASE_API_KEY` | Firebase Web API key |
-| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | Firebase Auth domain |
-| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | Firebase project ID |
-| `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | Firebase storage bucket |
-| `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | Firebase messaging sender ID |
-| `NEXT_PUBLIC_FIREBASE_APP_ID` | Firebase app ID |
+| Variable | Required | Notes |
+|---|---|---|
+| `NEXT_PUBLIC_API_BASE_URL` | Yes | Backend base URL, e.g. `http://localhost:8000` |
+| `NEXT_PUBLIC_FIREBASE_API_KEY` | Yes | Firebase web config |
+| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | Yes | Firebase web config |
+| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | Yes | Firebase web config |
+| `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | Yes | Firebase web config |
+| `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | Yes | Firebase web config |
+| `NEXT_PUBLIC_FIREBASE_APP_ID` | Yes | Firebase web config |
+| `NEXT_PUBLIC_E2E_BYPASS_AUTH` | Optional | Use only for local Playwright smoke runs |
 
-## Deploying to Vercel
+## Scripts
 
-1. Import this repo in Vercel
-2. Set **Root Directory** to `frontend`
-3. Add all `NEXT_PUBLIC_*` environment variables in Vercel project settings
-4. Deploy
+| Script | Purpose |
+|---|---|
+| `npm run dev` | Start local development server |
+| `npm run lint` | Run ESLint |
+| `npm run type-check` | Run TypeScript checks |
+| `npm run test` | Run unit tests in watch mode |
+| `npm run test:ci` | Run unit tests once (CI mode) |
+| `npm run test:e2e` | Run Playwright smoke suite |
+| `npm run build` | Build production bundle |
 
-## Project Structure
+## Deployment (Vercel)
 
-- `src/app/` — Next.js App Router pages
-- `src/components/` — Shared UI components (Navbar, Footer, etc.)
-- `src/context/` — React context providers (Auth, Theme, Toast)
-- `src/lib/api.ts` — API client with retry logic
-- `src/lib/firebase.ts` — Firebase client SDK initialization
-- `src/lib/types.ts` — TypeScript interfaces
+1. Import repository in Vercel.
+2. Set root directory to `frontend`.
+3. Configure all required `NEXT_PUBLIC_*` variables.
+4. Deploy.
+
+## Key Directories
+
+- `src/app/` App Router routes.
+- `src/components/` reusable UI components.
+- `src/context/` auth, theme, and toast providers.
+- `src/lib/` API client, token helper, Firebase setup, shared types.
+- `e2e/` Playwright smoke tests.
+- `src/test/` shared unit test setup.

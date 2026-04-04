@@ -11,8 +11,8 @@ const SaveToListButton = dynamic(
   { ssr: false }
 );
 import { useAuth } from "@/context/AuthContext";
+import { getClientAuthToken } from "@/lib/authToken";
 import { apiFetch } from "@/lib/api";
-import { auth } from "@/lib/firebase";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types for tiered responses
@@ -22,6 +22,10 @@ interface StatsResponse {
   total_experiences: number;
   top_company: string | null;
   top_topic: string | null;
+  data_freshness?: {
+    generated_at?: string | null;
+    freshness_seconds?: number | null;
+  };
   contribution_impact: {
     experiences_submitted: number;
     questions_extracted: number;
@@ -44,6 +48,26 @@ interface FlowsResponse {
   interview_progression: Record<string, {
     stages: Record<string, { topics: string[]; frequency: number }>;
     total_experiences: number;
+  }>;
+}
+
+interface AdminResponse {
+  archive_overview: {
+    total_sampled: number;
+    active: number;
+    hidden: number;
+  };
+  privacy_breakdown: {
+    anonymous: number;
+    public: number;
+  };
+  nlp_pipeline: Record<string, number>;
+  year_distribution: Record<string, number>;
+  submission_role_distribution: Record<string, number>;
+  top_contributors: Array<{
+    uid: string;
+    display_name: string;
+    submissions: number;
   }>;
 }
 
@@ -106,7 +130,7 @@ function BarChart({ data }: { data: Record<string, number> }) {
               style={{ width: `${Math.round((value / max) * 100)}%` }}
             />
           </div>
-          <span className="w-8 text-right text-sm text-[var(--text-muted)]">{value}</span>
+          <span className="w-8 text-right text-sm text-[var(--text-muted)] stat-value">{value}</span>
         </div>
       ))}
     </div>
@@ -266,7 +290,8 @@ function CompanyBreakdownSection({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, profile, loading: authLoading } = useAuth();
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Tier 1: Instant stats
   const [stats, setStats] = useState<StatsResponse | null>(null);
@@ -285,16 +310,24 @@ export default function DashboardPage() {
   const [flows, setFlows] = useState<FlowsResponse | null>(null);
   const [flowsLoading, setFlowsLoading] = useState(true);
 
+  // Placement-cell admin analytics
+  const [admin, setAdmin] = useState<AdminResponse | null>(null);
+  const [adminLoading, setAdminLoading] = useState(true);
+
   // Track whether the initial parallel fetch was triggered
   const fetchedRef = useRef(false);
+  const adminFetchedRef = useRef(false);
 
   // Retry handler for error state (stats only)
   const retryStats = useCallback(async () => {
-    if (!auth.currentUser) return;
+    if (!user) return;
     setStatsLoading(true);
     setStatsError(null);
     try {
-      const token = await auth.currentUser.getIdToken();
+      const token = await getClientAuthToken();
+      if (!token) {
+        throw new Error("Not authenticated");
+      }
       const response = await apiFetch<StatsResponse>(
         "/api/dashboard/stats",
         { method: "GET" },
@@ -307,12 +340,12 @@ export default function DashboardPage() {
     } finally {
       setStatsLoading(false);
     }
-  }, []);
+  }, [user]);
 
   // Single effect: restore cache → fire all 4 API calls in parallel
   useEffect(() => {
     if (authLoading) return;
-    if (!user || !auth.currentUser) {
+    if (!user) {
       setStatsLoading(false);
       return;
     }
@@ -328,7 +361,15 @@ export default function DashboardPage() {
 
     // 2. Fire all 4 requests in parallel (revalidate in background)
     const loadAll = async () => {
-      const token = await auth.currentUser!.getIdToken();
+      const token = await getClientAuthToken();
+      if (!token) {
+        setStatsError("Couldn't load analytics. Please try again.");
+        setStatsLoading(false);
+        setChartsLoading(false);
+        setQuestionsLoading(false);
+        setFlowsLoading(false);
+        return;
+      }
 
       const statsP = apiFetch<StatsResponse>("/api/dashboard/stats", { method: "GET" }, token)
         .then((data) => {
@@ -377,6 +418,42 @@ export default function DashboardPage() {
     loadAll();
   }, [authLoading, user]);
 
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      setAdminLoading(false);
+      return;
+    }
+
+    if (profile?.role !== "placement_cell") {
+      setAdmin(null);
+      setAdminLoading(false);
+      return;
+    }
+
+    if (adminFetchedRef.current) return;
+    adminFetchedRef.current = true;
+
+    const loadAdmin = async () => {
+      setAdminLoading(true);
+      try {
+        const token = await getClientAuthToken();
+        if (!token) {
+          setAdmin(null);
+          return;
+        }
+        const data = await apiFetch<AdminResponse>("/api/dashboard/admin", { method: "GET" }, token);
+        setAdmin(data);
+      } catch {
+        setAdmin(null);
+      } finally {
+        setAdminLoading(false);
+      }
+    };
+
+    loadAdmin();
+  }, [authLoading, profile?.role, user]);
+
   return (
     <ProtectedRoute>
       {statsLoading ? (
@@ -420,8 +497,67 @@ export default function DashboardPage() {
               <p className="mt-1 text-[var(--text-muted)]">
                 {stats.total_experiences} experience{stats.total_experiences !== 1 ? "s" : ""} analyzed across the institutional archive
               </p>
+              <p className="mt-1 text-xs text-[var(--text-muted)] num-tabular">
+                Data freshness: {stats.data_freshness?.generated_at ? new Date(stats.data_freshness.generated_at).toLocaleString() : "updating"}
+                {typeof stats.data_freshness?.freshness_seconds === "number" ? ` (${stats.data_freshness.freshness_seconds}s ago)` : ""}
+              </p>
             </div>
           </div>
+
+          {/* Contribution Impact - only show if user has contributions */}
+          {profile?.role === "placement_cell" && (
+            <div className="mt-6 card p-5 border border-[var(--primary)]/20 bg-[var(--primary)]/5">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-base font-semibold">Placement Cell Command Center</h2>
+                <div className="flex items-center gap-2">
+                  <span className="badge badge-primary">Role: placement_cell</span>
+                  <Link href="/placement-cell" className="btn-secondary h-8 px-3 text-xs">
+                    Open full view
+                  </Link>
+                </div>
+              </div>
+
+              {adminLoading ? (
+                <SectionSkeleton height="h-36" />
+              ) : admin ? (
+                <>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="stat-card">
+                      <p className="text-xs text-[var(--text-muted)] uppercase tracking-wide">Sampled</p>
+                      <p className="mt-1 text-2xl font-semibold stat-value">{admin.archive_overview.total_sampled}</p>
+                    </div>
+                    <div className="stat-card">
+                      <p className="text-xs text-[var(--text-muted)] uppercase tracking-wide">Active</p>
+                      <p className="mt-1 text-2xl font-semibold stat-value">{admin.archive_overview.active}</p>
+                    </div>
+                    <div className="stat-card">
+                      <p className="text-xs text-[var(--text-muted)] uppercase tracking-wide">Anonymous</p>
+                      <p className="mt-1 text-2xl font-semibold stat-value">{admin.privacy_breakdown.anonymous}</p>
+                    </div>
+                    <div className="stat-card">
+                      <p className="text-xs text-[var(--text-muted)] uppercase tracking-wide">NLP Done</p>
+                      <p className="mt-1 text-2xl font-semibold stat-value">{admin.nlp_pipeline.done ?? 0}</p>
+                    </div>
+                  </div>
+
+                  {admin.top_contributors.length > 0 && (
+                    <div className="mt-4">
+                      <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Top contributors</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {admin.top_contributors.map((entry) => (
+                          <span key={entry.uid} className="badge">
+                            {entry.display_name} • {entry.submissions}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="mt-3 text-sm text-[var(--text-muted)]">Admin analytics are temporarily unavailable.</p>
+              )}
+            </div>
+          )}
 
           {/* Contribution Impact - only show if user has contributions */}
           {stats.contribution_impact?.experiences_submitted > 0 && (
@@ -434,7 +570,7 @@ export default function DashboardPage() {
                 </div>
                 <div>
                   <p className="text-sm font-medium">Included in institutional analytics</p>
-                  <p className="text-xs text-[var(--text-muted)]">
+                  <p className="text-xs text-[var(--text-muted)] num-tabular">
                     {stats.contribution_impact.experiences_submitted} experience{stats.contribution_impact.experiences_submitted !== 1 ? "s" : ""} submitted · {stats.contribution_impact.questions_extracted} questions extracted · Part of a {stats.contribution_impact.archive_size}-experience archive
                   </p>
                 </div>
@@ -449,7 +585,7 @@ export default function DashboardPage() {
                 Total
                 <InfoTooltip text="Counts reflect number of interview experiences analyzed." />
               </p>
-              <p className="mt-1 text-2xl font-semibold">{stats.total_experiences}</p>
+              <p className="mt-1 text-2xl font-semibold stat-value">{stats.total_experiences}</p>
             </div>
             <div className="stat-card">
               <p className="text-xs text-[var(--text-muted)] uppercase tracking-wide">Top company</p>
@@ -465,9 +601,9 @@ export default function DashboardPage() {
           <div className="mt-8 card p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="font-medium">Most-repeated questions</h3>
+                <h3 className="font-medium">Top repeated questions</h3>
                 <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                  Questions that appeared across multiple interview experiences
+                  Questions repeatedly seen across multiple interview experiences
                 </p>
               </div>
             </div>
@@ -501,9 +637,27 @@ export default function DashboardPage() {
             )}
           </div>
 
+          <div className="mt-6 flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">Advanced analytics</p>
+              <p className="text-xs text-[var(--text-muted)]">Interview progression, distributions, and cross-company insights</p>
+            </div>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setShowAdvanced((current) => !current)}
+              aria-expanded={showAdvanced}
+              aria-controls="advanced-analytics"
+            >
+              {showAdvanced ? "Hide" : "Show"}
+            </button>
+          </div>
+
+          {showAdvanced && (
+            <div id="advanced-analytics">
           {/* Interview Flows - Tier 2, Collapsible, Lazy-mounted */}
           <LazySection fallback={<SectionSkeleton height="h-40" />}>
-          <CollapsibleSection title="Common interview progression" defaultOpen={false}>
+          <CollapsibleSection title="Interview progression" defaultOpen={false}>
             <p className="text-xs text-[var(--text-muted)] -mt-2 mb-4 italic">
               Derived from aggregated interview experiences; individual processes may vary.
             </p>
@@ -599,6 +753,8 @@ export default function DashboardPage() {
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
             </div>
           )}
 

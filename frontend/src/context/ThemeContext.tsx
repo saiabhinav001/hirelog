@@ -13,12 +13,12 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("system");
-  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("dark");
+  const [theme, setThemeState] = useState<Theme>("light");
+  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("light");
   const [mounted, setMounted] = useState(false);
 
   const getSystemTheme = useCallback((): "light" | "dark" => {
-    if (typeof window === "undefined") return "dark";
+    if (typeof window === "undefined") return "light";
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   }, []);
 
@@ -40,7 +40,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const stored = localStorage.getItem("theme") as Theme | null;
-    const initial = stored || "system";
+    const initial = stored || "light";
     queueMicrotask(() => {
       setThemeState(initial);
       applyTheme(initial);
@@ -60,7 +60,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // Prevent flash of incorrect theme
   if (!mounted) {
     return (
-      <ThemeContext.Provider value={{ theme: "system", resolvedTheme: "light", setTheme }}>
+      <ThemeContext.Provider value={{ theme: "light", resolvedTheme: "light", setTheme }}>
         {children}
       </ThemeContext.Provider>
     );

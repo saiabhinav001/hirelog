@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 
 import firebase_admin
@@ -12,6 +13,7 @@ from firebase_admin import credentials, firestore
 from app.core.config import BASE_DIR, settings
 
 logger = logging.getLogger(__name__)
+_firebase_init_lock = threading.Lock()
 
 # Set gRPC keep-alive environment variables BEFORE any gRPC channel is created.
 # This keeps Firestore connections warm and avoids cold-connect latency on
@@ -47,8 +49,10 @@ def _build_credential() -> credentials.Certificate:
 
 def initialize_firebase() -> firestore.Client:
     if not firebase_admin._apps:
-        cred = _build_credential()
-        firebase_admin.initialize_app(cred, {"projectId": settings.FIREBASE_PROJECT_ID})
+        with _firebase_init_lock:
+            if not firebase_admin._apps:
+                cred = _build_credential()
+                firebase_admin.initialize_app(cred, {"projectId": settings.FIREBASE_PROJECT_ID})
     return firestore.client()
 
 

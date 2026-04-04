@@ -14,6 +14,14 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 
 import { auth } from "@/lib/firebase";
 import { apiFetch } from "@/lib/api";
+import {
+  E2E_AUTH_BYPASS,
+  type E2ESession,
+  clearE2ESession,
+  readE2ESession,
+  readE2EToken,
+  writeE2ESession,
+} from "@/lib/e2eAuth";
 
 export type UserProfile = {
   id?: string;
@@ -21,7 +29,7 @@ export type UserProfile = {
   name: string;
   display_name?: string;
   email: string;
-  role: "viewer" | "contributor";
+  role: "viewer" | "contributor" | "placement_cell";
   created_at?: string;
   can_edit_name?: boolean;
   next_name_edit_date?: string | null;
@@ -46,7 +54,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const toE2EUser = useCallback((session: E2ESession): User => {
+    return {
+      uid: session.uid,
+      email: session.email,
+      displayName: session.name,
+      getIdToken: async () => readE2EToken(),
+    } as unknown as User;
+  }, []);
+
+  const applyE2ESession = useCallback(
+    (session: E2ESession | null) => {
+      if (!session) {
+        clearE2ESession();
+        setUser(null);
+        setProfile(null);
+        return;
+      }
+
+      writeE2ESession(session);
+      setUser(toE2EUser(session));
+      setProfile({
+        uid: session.uid,
+        id: session.uid,
+        name: session.name,
+        display_name: session.name,
+        email: session.email,
+        role: session.role,
+      });
+    },
+    [toE2EUser]
+  );
+
   const refreshProfile = useCallback(async () => {
+    if (E2E_AUTH_BYPASS) {
+      const existing = readE2ESession();
+      applyE2ESession(existing);
+      return;
+    }
+
     if (!auth.currentUser) {
       setProfile(null);
       return;
@@ -61,9 +107,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.warn("Could not load user profile (server may be starting):", (err as Error).message);
       setProfile(null);
     }
-  }, []);
+  }, [applyE2ESession]);
 
   useEffect(() => {
+    if (E2E_AUTH_BYPASS) {
+      queueMicrotask(() => {
+        applyE2ESession(readE2ESession());
+        setLoading(false);
+      });
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
       if (firebaseUser) {
@@ -75,19 +129,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     return () => unsubscribe();
-  }, [refreshProfile]);
+  }, [applyE2ESession, refreshProfile]);
 
   const signIn = useCallback(async (email: string, password: string) => {
+    if (E2E_AUTH_BYPASS) {
+      const localPart = (email.split("@")[0] || "student").trim();
+      applyE2ESession({
+        uid: `e2e-${localPart}`,
+        name: localPart || "Student",
+        email,
+        role: "viewer",
+      });
+      return;
+    }
+
     await signInWithEmailAndPassword(auth, email, password);
     try {
       await refreshProfile();
     } catch (err) {
       console.error("Failed to load profile after sign-in", err);
     }
-  }, [refreshProfile]);
+  }, [applyE2ESession, refreshProfile]);
 
   const signUp = useCallback(
     async (name: string, email: string, password: string) => {
+      if (E2E_AUTH_BYPASS) {
+        applyE2ESession({
+          uid: `e2e-${Date.now()}`,
+          name: name.trim() || "Student",
+          email,
+          role: "viewer",
+        });
+        return;
+      }
+
       const credentials = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(credentials.user, { displayName: name });
       const token = await credentials.user.getIdToken();
@@ -109,10 +184,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error("Failed to load profile after sign-up", err);
       }
     },
-    [refreshProfile]
+    [applyE2ESession, refreshProfile]
   );
 
   const signInWithGoogle = useCallback(async () => {
+    if (E2E_AUTH_BYPASS) {
+      applyE2ESession({
+        uid: `e2e-google-${Date.now()}`,
+        name: "E2E Google User",
+        email: "e2e.google@example.edu",
+        role: "viewer",
+      });
+      return;
+    }
+
     const provider = new GoogleAuthProvider();
     const credentials = await signInWithPopup(auth, provider);
     const token = await credentials.user.getIdToken();
@@ -136,12 +221,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error("Failed to load profile after Google sign-in", err);
     }
-  }, [refreshProfile]);
+  }, [applyE2ESession, refreshProfile]);
 
   const signOut = useCallback(async () => {
+    if (E2E_AUTH_BYPASS) {
+      applyE2ESession(null);
+      return;
+    }
+
     await firebaseSignOut(auth);
     setProfile(null);
-  }, []);
+  }, [applyE2ESession]);
 
   const value = useMemo(
     () => ({

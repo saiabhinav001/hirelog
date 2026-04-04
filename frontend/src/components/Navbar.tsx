@@ -7,7 +7,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-const navLinks = [
+const baseNavLinks = [
   { href: "/search", label: "Search" },
   { href: "/practice", label: "Practice" },
   { href: "/submit", label: "Contribute" },
@@ -98,9 +98,13 @@ function AvatarDropdown() {
 
 function MobileMenu() {
   const pathname = usePathname();
-  const { user, signOut } = useAuth();
+  const { user, profile, signOut } = useAuth();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  const navLinks = profile?.role === "placement_cell"
+    ? [...baseNavLinks, { href: "/placement-cell", label: "Cell Ops" }]
+    : baseNavLinks;
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -213,8 +217,12 @@ function MobileMenu() {
 
 export function Navbar() {
   const pathname = usePathname();
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const [scrolled, setScrolled] = useState(false);
+
+  const navLinks = profile?.role === "placement_cell"
+    ? [...baseNavLinks, { href: "/placement-cell", label: "Cell Ops" }]
+    : baseNavLinks;
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);

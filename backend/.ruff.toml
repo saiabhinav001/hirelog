@@ -1,0 +1,8 @@
+[lint]
+select = ["E", "F"]
+ignore = ["E501"]
+
+[lint.per-file-ignores]
+"scripts/init_faiss.py" = ["E402"]
+"scripts/init_firebase.py" = ["E402"]
+"scripts/seed_data.py" = ["E402"]

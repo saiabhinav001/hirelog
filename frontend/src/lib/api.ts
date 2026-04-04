@@ -70,7 +70,11 @@ export async function apiFetch<T>(
 // Contribution management helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Experience } from "./types";
+import type {
+  Experience,
+  ModerationQueueResponse,
+  PlacementCellAdminResponse,
+} from "./types";
 
 export async function fetchMyContributions(
   token: string
@@ -126,4 +130,70 @@ export async function updateDisplayName(
     method: "PATCH",
     body: JSON.stringify({ name }),
   }, token);
+}
+
+export async function fetchPlacementCellAdmin(
+  token: string
+): Promise<PlacementCellAdminResponse> {
+  return apiFetch("/api/dashboard/admin", { method: "GET" }, token);
+}
+
+export async function fetchModerationQueue(
+  token: string,
+  options?: {
+    status?: "all" | "pending" | "processing" | "done" | "failed";
+    active?: "all" | "active" | "hidden";
+    limit?: number;
+  }
+): Promise<ModerationQueueResponse> {
+  const params = new URLSearchParams();
+  if (options?.status) {
+    params.set("status", options.status);
+  }
+  if (options?.active) {
+    params.set("active", options.active);
+  }
+  if (typeof options?.limit === "number") {
+    params.set("limit", String(options.limit));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiFetch(`/api/experiences/admin/queue${suffix}`, { method: "GET" }, token);
+}
+
+export async function reprocessExperienceAsPlacementCell(
+  experienceId: string,
+  token: string
+): Promise<{ status: string; experience_id: string; user_question_count: number }> {
+  return apiFetch(`/api/experiences/admin/${experienceId}/reprocess`, {
+    method: "POST",
+  }, token);
+}
+
+export async function updateExperienceVisibilityAsPlacementCell(
+  experienceId: string,
+  payload: { is_active: boolean; note?: string },
+  token: string
+): Promise<{ status: string; experience_id: string; changed: boolean }> {
+  return apiFetch(`/api/experiences/admin/${experienceId}/visibility`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function resetSearchRuntimeAsPlacementCell(
+  token: string
+): Promise<{ status: string; search_runtime: Record<string, unknown> }> {
+  return apiFetch("/api/dashboard/admin/search/runtime/reset", { method: "POST" }, token);
+}
+
+export async function clearSearchCacheAsPlacementCell(
+  token: string
+): Promise<{ status: string; cache: Record<string, unknown> }> {
+  return apiFetch("/api/dashboard/admin/search/cache/clear", { method: "POST" }, token);
+}
+
+export async function warmupSearchAsPlacementCell(
+  token: string
+): Promise<{ status: string; warmup: Record<string, unknown>; search_runtime: Record<string, unknown> }> {
+  return apiFetch("/api/dashboard/admin/search/warmup", { method: "POST" }, token);
 }

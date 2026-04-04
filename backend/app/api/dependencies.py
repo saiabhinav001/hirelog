@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import firestore
 
+from app.core.config import settings
 from app.core.firebase import db, firebase_auth
 
 
@@ -15,10 +16,35 @@ security = HTTPBearer()
 
 # ── In-memory auth token cache ───────────────────────────────────────────────
 # Avoids repeated verify_id_token() + Firestore user doc read on every request.
-_auth_cache: dict[str, tuple[float, dict]] = {}
+_auth_cache: dict[str, tuple[float, int, dict]] = {}
 _AUTH_CACHE_TTL = 300  # 5 minutes (Firebase tokens live ~60 min)
 _AUTH_CACHE_MAX = 200
 _auth_cache_lock = threading.Lock()
+
+_ROLE_PRIORITY = {
+    "viewer": 0,
+    "contributor": 1,
+    "placement_cell": 2,
+}
+
+
+def _higher_role(left: str, right: str) -> str:
+    if _ROLE_PRIORITY.get(right, 0) > _ROLE_PRIORITY.get(left, 0):
+        return right
+    return left
+
+
+def _placement_cell_email(email: str | None) -> bool:
+    if not email:
+        return False
+    return email.strip().lower() in settings.placement_cell_emails_set()
+
+
+def _resolve_role(existing_role: str, email: str | None) -> str:
+    target = existing_role or "viewer"
+    if _placement_cell_email(email):
+        target = _higher_role(target, "placement_cell")
+    return target
 
 
 def _get_or_create_user(uid: str, email: str | None, name: str | None = None) -> dict:
@@ -26,14 +52,20 @@ def _get_or_create_user(uid: str, email: str | None, name: str | None = None) ->
     snapshot = doc_ref.get()
     if snapshot.exists:
         data = snapshot.to_dict() or {}
+        current_role = str(data.get("role") or "viewer")
+        resolved_role = _resolve_role(current_role, email)
+        if resolved_role != current_role:
+            doc_ref.set({"role": resolved_role}, merge=True)
+            data["role"] = resolved_role
         data["uid"] = uid
         return data
 
+    initial_role = _resolve_role("viewer", email)
     user_data = {
         "uid": uid,
         "name": name or "",
         "email": email or "",
-        "role": "viewer",
+        "role": initial_role,
         "created_at": firestore.SERVER_TIMESTAMP,
     }
     doc_ref.set(user_data)
@@ -44,13 +76,17 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> dict:
     token = credentials.credentials
+    now = int(time.time())
 
     # Check in-memory cache first (keyed by token hash)
     cache_key = hashlib.sha256(token.encode()).hexdigest()[:16]
     with _auth_cache_lock:
         entry = _auth_cache.get(cache_key)
-        if entry and time.time() - entry[0] < _AUTH_CACHE_TTL:
-            return entry[1].copy()
+        if entry:
+            cached_at, token_exp, cached_user = entry
+            if (now - cached_at) < _AUTH_CACHE_TTL and now < token_exp:
+                return cached_user.copy()
+            _auth_cache.pop(cache_key, None)
 
     try:
         decoded = firebase_auth.verify_id_token(token)
@@ -63,6 +99,7 @@ def get_current_user(
     uid = decoded.get("uid")
     email = decoded.get("email")
     name = decoded.get("name") or decoded.get("user_id")
+    token_exp = int(decoded.get("exp") or (now + _AUTH_CACHE_TTL))
     if not uid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload.")
     user_data = _get_or_create_user(uid, email, name)
@@ -74,15 +111,24 @@ def get_current_user(
         if len(_auth_cache) >= _AUTH_CACHE_MAX:
             oldest = min(_auth_cache, key=lambda k: _auth_cache[k][0])
             del _auth_cache[oldest]
-        _auth_cache[cache_key] = (time.time(), user_data.copy())
+        _auth_cache[cache_key] = (now, token_exp, user_data.copy())
 
     return user_data
 
 
 def require_contributor(user: dict = Depends(get_current_user)) -> dict:
-    if user.get("role") != "contributor":
+    if user.get("role") not in {"contributor", "placement_cell"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Contributor role required to submit experiences.",
+        )
+    return user
+
+
+def require_placement_cell(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "placement_cell":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Placement cell role required.",
         )
     return user

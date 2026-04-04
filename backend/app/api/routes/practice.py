@@ -120,7 +120,9 @@ async def get_practice_lists(user: dict = Depends(get_current_user)):
     revised_percent).  Does NOT iterate question sub-collections → instant.
     """
     user_id = user["uid"]
-    lists_ref = db.collection("practice_lists").where("user_id", "==", user_id)
+    lists_ref = db.collection("practice_lists").where(
+        filter=firestore.FieldFilter("user_id", "==", user_id)
+    )
 
     results = []
     for doc in lists_ref.stream():

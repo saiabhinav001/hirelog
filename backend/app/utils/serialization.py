@@ -19,7 +19,7 @@ def _get_contributor_display(data: dict) -> str:
 
     STRICT ANONYMITY CONTRACT:
       - If author.visibility == "public" AND public_label exists → use public_label
-      - Everything else → "Anonymous (CBIT)"
+            - Everything else → "Anonymous"
 
     HARD BANS:
       - No initials from email
@@ -30,6 +30,9 @@ def _get_contributor_display(data: dict) -> str:
     MIGRATION: Legacy docs without author.visibility are treated as anonymous.
     Any previously inferred labels (e.g. "S.A.S.") are stripped.
     """
+    if data.get("is_anonymous") is True:
+        return "Anonymous"
+
     author = data.get("author") or {}
     visibility = author.get("visibility", "")
 
@@ -50,7 +53,33 @@ def _get_contributor_display(data: dict) -> str:
             elif parts:
                 return parts[0]
 
-    return "Anonymous (CBIT)"
+    return "Anonymous"
+
+
+def _is_experience_doc(data: dict) -> bool:
+    return "created_by" in data and "company" in data and "raw_text" in data
+
+
+def _apply_privacy_redaction(result: dict, data: dict, *, include_private: bool) -> dict:
+    if include_private or not _is_experience_doc(data):
+        return result
+
+    author = data.get("author") or {}
+    visibility = str(author.get("visibility") or "").lower()
+    is_anonymous = bool(data.get("is_anonymous", False)) or visibility == "anonymous"
+    show_name = bool(data.get("show_name", False)) and visibility == "public"
+
+    if is_anonymous or not show_name:
+        result["created_by"] = "anonymous"
+        result["contributor_name"] = None
+
+    # Contact data is only exposed when explicit consent exists and identity is public.
+    if not bool(data.get("allow_contact", False)) or is_anonymous or not show_name:
+        result["allow_contact"] = False
+        result["contact_linkedin"] = None
+        result["contact_email"] = None
+
+    return result
 
 
 def _ensure_questions_and_stats(result: dict) -> dict:
@@ -84,10 +113,16 @@ def _ensure_questions_and_stats(result: dict) -> dict:
     return result
 
 
-def serialize_doc(doc_snapshot, *, include_contributor: bool = False) -> dict:
+def serialize_doc(
+    doc_snapshot,
+    *,
+    include_contributor: bool = False,
+    include_private: bool = False,
+) -> dict:
     data = doc_snapshot.to_dict() or {}
     data["id"] = doc_snapshot.id
     result = _convert_value(data)
+    result = _apply_privacy_redaction(result, data, include_private=include_private)
     if include_contributor:
         result["contributor_display"] = _get_contributor_display(data)
     # Always ensure nested questions + stats are present

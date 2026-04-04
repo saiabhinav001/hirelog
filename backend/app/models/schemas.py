@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class UserCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    role: Literal["viewer", "contributor"] = "viewer"
+    role: Literal["viewer", "contributor", "placement_cell"] = "viewer"
 
 
 class NameUpdate(BaseModel):
@@ -21,7 +21,7 @@ class ExperienceCreate(BaseModel):
     year: int = Field(ge=2000, le=2100)
     round: str = Field(min_length=1, max_length=120)
     difficulty: str = Field(min_length=1, max_length=20)
-    raw_text: str = Field(min_length=20)
+    raw_text: str = Field(min_length=20, max_length=20000)
     is_anonymous: bool = False
     show_name: bool = False
     allow_contact: bool = False
@@ -29,8 +29,37 @@ class ExperienceCreate(BaseModel):
     contact_email: Optional[str] = Field(default=None, max_length=200)
     user_questions: List[str] = Field(
         default_factory=list,
+        max_length=120,
         description="Questions explicitly provided by the user — stored verbatim, never filtered or dropped.",
     )
+
+    @field_validator("raw_text")
+    @classmethod
+    def _normalize_raw_text(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if len(normalized) < 20:
+            raise ValueError("raw_text must be at least 20 characters after normalization")
+        if len(normalized) > 20000:
+            raise ValueError("raw_text must be at most 20000 characters")
+        return normalized
+
+    @field_validator("user_questions")
+    @classmethod
+    def _sanitize_user_questions(cls, values: List[str]) -> List[str]:
+        if len(values) > 120:
+            raise ValueError("Maximum 120 user questions are allowed")
+
+        cleaned: List[str] = []
+        for item in values:
+            normalized = " ".join(str(item).split())
+            if not normalized:
+                continue
+            if len(normalized) < 5:
+                raise ValueError("Each user question must be at least 5 characters")
+            if len(normalized) > 300:
+                raise ValueError("Each user question must be at most 300 characters")
+            cleaned.append(normalized)
+        return cleaned
 
 
 class ExperienceMetadataUpdate(BaseModel):
@@ -49,7 +78,36 @@ class ExperienceMetadataUpdate(BaseModel):
 
 class AddQuestionsRequest(BaseModel):
     """Questions remembered after initial submission."""
-    questions: List[str] = Field(min_length=1, description="List of question texts to add")
+    questions: List[str] = Field(min_length=1, max_length=120, description="List of question texts to add")
+
+    @field_validator("questions")
+    @classmethod
+    def _sanitize_added_questions(cls, values: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        for item in values:
+            normalized = " ".join(str(item).split())
+            if not normalized:
+                continue
+            if len(normalized) < 5:
+                raise ValueError("Each question must be at least 5 characters")
+            if len(normalized) > 300:
+                raise ValueError("Each question must be at most 300 characters")
+            cleaned.append(normalized)
+
+        if not cleaned:
+            raise ValueError("At least one valid question is required")
+        return cleaned
+
+
+class AdminQueueFilter(BaseModel):
+    status: Literal["all", "pending", "processing", "done", "failed"] = "all"
+    active: Literal["all", "active", "hidden"] = "all"
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class AdminVisibilityUpdate(BaseModel):
+    is_active: bool
+    note: Optional[str] = Field(default=None, max_length=240)
 
 
 class ExtractedQuestion(BaseModel):
@@ -98,6 +156,7 @@ class ExperienceResponse(BaseModel):
     created_by: str
     created_at: Optional[str] = None
     score: Optional[float] = None
+    rerank_score: Optional[float] = None
     match_reason: Optional[str] = None
     is_anonymous: bool = False
     is_active: bool = True
@@ -112,6 +171,12 @@ class ExperienceResponse(BaseModel):
 class SearchResponse(BaseModel):
     results: List[ExperienceResponse]
     total: int
+    total_count: int = 0
+    returned_count: int = 0
+    has_more: bool = False
+    next_cursor: Optional[str] = None
+    served_mode: Optional[str] = None
+    served_engine: Optional[str] = None
 
 
 class DashboardResponse(BaseModel):
@@ -150,12 +215,34 @@ class PracticeQuestionCreate(BaseModel):
     source_experience_id: Optional[str] = None
     source_company: Optional[str] = None
 
+    @field_validator("question_text")
+    @classmethod
+    def _sanitize_practice_question_text(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if len(normalized) < 5:
+            raise ValueError("question_text must be at least 5 characters")
+        if len(normalized) > 300:
+            raise ValueError("question_text must be at most 300 characters")
+        return normalized
+
 
 class PracticeQuestionUpdate(BaseModel):
     question_text: Optional[str] = None
     topic: Optional[str] = None
     difficulty: Optional[str] = None
     status: Optional[Literal["unvisited", "practicing", "revised"]] = None
+
+    @field_validator("question_text")
+    @classmethod
+    def _sanitize_practice_update_question_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        normalized = " ".join(value.split())
+        if len(normalized) < 5:
+            raise ValueError("question_text must be at least 5 characters")
+        if len(normalized) > 300:
+            raise ValueError("question_text must be at most 300 characters")
+        return normalized
 
 
 class PracticeQuestionResponse(BaseModel):

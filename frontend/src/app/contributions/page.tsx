@@ -5,7 +5,7 @@ import Link from "next/link";
 
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { useAuth } from "@/context/AuthContext";
-import { auth } from "@/lib/firebase";
+import { getClientAuthToken } from "@/lib/authToken";
 import {
   fetchMyContributions,
   softDeleteExperience,
@@ -36,11 +36,13 @@ function EditMetadataModal({
   const [error, setError] = useState<string | null>(null);
 
   const handleSave = async () => {
-    if (!auth.currentUser) return;
     setSaving(true);
     setError(null);
     try {
-      const token = await auth.currentUser.getIdToken();
+      const token = await getClientAuthToken();
+      if (!token) {
+        throw new Error("Not authenticated.");
+      }
       const payload: Record<string, string | number> = {};
       if (role !== experience.role) payload.role = role;
       if (year !== experience.year) payload.year = year;
@@ -146,7 +148,6 @@ function AddQuestionsModal({
   const [error, setError] = useState<string | null>(null);
 
   const handleAdd = async () => {
-    if (!auth.currentUser) return;
     const lines = input
       .split("\n")
       .map((l) => l.trim())
@@ -201,7 +202,10 @@ function AddQuestionsModal({
 
     // Fire the API call — reconcile on response
     try {
-      const token = await auth.currentUser.getIdToken();
+      const token = await getClientAuthToken();
+      if (!token) {
+        throw new Error("Not authenticated.");
+      }
       const serverResult = await addQuestionsToExperience(experience.id, lines, token);
       // Reconcile with server state
       onSaved(serverResult);
@@ -355,12 +359,14 @@ function ContributionCard({
   const nlpStatus = experience.nlp_status ?? "done";
 
   const handleToggleVisibility = async () => {
-    if (!auth.currentUser) return;
     // Optimistic: update UI immediately
     const prevActive = isActive;
     onUpdate({ ...experience, is_active: !prevActive });
     try {
-      const token = await auth.currentUser.getIdToken();
+      const token = await getClientAuthToken();
+      if (!token) {
+        throw new Error("Not authenticated.");
+      }
       if (prevActive) {
         await softDeleteExperience(experience.id, token);
       } else {
@@ -538,14 +544,17 @@ export default function ContributionsPage() {
   const [filter, setFilter] = useState<"all" | "active" | "hidden">("all");
 
   const loadContributions = useCallback(async () => {
-    if (!user || !auth.currentUser) {
+    if (!user) {
       setLoading(false);
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      const token = await auth.currentUser.getIdToken();
+      const token = await getClientAuthToken();
+      if (!token) {
+        throw new Error("Not authenticated.");
+      }
       const data = await fetchMyContributions(token);
       setContributions(data.results);
     } catch {
