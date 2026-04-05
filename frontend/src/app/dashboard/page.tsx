@@ -681,14 +681,14 @@ export default function DashboardPage() {
                             <span className="px-2.5 py-1 rounded-md bg-[var(--surface-muted)] text-xs font-medium">
                               {stage}
                             </span>
-                            <span className="text-[10px] text-[var(--text-muted)] mt-0.5 inline-flex items-center gap-0.5">
+                            <span className="text-xs text-[var(--text-muted)] mt-0.5 inline-flex items-center gap-0.5">
                               {stageData.frequency}×
                               <InfoTooltip text={`Appeared in ${stageData.frequency} interview experience${stageData.frequency !== 1 ? "s" : ""} for this round`} />
                             </span>
                             {stageData.topics.length > 0 && (
                               <div className="mt-0.5 flex flex-wrap gap-1 max-w-[120px] justify-center">
                                 {stageData.topics.slice(0, 2).map((topic) => (
-                                  <span key={`${stage}-${topic}`} className="text-[10px] text-[var(--text-muted)]">
+                                  <span key={`${stage}-${topic}`} className="text-xs text-[var(--text-muted)]">
                                     {topic}
                                   </span>
                                 ))}

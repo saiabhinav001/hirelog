@@ -284,13 +284,13 @@ function EditHistoryPanel({ experience, onClose }: { experience: Experience; onC
   const actionColor = (entry: import("@/lib/types").EditHistoryEntry) => {
     switch (entry.action) {
       case "extracted":
-        return "text-blue-400";
+        return "text-[var(--info)]";
       case "ai_enrichment":
-        return "text-purple-400";
+        return "text-[var(--primary)]";
       case "added_later":
-        return "text-green-400";
+        return "text-[var(--success)]";
       case "visibility_change":
-        return "text-yellow-400";
+        return "text-[var(--warning)]";
       default:
         return "text-[var(--text)]";
     }
@@ -393,8 +393,8 @@ function ContributionCard({
               <span
                 className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                   isActive
-                    ? "bg-green-500/10 text-green-400"
-                    : "bg-yellow-500/10 text-yellow-400"
+                    ? "bg-[var(--success-soft)] text-[var(--success)]"
+                    : "bg-[var(--warning-soft)] text-[var(--warning)]"
                 }`}
               >
                 {isActive ? "Active" : "Hidden"}
@@ -443,13 +443,13 @@ function ContributionCard({
             )}
           </span>
           {nlpStatus === "pending" && (
-            <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 font-medium">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
+            <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-[var(--warning-soft)] text-[var(--warning)] font-medium">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--warning)] animate-pulse" />
               AI processing
             </span>
           )}
           {nlpStatus === "failed" && (
-            <span className="text-xs px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 font-medium">
+            <span className="text-xs px-1.5 py-0.5 rounded-full bg-[var(--error-soft)] text-[var(--error)] font-medium">
               AI enrichment failed
             </span>
           )}
@@ -487,8 +487,8 @@ function ContributionCard({
             onClick={handleToggleVisibility}
             className={`btn-ghost text-xs ${
               isActive
-                ? "text-yellow-400 hover:text-yellow-300"
-                : "text-green-400 hover:text-green-300"
+                ? "text-[var(--warning)] hover:text-[var(--warning)]"
+                : "text-[var(--success)] hover:text-[var(--success)]"
             }`}
           >
             {isActive ? "Hide from archive" : "Restore to archive"}

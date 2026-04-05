@@ -40,7 +40,7 @@ function AvatarDropdown() {
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((prev) => !prev)}
-        className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--primary)] text-sm font-semibold text-white transition-shadow hover:ring-2 hover:ring-[var(--primary)]/40 focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/40"
+        className="flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-full bg-[var(--primary)] text-sm font-semibold text-white transition-shadow hover:ring-2 hover:ring-[var(--primary)]/40 focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/40"
         aria-label="User menu"
       >
         {initial}
@@ -130,22 +130,22 @@ function MobileMenu() {
     <div className="md:hidden relative" ref={ref}>
       <button
         onClick={() => setOpen((prev) => !prev)}
-        className="flex h-11 w-11 items-center justify-center rounded-md text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-muted)] transition-colors"
+        className="flex h-12 w-12 sm:h-11 sm:w-11 items-center justify-center rounded-xl text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-muted)] transition-colors"
         aria-label="Menu"
       >
         {open ? (
-          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <svg className="h-6 w-6 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         ) : (
-          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <svg className="h-6 w-6 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
           </svg>
         )}
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-56 rounded-lg border border-[var(--border)] bg-[var(--surface-elevated)] shadow-lg py-1 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
+        <div className="absolute right-0 mt-2 w-[min(18rem,calc(100vw-1rem))] rounded-xl border border-[var(--border)] bg-[var(--surface-elevated)] shadow-lg py-1 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
           {navLinks.map((item) => (
             <Link
               key={item.href}
@@ -238,14 +238,14 @@ export function Navbar() {
           : "border-transparent"
       }`}
     >
-      <div className="page-container flex items-center justify-between h-14">
+      <div className="page-container flex items-center justify-between h-16 sm:h-14">
         <div className="flex items-center gap-8">
           <Link href="/" className="flex items-center gap-2">
-            <svg className="h-7 w-7" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <svg className="h-9 w-9 sm:h-7 sm:w-7" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
               <rect width="32" height="32" rx="8" fill="var(--primary)" />
               <path d="M9 8h4v16H9V8zm10 0h4v16h-4V8zm-10 6h14v4H9v-4z" fill="white" />
             </svg>
-            <span className="font-semibold hidden sm:inline">HireLog</span>
+            <span className="font-semibold text-base hidden sm:inline">HireLog</span>
           </Link>
 
           <nav className="hidden items-center gap-1 text-sm md:flex">
@@ -254,7 +254,7 @@ export function Navbar() {
                 key={item.href}
                 href={item.href}
                 prefetch={true}
-                className={`px-3 py-1.5 rounded-md transition-colors ${
+                className={`px-3 py-2 rounded-md transition-colors ${
                   pathname === item.href
                     ? "text-[var(--text)] bg-[var(--surface-muted)]"
                     : "text-[var(--text-muted)] hover:text-[var(--text)]"

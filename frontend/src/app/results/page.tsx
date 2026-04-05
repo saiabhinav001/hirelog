@@ -399,8 +399,8 @@ function ResultsPageContent() {
 
               {/* NLP status */}
               {item.nlp_status === "pending" && (
-                <p className="mt-2 text-xs text-yellow-400 flex items-center gap-1.5">
-                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
+                <p className="mt-2 text-xs text-[var(--warning)] flex items-center gap-1.5">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--warning)] animate-pulse" />
                   AI enrichment in progress — additional questions and topics will appear shortly.
                 </p>
               )}

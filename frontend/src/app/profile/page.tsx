@@ -273,10 +273,10 @@ export default function ProfilePage() {
               <div className="flex items-center gap-2">
                 <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
                   identity?.role === "placement_cell"
-                    ? "bg-violet-500/10 text-violet-400"
+                    ? "bg-[var(--primary-soft)] text-[var(--primary)]"
                     : identity?.role === "contributor"
-                    ? "bg-green-500/10 text-green-400"
-                    : "bg-blue-500/10 text-blue-400"
+                    ? "bg-[var(--success-soft)] text-[var(--success)]"
+                    : "bg-[var(--info-soft)] text-[var(--info)]"
                 }`}>
                   {identity?.role}
                 </span>

@@ -183,7 +183,7 @@ export default function SubmitPage() {
             onChange={(e) => setUserQuestions(e.target.value)}
             placeholder={"What is the time complexity of quicksort?\nExplain ACID properties in DBMS.\nHow does virtual memory work?"}
           />
-          <div className="mt-2 flex items-center justify-between">
+          <div className="mt-2 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs text-[var(--text-muted)]">
               One question per line. These are saved exactly as you type them — never filtered or modified.
             </p>
@@ -197,7 +197,7 @@ export default function SubmitPage() {
 
         {/* Identity preview — read-only, no name editing here */}
         <div className="p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)] space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm font-medium">Contribution Identity</p>
             <Link href="/profile" className="text-xs text-[var(--primary)] hover:underline">
               Edit name in Profile →
@@ -211,7 +211,7 @@ export default function SubmitPage() {
               id="anonymous-toggle"
               checked={isAnonymous}
               onChange={(e) => setIsAnonymous(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
+              className="mt-0.5 h-5 w-5 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
             />
             <label htmlFor="anonymous-toggle" className="text-sm cursor-pointer">
               Submit anonymously
@@ -221,8 +221,8 @@ export default function SubmitPage() {
           {/* Identity preview */}
           <div className={`rounded-md px-3 py-2 text-xs leading-relaxed ${
             isAnonymous
-              ? "bg-yellow-500/10 border border-yellow-500/20 text-yellow-300"
-              : "bg-blue-500/10 border border-blue-500/20 text-blue-300"
+              ? "bg-[var(--warning-soft)] border border-[var(--warning-border)] text-[var(--warning)]"
+              : "bg-[var(--info-soft)] border border-[var(--info-border)] text-[var(--info)]"
           }`}>
             {isAnonymous ? (
               <>
@@ -257,7 +257,7 @@ export default function SubmitPage() {
                 id="contact-toggle"
                 checked={allowContact}
                 onChange={(e) => setAllowContact(e.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
+                className="mt-0.5 h-5 w-5 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
               />
               <label htmlFor="contact-toggle" className="text-sm cursor-pointer">
                 Allow students to contact me about this experience
@@ -291,8 +291,8 @@ export default function SubmitPage() {
         )}
 
         {/* Performance note */}
-        <div className="rounded-md bg-blue-500/10 border border-blue-500/20 px-3 py-2">
-          <p className="text-xs text-blue-300 leading-relaxed">
+        <div className="rounded-md bg-[var(--info-soft)] border border-[var(--info-border)] px-3 py-2">
+          <p className="text-xs text-[var(--info)] leading-relaxed">
             <strong>⚡ Instant save.</strong>{" "}
             Your experience and questions are saved immediately.
             AI extraction, topic classification, and summary generation run in the background —
@@ -306,7 +306,7 @@ export default function SubmitPage() {
           </div>
         )}
 
-        <button className="btn-primary" disabled={submitting}>
+        <button className="btn-primary w-full sm:w-auto" disabled={submitting}>
           {submitting ? "Submitting..." : "Submit"}
         </button>
       </form>
