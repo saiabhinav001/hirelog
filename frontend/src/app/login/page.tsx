@@ -6,20 +6,14 @@ import { useState } from "react";
 
 import { useAuth } from "@/context/AuthContext";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Floating-label text field
-// ─────────────────────────────────────────────────────────────────────────────
-
-function FloatingField({
+function OutlinedField({
   id,
   label,
   type = "text",
   value,
   onChange,
   required,
-  helper,
   autoComplete,
-  children,
 }: {
   id: string;
   label: string;
@@ -27,80 +21,60 @@ function FloatingField({
   value: string;
   onChange: (v: string) => void;
   required?: boolean;
-  helper?: string;
   autoComplete?: string;
-  children?: React.ReactNode;
 }) {
   return (
-    <div>
-      <div className="floating-group">
-        <input
-          id={id}
-          type={type}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          required={required}
-          placeholder=" "
-          autoComplete={autoComplete}
-          className="floating-input"
-        />
-        <label htmlFor={id} className="floating-label">
-          {label}
-        </label>
-        {children}
-      </div>
-      {helper && (
-        <p className="mt-1 text-xs text-[var(--text-disabled)]">{helper}</p>
-      )}
+    <div className="space-y-1.5">
+      <label htmlFor={id} className="text-sm font-medium text-[var(--text-secondary)]">
+        {label}
+      </label>
+      <input
+        id={id}
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        required={required}
+        autoComplete={autoComplete}
+        className="input-outlined"
+      />
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Password field with visibility toggle + caps-lock warning
-// ─────────────────────────────────────────────────────────────────────────────
-
-function PasswordField({
+function OutlinedPasswordField({
   id,
   label,
   value,
   onChange,
-  helper,
   autoComplete,
 }: {
   id: string;
   label: string;
   value: string;
   onChange: (v: string) => void;
-  helper?: string;
   autoComplete?: string;
 }) {
   const [visible, setVisible] = useState(false);
-  const [capsLock, setCapsLock] = useState(false);
 
   return (
-    <div>
-      <div className="floating-group">
+    <div className="space-y-1.5">
+      <label htmlFor={id} className="text-sm font-medium text-[var(--text-secondary)]">
+        {label}
+      </label>
+      <div className="relative">
         <input
           id={id}
           type={visible ? "text" : "password"}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => setCapsLock(e.getModifierState("CapsLock"))}
-          onKeyUp={(e) => setCapsLock(e.getModifierState("CapsLock"))}
           required
-          placeholder=" "
           autoComplete={autoComplete}
-          className="floating-input pr-10"
+          className="input-outlined pr-10"
         />
-        <label htmlFor={id} className="floating-label">
-          {label}
-        </label>
         <button
           type="button"
-          tabIndex={-1}
           onClick={() => setVisible((v) => !v)}
-          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-disabled)] hover:text-[var(--text-muted)] transition-colors"
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-disabled)] transition-colors hover:text-[var(--text-muted)]"
           aria-label={visible ? "Hide password" : "Show password"}
         >
           {visible ? (
@@ -115,41 +89,22 @@ function PasswordField({
           )}
         </button>
       </div>
-      {capsLock && (
-        <p className="mt-1 text-xs text-[var(--warning)] flex items-center gap-1">
-          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-          </svg>
-          Caps Lock is on
-        </p>
-      )}
-      {helper && !capsLock && (
-        <p className="mt-1 text-xs text-[var(--text-disabled)]">{helper}</p>
-      )}
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Divider
-// ─────────────────────────────────────────────────────────────────────────────
-
 function OrDivider() {
   return (
-    <div className="relative my-5 sm:my-6">
+    <div className="relative my-6">
       <div className="absolute inset-0 flex items-center">
         <div className="w-full border-t border-[var(--border)]" />
       </div>
       <div className="relative flex justify-center">
-        <span className="bg-[var(--surface)] px-3 text-xs text-[var(--text-disabled)]">or</span>
+        <span className="bg-[var(--surface)] px-3 text-xs font-medium text-[var(--text-disabled)]">OR</span>
       </div>
     </div>
   );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Page
-// ─────────────────────────────────────────────────────────────────────────────
 
 export default function LoginPage() {
   const router = useRouter();
@@ -187,53 +142,14 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="page-container py-8 sm:py-12 lg:py-14 min-h-[calc(100dvh-3.5rem)]">
-      <div className="mx-auto grid w-full max-w-5xl gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-        <aside className="card hidden lg:flex lg:flex-col lg:justify-between p-7 xl:p-8">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.13em] text-[var(--primary)]">
-              Secure Access
-            </p>
-            <h1 className="mt-3 text-[2rem] font-semibold leading-[1.1] tracking-tight text-balance">
-              Welcome back to your placement intelligence workspace.
-            </h1>
-            <p className="mt-3 text-sm leading-relaxed text-[var(--text-muted)]">
-              Continue preparation from verified interview experiences, tagged topics, and your saved practice progress.
-            </p>
-
-            <ul className="mt-6 space-y-2.5 text-sm text-[var(--text-secondary)]">
-              <li className="flex items-start gap-2">
-                <span className="mt-1 h-2 w-2 rounded-full bg-[var(--primary)]" />
-                Search by intent across company, role, and topic.
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="mt-1 h-2 w-2 rounded-full bg-[var(--success)]" />
-                Continue practice lists with progress preserved.
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="mt-1 h-2 w-2 rounded-full bg-[var(--info)]" />
-                Contribution visibility and edit history remain auditable.
-              </li>
-            </ul>
-          </div>
-
-          <div className="mt-6 rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] p-3.5">
-            <p className="text-xs text-[var(--text-muted)] leading-relaxed">
-              Readability first: compact hierarchy, strong contrast, and restrained sizing for long sessions.
-            </p>
-          </div>
-        </aside>
-
-        <section className="card p-5 sm:p-6 lg:p-8">
-          <div className="mb-6 sm:mb-7">
-            <h1 className="text-[1.65rem] sm:text-[1.9rem] font-semibold tracking-tight">Sign in</h1>
-            <p className="mt-1.5 text-sm text-[var(--text-muted)]">
-              Access your archive, contributions, and practice activity.
-            </p>
-          </div>
+    <div className="page-container py-10 sm:py-14">
+      <div className="mx-auto w-full max-w-md">
+        <section className="card p-6 sm:p-8">
+          <h1 className="text-[1.75rem] font-semibold tracking-tight">Sign in</h1>
+          <p className="mt-1.5 text-sm text-[var(--text-muted)]">Use your account credentials to continue.</p>
 
           <button
-            className="btn-secondary w-full gap-2.5"
+            className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-sm font-medium text-[var(--text)] transition-colors hover:border-[var(--border-hover)] hover:bg-[var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-60"
             onClick={handleGoogle}
             disabled={loading}
           >
@@ -248,19 +164,18 @@ export default function LoginPage() {
 
           <OrDivider />
 
-          <form className="space-y-3.5 sm:space-y-4" onSubmit={handleSubmit}>
-            <FloatingField
+          <form className="space-y-4" onSubmit={handleSubmit}>
+            <OutlinedField
               id="login-email"
-              label="Email address"
+              label="Email"
               type="email"
               value={email}
               onChange={setEmail}
               required
               autoComplete="email"
-              helper="Use your institutional or personal email"
             />
 
-            <PasswordField
+            <OutlinedPasswordField
               id="login-password"
               label="Password"
               value={password}
@@ -269,28 +184,25 @@ export default function LoginPage() {
             />
 
             {error && (
-              <div className="rounded-lg bg-[var(--error-soft)] px-4 py-3 text-sm text-[var(--error)]">
+              <div className="rounded-[10px] border border-[var(--error-border)] bg-[var(--error-soft)] px-3.5 py-2.5 text-sm text-[var(--error)]">
                 {error}
               </div>
             )}
 
-            <button className="btn-primary w-full" disabled={loading}>
-              {loading ? "Signing in…" : "Sign in"}
+            <button
+              className="inline-flex w-full items-center justify-center rounded-[10px] border border-[var(--primary)] bg-[var(--primary)] px-4 py-2.5 text-sm font-semibold text-[var(--on-primary)] transition-colors hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={loading}
+            >
+              {loading ? "Signing in..." : "Sign in"}
             </button>
           </form>
 
-          <p className="mt-5 sm:mt-6 text-center text-sm text-[var(--text-muted)]">
+          <p className="mt-6 text-center text-sm text-[var(--text-muted)]">
             Don&apos;t have an account?{" "}
-            <Link href="/signup" className="text-[var(--primary)] hover:underline font-medium">
+            <Link href="/signup" className="font-medium text-[var(--primary)] hover:underline">
               Create one
             </Link>
           </p>
-
-          <div className="mt-5 flex flex-wrap justify-center gap-2">
-            <span className="badge">No spam</span>
-            <span className="badge">Session-safe</span>
-            <span className="badge">Student-focused</span>
-          </div>
         </section>
       </div>
     </div>

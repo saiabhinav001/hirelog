@@ -88,7 +88,7 @@ export default function Home() {
             <p className="relative text-xs font-semibold uppercase tracking-[0.16em] text-[var(--primary)] sm:text-sm">
               Campus Placement Intelligence
             </p>
-            <h1 className="relative mt-3 max-w-3xl text-balance text-3xl font-semibold tracking-[-0.018em] sm:text-4xl lg:text-[2.9rem] lg:leading-[1.07]">
+            <h1 className="relative mt-3 max-w-3xl text-balance text-[1.9rem] font-semibold tracking-[-0.018em] sm:text-[2.3rem] lg:text-[2.65rem] lg:leading-[1.09]">
               Institutional interview memory that compounds every year.
             </h1>
             <p className="relative mt-4 max-w-2xl text-base leading-relaxed text-[var(--text-secondary)] sm:text-lg">
@@ -200,14 +200,14 @@ export default function Home() {
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
             {capabilityTiles.map((tile, index) => (
-              <article key={tile.title} className="card p-5 sm:p-6">
+              <article key={tile.title} className="card group p-5 sm:p-6">
                 <div className="flex items-center justify-between gap-3">
                   <span className="badge">{tile.badge}</span>
-                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-muted)] text-xs font-semibold text-[var(--text-muted)]">
+                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[var(--primary)]/30 bg-[color-mix(in_srgb,var(--primary-soft)_72%,var(--surface))] text-xs font-semibold text-[var(--primary)] shadow-[inset_0_0_0_1px_rgba(31,86,214,0.08)] transition-transform duration-200 group-hover:scale-105">
                     {index + 1}
                   </span>
                 </div>
-                <h3 className="mt-3 text-xl font-semibold leading-tight text-balance sm:text-2xl">{tile.title}</h3>
+                <h3 className="mt-3 text-lg font-semibold leading-tight text-balance sm:text-xl">{tile.title}</h3>
                 <p className="mt-3 text-sm leading-relaxed text-[var(--text-muted)] sm:text-base">
                   {tile.description}
                 </p>

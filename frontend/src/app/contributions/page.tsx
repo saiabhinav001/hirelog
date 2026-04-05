@@ -644,23 +644,24 @@ export default function ContributionsPage() {
               </p>
             </div>
 
-            <div className="mt-3 grid grid-cols-3 gap-2 sm:flex sm:flex-wrap sm:justify-end">
+            <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-1.5">
+              <div className="flex flex-wrap gap-1.5 sm:justify-end">
               {filterOptions.map((option) => (
                 <button
                   key={option.key}
                   onClick={() => setFilter(option.key)}
                   aria-pressed={filter === option.key}
-                  className={`inline-flex h-10 w-full items-center justify-center gap-1 rounded-full border px-3 text-[0.82rem] font-semibold transition-colors sm:h-9 sm:w-auto sm:min-w-[6.5rem] sm:text-sm ${
+                  className={`inline-flex h-9 min-w-[5.6rem] flex-1 items-center justify-center gap-1 rounded-lg border px-2.5 text-[0.82rem] font-semibold transition-colors sm:h-8 sm:flex-none sm:text-[0.8rem] ${
                     filter === option.key
-                      ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--on-primary)]"
-                      : "border-[var(--border)] bg-[var(--surface-muted)] text-[var(--text-secondary)] hover:border-[var(--border-hover)] hover:bg-[var(--surface)]"
+                      ? "border-[var(--primary)] bg-[var(--surface)] text-[var(--primary)] shadow-[inset_0_0_0_1px_var(--primary-soft)]"
+                      : "border-transparent bg-transparent text-[var(--text-secondary)] hover:border-[var(--border)] hover:bg-[var(--surface)]"
                   }`}
                 >
                   <span>{option.label}</span>
                   <span
-                    className={`inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-xs ${
+                    className={`inline-flex h-5 min-w-[1.2rem] items-center justify-center rounded-full px-1.5 text-[0.7rem] ${
                       filter === option.key
-                        ? "bg-white/22 text-[var(--on-primary)]"
+                        ? "bg-[var(--primary-soft)] text-[var(--primary)]"
                         : "bg-[var(--surface)] text-[var(--text-muted)]"
                     }`}
                   >
@@ -668,6 +669,7 @@ export default function ContributionsPage() {
                   </span>
                 </button>
               ))}
+              </div>
             </div>
           </div>
         )}
