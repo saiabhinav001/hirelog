@@ -2,65 +2,77 @@ import Link from "next/link";
 import { FadeIn } from "@/components/Motion";
 
 const pipelineSteps = [
-  { step: "1", label: "Raw Experience", done: false },
-  { step: "2", label: "AI Structuring", done: false },
-  { step: "3", label: "Semantic Discovery", done: false },
-  { step: "✓", label: "Institutional Knowledge", done: true },
-];
-
-const capabilities = [
   {
-    title: "Intent-based semantic search",
+    step: "01",
+    title: "Capture",
     description:
-      "Describe what you are looking for in natural language. The system finds relevant experiences even when wording differs - meaning over keywords.",
+      "Students submit plain-language interview memories immediately after rounds.",
   },
   {
-    title: "Automated question extraction",
-    description:
-      "NLP pipeline extracts interview questions, classifies topics, and generates summaries from raw unstructured text.",
-  },
-  {
-    title: "Placement Cell analytics",
-    description:
-      "Topic trends, difficulty distributions, company breakdowns, and repeated questions for institutional planning.",
-  },
-  {
-    title: "Compounding knowledge base",
-    description:
-      "Every contribution is permanent. Data grows richer year after year as each batch contributes back.",
-  },
-  {
-    title: "Interview progression flows",
-    description:
-      "Visualize how companies structure interview rounds and which topics appear at each stage.",
-  },
-  {
-    title: "Anonymous contributions",
-    description:
-      "Submit experiences anonymously to encourage honest, detailed accounts without social pressure.",
-  },
-];
-
-const workflow = [
-  {
-    step: "1",
-    title: "Contribute",
-    description: "Seniors share interview experiences in plain text after placement.",
-  },
-  {
-    step: "2",
+    step: "02",
     title: "Structure",
-    description: "AI extracts questions, classifies topics, and generates summaries.",
+    description:
+      "NLP extracts questions, normalizes metadata, and tags recurring themes.",
   },
   {
-    step: "3",
-    title: "Discover",
-    description: "Future batches search by intent and find relevant experiences.",
+    step: "03",
+    title: "Retrieve",
+    description:
+      "Semantic search surfaces relevant experiences even when wording differs.",
   },
   {
-    step: "4",
-    title: "Analyze",
-    description: "Placement Cell and students use analytics for strategic preparation.",
+    step: "04",
+    title: "Compound",
+    description:
+      "Every new batch adds signal, improving preparation quality year over year.",
+  },
+];
+
+const capabilityTiles = [
+  {
+    title: "Intent search over real interview data",
+    description:
+      "Find experiences by meaning, not exact keywords, across company, role, topic, and round.",
+    badge: "Search",
+  },
+  {
+    title: "Question extraction with source transparency",
+    description:
+      "User-added and AI-extracted questions remain clearly separated for trust and auditability.",
+    badge: "NLP",
+  },
+  {
+    title: "Operational analytics for Placement Cell",
+    description:
+      "Track topic trends, difficulty shifts, and company patterns to prioritize preparation strategy.",
+    badge: "Analytics",
+  },
+  {
+    title: "Archive integrity by design",
+    description:
+      "Original narrative is preserved while metadata and remembered questions remain safely editable.",
+    badge: "Trust",
+  },
+];
+
+const archiveSignals = [
+  { value: "100+", label: "Experiences archived" },
+  { value: "10+", label: "Topics auto-classified" },
+  { value: "<1s", label: "Typical search response" },
+];
+
+const qualityChecks = [
+  {
+    title: "Anonymous-first submissions",
+    description: "Encourages honest, detailed writeups without social pressure.",
+  },
+  {
+    title: "Permanent institutional memory",
+    description: "Knowledge does not reset when each graduating batch leaves.",
+  },
+  {
+    title: "Clear edit accountability",
+    description: "Visibility changes and metadata edits remain traceable over time.",
   },
 ];
 
@@ -68,110 +80,172 @@ export default function Home() {
   return (
     <div className="page-container py-8 sm:py-12 lg:py-16">
       <FadeIn>
-        <section className="max-w-3xl">
-          <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.14em] text-[var(--primary)]">
-            Campus Placement Intelligence
-          </p>
-          <h1 className="mt-2 text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tight text-balance">
-            HireLog
-          </h1>
-          <p className="mt-4 max-w-2xl text-base sm:text-lg text-[var(--text-secondary)] leading-relaxed">
-            Turn unstructured interview memories into structured, searchable, and analyzable intelligence so every batch starts better prepared than the last.
-          </p>
-          <div className="mt-8 grid gap-3 sm:flex sm:items-center">
-            <Link href="/search" className="btn-primary w-full sm:w-auto">
-              Start exploring
-            </Link>
-            <Link href="/submit" className="btn-secondary w-full sm:w-auto">
-              Share your experience
-            </Link>
+        <section className="grid gap-5 lg:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)] lg:items-start">
+          <div className="card relative overflow-hidden p-6 sm:p-8 lg:p-10">
+            <div className="pointer-events-none absolute -right-20 -top-20 h-56 w-56 rounded-full bg-[var(--primary-soft)] blur-3xl" />
+            <div className="pointer-events-none absolute -bottom-20 left-1/3 h-48 w-48 rounded-full bg-[var(--success-soft)] blur-3xl" />
+
+            <p className="relative text-xs font-semibold uppercase tracking-[0.16em] text-[var(--primary)] sm:text-sm">
+              Campus Placement Intelligence
+            </p>
+            <h1 className="relative mt-3 max-w-3xl text-balance text-4xl font-semibold tracking-[-0.02em] sm:text-5xl lg:text-[3.35rem] lg:leading-[1.03]">
+              Institutional interview memory that compounds every year.
+            </h1>
+            <p className="relative mt-4 max-w-2xl text-base leading-relaxed text-[var(--text-secondary)] sm:text-lg">
+              HireLog converts scattered interview recollections into a trusted, searchable archive so each new batch starts from evidence, not guesswork.
+            </p>
+
+            <div className="relative mt-8 grid gap-3 sm:flex sm:flex-wrap sm:items-center">
+              <Link href="/search" className="btn-primary w-full sm:w-auto">
+                Explore archive
+              </Link>
+              <Link href="/submit" className="btn-secondary w-full sm:w-auto">
+                Add experience
+              </Link>
+            </div>
+
+            <dl className="relative mt-8 grid gap-3 sm:grid-cols-3">
+              {archiveSignals.map((signal) => (
+                <div key={signal.label} className="rounded-lg border border-[var(--border)]/80 bg-[var(--surface)]/90 px-3.5 py-3">
+                  <dt className="text-xs uppercase tracking-[0.08em] text-[var(--text-muted)]">{signal.label}</dt>
+                  <dd className="mt-1 text-2xl font-semibold leading-none sm:text-[1.95rem]">{signal.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+
+          <div className="grid gap-4">
+            <div className="card p-5 sm:p-6">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">
+                Why students trust it
+              </p>
+              <ul className="mt-4 space-y-3">
+                {qualityChecks.map((item) => (
+                  <li key={item.title} className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2.5">
+                    <p className="text-sm font-semibold text-[var(--text)] sm:text-base">{item.title}</p>
+                    <p className="mt-1 text-sm leading-relaxed text-[var(--text-muted)]">{item.description}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="card p-5 sm:p-6">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">
+                Knowledge quality loop
+              </p>
+              <div className="mt-4 space-y-2.5 text-sm sm:text-base">
+                <div className="flex items-center justify-between rounded-md border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2">
+                  <span className="font-medium text-[var(--text-secondary)]">Extraction quality</span>
+                  <span className="badge badge-primary">Monitored</span>
+                </div>
+                <div className="flex items-center justify-between rounded-md border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2">
+                  <span className="font-medium text-[var(--text-secondary)]">Search relevance</span>
+                  <span className="badge badge-success">Improves</span>
+                </div>
+                <div className="flex items-center justify-between rounded-md border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2">
+                  <span className="font-medium text-[var(--text-secondary)]">Visibility controls</span>
+                  <span className="badge badge-warning">User-owned</span>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
       </FadeIn>
 
       <FadeIn delay={0.08}>
         <section className="mt-12 sm:mt-14">
-          <div className="card p-4 sm:p-6">
-            <p className="text-xs sm:text-sm text-[var(--text-muted)] uppercase tracking-[0.12em]">
-              Intelligence Pipeline
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <h2 className="text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
+              From single memory to shared preparation advantage
+            </h2>
+            <p className="max-w-xl text-sm text-[var(--text-muted)] sm:text-base">
+              A repeatable pipeline turns unstructured recollections into durable signals for students and Placement Cell.
             </p>
-            <ol className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          </div>
+          <ol className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {pipelineSteps.map((item) => (
                 <li
-                  key={item.label}
-                  className={`rounded-lg border px-3 py-3 sm:px-4 sm:py-3.5 min-w-0 min-h-[74px] ${
-                    item.done
-                      ? "bg-[var(--success-soft)] border-[var(--success-border)]"
-                      : "bg-[var(--surface)] border-[var(--border)]"
-                  }`}
+                  key={item.step}
+                  className="card min-h-[168px] p-4 sm:p-5"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span
-                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${
-                        item.done
-                          ? "bg-[var(--success)]/18 text-[var(--success)]"
-                          : "bg-[var(--primary-soft)] text-[var(--primary)]"
-                      }`}
-                    >
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--primary-soft)] text-sm font-semibold text-[var(--primary)]">
                       {item.step}
                     </span>
-                    <span className={`text-base font-medium leading-snug ${item.done ? "text-[var(--success)]" : "text-[var(--text-secondary)]"}`}>
-                      {item.label}
-                    </span>
+                    <p className="text-base font-semibold text-[var(--text)] sm:text-lg">{item.title}</p>
                   </div>
+                  <p className="mt-3 text-sm leading-relaxed text-[var(--text-muted)] sm:text-base">
+                    {item.description}
+                  </p>
+                  <div className="mt-4 h-1 w-14 rounded-full bg-[var(--primary-soft)]" />
                 </li>
               ))}
             </ol>
-          </div>
-        </section>
+          </section>
       </FadeIn>
 
       <FadeIn delay={0.14}>
-        <section className="mt-10 grid gap-3 sm:grid-cols-3">
-          {[
-            { value: "100+", label: "Interview experiences archived" },
-            { value: "10+", label: "Topics auto-classified" },
-            { value: "<1s", label: "Semantic search latency" },
-          ].map((stat) => (
-            <div key={stat.label} className="card p-5 sm:p-6">
-              <p className="text-3xl sm:text-4xl font-semibold leading-none">{stat.value}</p>
-              <p className="mt-2 text-sm sm:text-base text-[var(--text-muted)]">{stat.label}</p>
-            </div>
-          ))}
-        </section>
-      </FadeIn>
-
-      <FadeIn delay={0.18}>
         <section className="mt-14 sm:mt-16">
-          <h2 className="text-3xl sm:text-4xl font-semibold text-balance">Capabilities</h2>
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {capabilities.map((feature) => (
-              <div key={feature.title} className="card p-5 sm:p-6">
-                <h3 className="text-xl sm:text-2xl font-semibold leading-tight text-balance">{feature.title}</h3>
-                <p className="mt-3 text-sm sm:text-base text-[var(--text-muted)] leading-relaxed">
-                  {feature.description}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <h2 className="text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
+              Built for trust, speed, and reuse
+            </h2>
+            <Link href="/dashboard" className="btn-ghost w-fit px-0 text-sm sm:text-base">
+              View institutional dashboard
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M7 4L13 10L7 16" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </Link>
+          </div>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+            {capabilityTiles.map((tile, index) => (
+              <article key={tile.title} className="card relative overflow-hidden p-5 sm:p-6">
+                <div
+                  className="pointer-events-none absolute -right-16 top-0 h-24 w-24 rounded-full opacity-80"
+                  style={{
+                    background:
+                      index % 2 === 0
+                        ? "radial-gradient(circle, var(--primary-soft) 0%, transparent 72%)"
+                        : "radial-gradient(circle, var(--success-soft) 0%, transparent 72%)",
+                  }}
+                />
+                <span className="badge">{tile.badge}</span>
+                <h3 className="mt-3 text-2xl font-semibold leading-tight text-balance">{tile.title}</h3>
+                <p className="mt-3 text-sm leading-relaxed text-[var(--text-muted)] sm:text-base">
+                  {tile.description}
                 </p>
-              </div>
+              </article>
             ))}
           </div>
         </section>
       </FadeIn>
 
-      <FadeIn delay={0.22}>
+      <FadeIn delay={0.2}>
         <section className="mt-14 sm:mt-16">
-          <h2 className="text-3xl sm:text-4xl font-semibold text-balance">How it works</h2>
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {workflow.map((item) => (
-              <div key={item.step} className="card p-4 sm:p-5">
-                <div className="flex h-9 w-9 items-center justify-center rounded-md bg-[var(--surface-muted)] text-sm font-semibold text-[var(--text-muted)]">
-                  {item.step}
-                </div>
-                <p className="mt-3 text-lg sm:text-xl font-semibold">{item.title}</p>
-                <p className="mt-2 text-sm sm:text-base text-[var(--text-muted)] leading-relaxed">
-                  {item.description}
+          <div className="card overflow-hidden p-6 sm:p-8">
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">
+                  Start Now
+                </p>
+                <h2 className="mt-2 text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
+                  Prepare from real evidence, not recycled guess lists.
+                </h2>
+                <p className="mt-3 max-w-2xl text-sm leading-relaxed text-[var(--text-muted)] sm:text-base">
+                  Browse by role, company, and topic to build focused preparation plans. Then contribute your own experience to strengthen the next batch.
                 </p>
               </div>
-            ))}
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                <Link href="/search" className="btn-primary w-full min-w-[11.5rem]">
+                  Search experiences
+                </Link>
+                <Link href="/submit" className="btn-secondary w-full min-w-[11.5rem]">
+                  Contribute now
+                </Link>
+              </div>
+            </div>
           </div>
         </section>
       </FadeIn>

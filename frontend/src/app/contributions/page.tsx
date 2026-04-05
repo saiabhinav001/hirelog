@@ -412,12 +412,13 @@ function ContributionCard({
           <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={() => setHistoryModal(true)}
-              className="btn-ghost text-xs px-2 py-1"
+              className="btn-secondary text-sm px-3"
               title="View edit history"
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
+              History
             </button>
           </div>
         </div>
@@ -428,7 +429,7 @@ function ContributionCard({
         </p>
 
         {/* Questions summary */}
-        <div className="mt-3 flex items-center gap-3 text-xs text-[var(--text-muted)]">
+        <div className="mt-3 flex flex-wrap items-center gap-2.5 text-xs text-[var(--text-muted)]">
           <span>
             {totalCount === 0 ? (
               "No questions yet"
@@ -470,34 +471,59 @@ function ContributionCard({
         )}
 
         {/* Actions */}
-        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4">
-          <button
-            onClick={() => setEditModal(true)}
-            className="btn-ghost text-xs"
-          >
-            Edit metadata
-          </button>
-          <button
-            onClick={() => setQuestionsModal(true)}
-            className="btn-ghost text-xs"
-          >
-            Add questions
-          </button>
-          <button
-            onClick={handleToggleVisibility}
-            className={`btn-ghost text-xs ${
-              isActive
-                ? "text-[var(--warning)] hover:text-[var(--warning)]"
-                : "text-[var(--success)] hover:text-[var(--success)]"
-            }`}
-          >
-            {isActive ? "Hide from archive" : "Restore to archive"}
-          </button>
-          {experience.created_at && (
-            <span className="ml-auto text-xs text-[var(--text-muted)]">
-              {new Date(experience.created_at).toLocaleDateString()}
-            </span>
-          )}
+        <div className="mt-4 border-t border-[var(--border)] pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--text-muted)]">
+              Actions
+            </p>
+            {experience.created_at && (
+              <span className="text-xs text-[var(--text-muted)]">
+                Added {new Date(experience.created_at).toLocaleDateString()}
+              </span>
+            )}
+          </div>
+
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <button
+              onClick={() => setEditModal(true)}
+              className="btn-secondary w-full justify-start px-3 text-sm"
+            >
+              <svg className="h-4 w-4 text-[var(--primary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 3.487a2.1 2.1 0 113 2.97L8.91 17.407a4 4 0 01-1.69 1.01l-2.51.75.75-2.51a4 4 0 011.01-1.69l10.392-10.48z" />
+              </svg>
+              Edit metadata
+            </button>
+
+            <button
+              onClick={() => setQuestionsModal(true)}
+              className="btn-secondary w-full justify-start px-3 text-sm"
+            >
+              <svg className="h-4 w-4 text-[var(--success)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v14m7-7H5" />
+              </svg>
+              Add questions
+            </button>
+
+            <button
+              onClick={handleToggleVisibility}
+              className="btn-secondary w-full justify-start px-3 text-sm"
+            >
+              <svg
+                className={`h-4 w-4 ${isActive ? "text-[var(--warning)]" : "text-[var(--success)]"}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.6}
+              >
+                {isActive ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18m-3.02-4.24A9.77 9.77 0 0112 19c-5.37 0-9.27-3.61-10.5-7 1-2.76 3.78-5.62 7.5-6.65m2.91-.26A10.97 10.97 0 0112 5c5.37 0 9.27 3.61 10.5 7a11.7 11.7 0 01-1.44 2.64M9.88 9.88a3 3 0 104.24 4.24" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.46 12C3.73 8.68 6.9 5 12 5s8.27 3.68 9.54 7c-1.27 3.32-4.44 7-9.54 7s-8.27-3.68-9.54-7zm9.54-3a3 3 0 100 6 3 3 0 000-6z" />
+                )}
+              </svg>
+              {isActive ? "Hide from archive" : "Restore to archive"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -584,6 +610,11 @@ export default function ContributionsPage() {
 
   const activeCount = contributions.filter((c) => c.is_active !== false).length;
   const hiddenCount = contributions.filter((c) => c.is_active === false).length;
+  const filterOptions = [
+    { key: "all" as const, label: "All", count: contributions.length },
+    { key: "active" as const, label: "Active", count: activeCount },
+    { key: "hidden" as const, label: "Hidden", count: hiddenCount },
+  ];
 
   return (
     <ProtectedRoute>
@@ -603,22 +634,38 @@ export default function ContributionsPage() {
 
         {/* Stats bar */}
         {!loading && contributions.length > 0 && (
-          <div className="mt-6 flex items-center gap-4 text-sm">
-            <span className="text-[var(--text-muted)]">
-              {contributions.length} total · {activeCount} active · {hiddenCount} hidden
-            </span>
-            <div className="flex items-center gap-1 ml-auto">
-              {(["all", "active", "hidden"] as const).map((f) => (
+          <div className="mt-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 sm:p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-[var(--text-muted)]">
+                {contributions.length} total · {activeCount} active · {hiddenCount} hidden
+              </p>
+              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--text-muted)]">
+                Filter visibility
+              </p>
+            </div>
+
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {filterOptions.map((option) => (
                 <button
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-                    filter === f
-                      ? "bg-[var(--primary)] text-white"
-                      : "bg-[var(--surface-muted)] text-[var(--text-muted)] hover:text-[var(--text)]"
+                  key={option.key}
+                  onClick={() => setFilter(option.key)}
+                  aria-pressed={filter === option.key}
+                  className={`inline-flex min-h-[44px] items-center justify-center gap-1 rounded-full border px-3 text-sm font-semibold transition-colors ${
+                    filter === option.key
+                      ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--on-primary)]"
+                      : "border-[var(--border)] bg-[var(--surface-muted)] text-[var(--text-secondary)] hover:border-[var(--border-hover)] hover:bg-[var(--surface)]"
                   }`}
                 >
-                  {f.charAt(0).toUpperCase() + f.slice(1)}
+                  <span>{option.label}</span>
+                  <span
+                    className={`inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-xs ${
+                      filter === option.key
+                        ? "bg-white/22 text-[var(--on-primary)]"
+                        : "bg-[var(--surface)] text-[var(--text-muted)]"
+                    }`}
+                  >
+                    {option.count}
+                  </span>
                 </button>
               ))}
             </div>
