@@ -88,7 +88,7 @@ export default function Home() {
             <p className="relative text-xs font-semibold uppercase tracking-[0.16em] text-[var(--primary)] sm:text-sm">
               Campus Placement Intelligence
             </p>
-            <h1 className="relative mt-3 max-w-3xl text-balance text-4xl font-semibold tracking-[-0.02em] sm:text-5xl lg:text-[3.35rem] lg:leading-[1.03]">
+            <h1 className="relative mt-3 max-w-3xl text-balance text-3xl font-semibold tracking-[-0.018em] sm:text-4xl lg:text-[2.9rem] lg:leading-[1.07]">
               Institutional interview memory that compounds every year.
             </h1>
             <p className="relative mt-4 max-w-2xl text-base leading-relaxed text-[var(--text-secondary)] sm:text-lg">
@@ -108,7 +108,7 @@ export default function Home() {
               {archiveSignals.map((signal) => (
                 <div key={signal.label} className="rounded-lg border border-[var(--border)]/80 bg-[var(--surface)]/90 px-3.5 py-3">
                   <dt className="text-xs uppercase tracking-[0.08em] text-[var(--text-muted)]">{signal.label}</dt>
-                  <dd className="mt-1 text-2xl font-semibold leading-none sm:text-[1.95rem]">{signal.value}</dd>
+                  <dd className="mt-1 text-xl font-semibold leading-none sm:text-2xl">{signal.value}</dd>
                 </div>
               ))}
             </dl>
@@ -155,7 +155,7 @@ export default function Home() {
       <FadeIn delay={0.08}>
         <section className="mt-12 sm:mt-14">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <h2 className="text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
+            <h2 className="text-balance text-2xl font-semibold tracking-tight sm:text-3xl">
               From single memory to shared preparation advantage
             </h2>
             <p className="max-w-xl text-sm text-[var(--text-muted)] sm:text-base">
@@ -187,7 +187,7 @@ export default function Home() {
       <FadeIn delay={0.14}>
         <section className="mt-14 sm:mt-16">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <h2 className="text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
+            <h2 className="text-balance text-2xl font-semibold tracking-tight sm:text-3xl">
               Built for trust, speed, and reuse
             </h2>
             <Link href="/dashboard" className="btn-ghost w-fit px-0 text-sm sm:text-base">
@@ -200,18 +200,14 @@ export default function Home() {
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
             {capabilityTiles.map((tile, index) => (
-              <article key={tile.title} className="card relative overflow-hidden p-5 sm:p-6">
-                <div
-                  className="pointer-events-none absolute -right-16 top-0 h-24 w-24 rounded-full opacity-80"
-                  style={{
-                    background:
-                      index % 2 === 0
-                        ? "radial-gradient(circle, var(--primary-soft) 0%, transparent 72%)"
-                        : "radial-gradient(circle, var(--success-soft) 0%, transparent 72%)",
-                  }}
-                />
-                <span className="badge">{tile.badge}</span>
-                <h3 className="mt-3 text-2xl font-semibold leading-tight text-balance">{tile.title}</h3>
+              <article key={tile.title} className="card p-5 sm:p-6">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="badge">{tile.badge}</span>
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-muted)] text-xs font-semibold text-[var(--text-muted)]">
+                    {index + 1}
+                  </span>
+                </div>
+                <h3 className="mt-3 text-xl font-semibold leading-tight text-balance sm:text-2xl">{tile.title}</h3>
                 <p className="mt-3 text-sm leading-relaxed text-[var(--text-muted)] sm:text-base">
                   {tile.description}
                 </p>
@@ -229,7 +225,7 @@ export default function Home() {
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">
                   Start Now
                 </p>
-                <h2 className="mt-2 text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
+                <h2 className="mt-2 text-balance text-2xl font-semibold tracking-tight sm:text-3xl">
                   Prepare from real evidence, not recycled guess lists.
                 </h2>
                 <p className="mt-3 max-w-2xl text-sm leading-relaxed text-[var(--text-muted)] sm:text-base">

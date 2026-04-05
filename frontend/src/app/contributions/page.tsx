@@ -644,13 +644,13 @@ export default function ContributionsPage() {
               </p>
             </div>
 
-            <div className="mt-3 grid grid-cols-3 gap-2">
+            <div className="mt-3 grid grid-cols-3 gap-2 sm:flex sm:flex-wrap sm:justify-end">
               {filterOptions.map((option) => (
                 <button
                   key={option.key}
                   onClick={() => setFilter(option.key)}
                   aria-pressed={filter === option.key}
-                  className={`inline-flex min-h-[44px] items-center justify-center gap-1 rounded-full border px-3 text-sm font-semibold transition-colors ${
+                  className={`inline-flex h-10 w-full items-center justify-center gap-1 rounded-full border px-3 text-[0.82rem] font-semibold transition-colors sm:h-9 sm:w-auto sm:min-w-[6.5rem] sm:text-sm ${
                     filter === option.key
                       ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--on-primary)]"
                       : "border-[var(--border)] bg-[var(--surface-muted)] text-[var(--text-secondary)] hover:border-[var(--border-hover)] hover:bg-[var(--surface)]"

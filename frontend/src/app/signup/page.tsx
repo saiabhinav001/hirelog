@@ -138,7 +138,7 @@ function OrDivider() {
         <div className="w-full border-t border-[var(--border)]" />
       </div>
       <div className="relative flex justify-center">
-        <span className="bg-[var(--bg)] px-3 text-xs text-[var(--text-disabled)]">or</span>
+        <span className="bg-[var(--surface)] px-3 text-xs text-[var(--text-disabled)]">or</span>
       </div>
     </div>
   );
@@ -186,92 +186,126 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="flex items-center justify-center px-5 sm:px-6 py-8 sm:py-12 min-h-[calc(100dvh-3.5rem)]">
-      <div className="w-full max-w-[380px]">
-        {/* Header */}
-        <div className="text-center mb-6 sm:mb-8">
-          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Join the Archive</h1>
-          <p className="mt-1.5 sm:mt-2 text-sm text-[var(--text-muted)]">
-            Create an account to access placement intelligence
-          </p>
-        </div>
+    <div className="page-container py-8 sm:py-12 lg:py-14 min-h-[calc(100dvh-3.5rem)]">
+      <div className="mx-auto grid w-full max-w-5xl gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <aside className="card hidden lg:flex lg:flex-col lg:justify-between p-7 xl:p-8">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.13em] text-[var(--primary)]">
+              Join HireLog
+            </p>
+            <h1 className="mt-3 text-[2rem] font-semibold leading-[1.1] tracking-tight text-balance">
+              Build your account and start learning from real interview evidence.
+            </h1>
+            <p className="mt-3 text-sm leading-relaxed text-[var(--text-muted)]">
+              You begin as a viewer and unlock contributor capabilities automatically after your first approved submission.
+            </p>
 
-        {/* Google */}
-        <button
-          className="btn-secondary w-full gap-2.5"
-          onClick={handleGoogle}
-          disabled={loading}
-        >
-          <svg className="h-4 w-4" viewBox="0 0 24 24">
-            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-          </svg>
-          Continue with Google
-        </button>
+            <ul className="mt-6 space-y-2.5 text-sm text-[var(--text-secondary)]">
+              <li className="flex items-start gap-2">
+                <span className="mt-1 h-2 w-2 rounded-full bg-[var(--primary)]" />
+                Keep your preparation history and saved lists in one place.
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="mt-1 h-2 w-2 rounded-full bg-[var(--success)]" />
+                Submit anonymously when needed while preserving trust controls.
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="mt-1 h-2 w-2 rounded-full bg-[var(--info)]" />
+                Add remembered questions later with clear source labeling.
+              </li>
+            </ul>
+          </div>
 
-        <OrDivider />
+          <div className="mt-6 rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] p-3.5">
+            <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+              Designed for clarity: balanced text sizes, controlled contrast, and readable form density across devices.
+            </p>
+          </div>
+        </aside>
 
-        {/* Email form */}
-        <form className="space-y-3.5 sm:space-y-4" onSubmit={handleSubmit}>
-          <FloatingField
-            id="signup-name"
-            label="Full name"
-            value={name}
-            onChange={setName}
-            required
-            autoComplete="name"
-            helper="Your real name — visible only on your profile page"
-          />
+        <section className="card p-5 sm:p-6 lg:p-8">
+          <div className="mb-6 sm:mb-7">
+            <h1 className="text-[1.65rem] sm:text-[1.9rem] font-semibold tracking-tight">Create account</h1>
+            <p className="mt-1.5 text-sm text-[var(--text-muted)]">
+              Join the archive and access campus placement intelligence.
+            </p>
+          </div>
 
-          <FloatingField
-            id="signup-email"
-            label="Email address"
-            type="email"
-            value={email}
-            onChange={setEmail}
-            required
-            autoComplete="email"
-            helper="Use your institutional or personal email"
-          />
-
-          <PasswordField
-            id="signup-password"
-            label="Password"
-            value={password}
-            onChange={setPassword}
-            autoComplete="new-password"
-            helper="Minimum 6 characters"
-          />
-
-          {error && (
-            <div className="rounded-lg bg-[var(--error-soft)] px-4 py-3 text-sm text-[var(--error)]">
-              {error}
-            </div>
-          )}
-
-          <button className="btn-primary w-full" disabled={loading}>
-            {loading ? "Creating account…" : "Create account"}
+          <button
+            className="btn-secondary w-full gap-2.5"
+            onClick={handleGoogle}
+            disabled={loading}
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+            </svg>
+            Continue with Google
           </button>
-        </form>
 
-        <p className="mt-4 text-center text-xs text-[var(--text-disabled)] leading-relaxed">
-          You&apos;ll start as a viewer. Your role upgrades automatically to contributor after your first submission.
-        </p>
+          <OrDivider />
 
-        {/* Footer */}
-        <p className="mt-5 sm:mt-6 text-center text-sm text-[var(--text-muted)]">
-          Already have an account?{" "}
-          <Link href="/login" className="text-[var(--primary)] hover:underline font-medium">
-            Sign in
-          </Link>
-        </p>
+          <form className="space-y-3.5 sm:space-y-4" onSubmit={handleSubmit}>
+            <FloatingField
+              id="signup-name"
+              label="Full name"
+              value={name}
+              onChange={setName}
+              required
+              autoComplete="name"
+              helper="Visible only on your profile by default"
+            />
 
-        {/* Trust */}
-        <p className="mt-6 sm:mt-8 text-center text-xs text-[var(--text-disabled)]">
-          Trusted by students across campuses.
-        </p>
+            <FloatingField
+              id="signup-email"
+              label="Email address"
+              type="email"
+              value={email}
+              onChange={setEmail}
+              required
+              autoComplete="email"
+              helper="Use your institutional or personal email"
+            />
+
+            <PasswordField
+              id="signup-password"
+              label="Password"
+              value={password}
+              onChange={setPassword}
+              autoComplete="new-password"
+              helper="Minimum 6 characters"
+            />
+
+            {error && (
+              <div className="rounded-lg bg-[var(--error-soft)] px-4 py-3 text-sm text-[var(--error)]">
+                {error}
+              </div>
+            )}
+
+            <button className="btn-primary w-full" disabled={loading}>
+              {loading ? "Creating account…" : "Create account"}
+            </button>
+          </form>
+
+          <p className="mt-4 text-center text-xs text-[var(--text-disabled)] leading-relaxed">
+            You&apos;ll start as a viewer. Role upgrades to contributor after your first submission.
+          </p>
+
+          <p className="mt-5 sm:mt-6 text-center text-sm text-[var(--text-muted)]">
+            Already have an account?{" "}
+            <Link href="/login" className="text-[var(--primary)] hover:underline font-medium">
+              Sign in
+            </Link>
+          </p>
+
+          <div className="mt-5 flex flex-wrap justify-center gap-2">
+            <span className="badge">Readable UI</span>
+            <span className="badge">Anonymous options</span>
+            <span className="badge">Audit-ready</span>
+          </div>
+        </section>
       </div>
     </div>
   );
