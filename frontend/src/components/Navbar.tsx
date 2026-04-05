@@ -279,12 +279,14 @@ export function Navbar() {
             </>
           ) : (
             <>
-              <Link href="/login" className="btn-ghost text-sm hidden md:inline-flex">
-                Sign in
-              </Link>
-              <Link href="/signup" className="btn-primary text-sm hidden md:inline-flex">
-                Sign up
-              </Link>
+              <div className="hidden md:flex items-center gap-2">
+                <Link href="/login" className="btn-ghost text-sm">
+                  Sign in
+                </Link>
+                <Link href="/signup" className="btn-primary text-sm">
+                  Sign up
+                </Link>
+              </div>
               {/* Mobile: hamburger (unauthenticated) */}
               <MobileMenu />
             </>
@@ -294,3 +296,4 @@ export function Navbar() {
     </header>
   );
 }
+

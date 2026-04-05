@@ -51,26 +51,32 @@
   --radius-md: 8px;
   --radius-lg: 12px;
 
-  /* Type ramp anchored to M3/Fluent defaults: labels 11/12/14, body 14/16, titles 16/22 */
-  --type-label-sm: clamp(0.6875rem, 0.675rem + 0.05vw, 0.75rem);
-  --type-label-md: clamp(0.75rem, 0.74rem + 0.06vw, 0.8125rem);
-  --type-label-lg: clamp(0.875rem, 0.86rem + 0.1vw, 0.9375rem);
+  /*
+    Device typography matrix (mobile-first):
+    - Material 3 tokens: label 11/12/14, body 14/16, title 16/22
+    - Fluent 2 web ramp: body 14/20, subtitle 16/22, title 24+
+    - Apple HIG readability baseline: default body around 17pt, min 11pt on iOS
+    - WCAG resize-text friendly via rem units and responsive token overrides
+  */
+  --type-label-sm: 0.75rem;   /* 12 */
+  --type-label-md: 0.8125rem; /* 13 */
+  --type-label-lg: 0.875rem;  /* 14 */
 
-  --type-body-sm: clamp(0.875rem, 0.86rem + 0.1vw, 0.9375rem);
-  --type-body-md: clamp(0.9375rem, 0.92rem + 0.14vw, 1rem);
-  --type-body-lg: clamp(1rem, 0.98rem + 0.18vw, 1.0625rem);
+  --type-body-sm: 0.9375rem;  /* 15 */
+  --type-body-md: 1rem;       /* 16 */
+  --type-body-lg: 1.0625rem;  /* 17 */
 
-  --type-title-sm: clamp(0.9375rem, 0.92rem + 0.12vw, 1rem);
-  --type-title-md: clamp(1rem, 0.98rem + 0.18vw, 1.125rem);
-  --type-title-lg: clamp(1.25rem, 1.2rem + 0.3vw, 1.375rem);
+  --type-title-sm: 1rem;      /* 16 */
+  --type-title-md: 1.125rem;  /* 18 */
+  --type-title-lg: 1.375rem;  /* 22 */
 
-  --type-headline-sm: clamp(1.5rem, 1.38rem + 0.6vw, 1.75rem);
-  --type-headline-md: clamp(1.75rem, 1.58rem + 0.9vw, 2rem);
-  --type-display-sm: clamp(2.25rem, 1.94rem + 1.5vw, 2.8125rem);
+  --type-headline-sm: 1.75rem; /* 28 */
+  --type-headline-md: 2rem;    /* 32 */
+  --type-display-sm: 2.5rem;   /* 40 */
 
-  --control-height: clamp(2.75rem, 2.7rem + 0.2vw, 2.875rem);
-  --control-height-compact: clamp(2.5rem, 2.42rem + 0.22vw, 2.75rem);
-  --icon-md: clamp(0.95rem, 0.9rem + 0.2vw, 1.06rem);
+  --control-height: 2.75rem;
+  --control-height-compact: 2.625rem;
+  --icon-md: 1rem;
 
   --type-body: var(--type-body-md);
   --type-caption: var(--type-label-sm);
@@ -80,6 +86,38 @@
   --type-h4: var(--type-title-lg);
   --type-h5: var(--type-title-md);
   --type-h6: var(--type-title-sm);
+}
+
+/* Tablet scale (>=640px) */
+@media (min-width: 640px) {
+  :root {
+    --type-body-lg: 1.125rem;   /* 18 */
+    --type-title-md: 1.1875rem; /* 19 */
+    --type-title-lg: 1.5rem;    /* 24 */
+    --type-headline-sm: 1.875rem; /* 30 */
+    --type-headline-md: 2.25rem;  /* 36 */
+    --type-display-sm: 2.75rem;   /* 44 */
+  }
+}
+
+/* Desktop scale (>=1024px) */
+@media (min-width: 1024px) {
+  :root {
+    --type-label-md: 0.875rem;   /* 14 */
+    --type-body-sm: 1rem;        /* 16 */
+    --type-body-md: 1.0625rem;   /* 17 */
+    --type-body-lg: 1.1875rem;   /* 19 */
+    --type-title-sm: 1.0625rem;  /* 17 */
+    --type-title-md: 1.25rem;    /* 20 */
+    --type-title-lg: 1.625rem;   /* 26 */
+    --type-headline-sm: 2rem;    /* 32 */
+    --type-headline-md: 2.5rem;  /* 40 */
+    --type-display-sm: 3.25rem;  /* 52 */
+
+    --control-height: 2.875rem;
+    --control-height-compact: 2.75rem;
+    --icon-md: 1.0625rem;
+  }
 }
 
 .dark {
