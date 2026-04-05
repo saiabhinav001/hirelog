@@ -141,7 +141,7 @@ export function SaveToListButton({
             role="dialog"
             aria-modal="false"
             aria-label="Save question to practice list"
-            className="absolute right-0 top-full mt-1 z-50 w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-lg sm:w-64"
+            className="fixed inset-x-3 bottom-3 z-50 max-h-[min(30rem,76dvh)] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-lg sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:mt-1 sm:w-64 sm:max-h-[min(20rem,60vh)]"
           >
             <div className="p-2 border-b border-[var(--border)]">
               <p className="text-sm font-medium text-[var(--text-muted)] px-2 py-1">

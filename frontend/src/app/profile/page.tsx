@@ -218,9 +218,9 @@ export default function ProfilePage() {
         ) : data ? (
           <>
             {/* Identity */}
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between lg:items-center">
               <div className="flex items-center gap-4">
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--primary)] text-xl font-bold text-white">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(145deg,var(--primary),var(--primary-hover))] text-xl font-bold text-white ring-2 ring-[var(--surface)] shadow-[0_8px_20px_rgba(31,86,214,0.28)]">
                   {(identity?.name || "U").charAt(0).toUpperCase()}
                 </div>
                 <div className="min-w-0">
@@ -314,11 +314,14 @@ export default function ProfilePage() {
 
             {/* ── Contribution Summary ─────────────────────────────────── */}
             <section className="mt-8">
-              <div className="flex items-baseline justify-between">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="text-lg font-semibold">Contribution Summary</h2>
                 {cs && cs.total_experiences > 0 && (
-                  <Link href="/contributions" className="text-xs text-[var(--primary)] hover:underline">
-                    Manage contributions →
+                  <Link href="/contributions" className="btn-secondary text-xs self-start sm:self-auto">
+                    Manage contributions
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                    </svg>
                   </Link>
                 )}
               </div>

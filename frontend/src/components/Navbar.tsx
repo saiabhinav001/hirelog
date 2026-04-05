@@ -45,10 +45,10 @@ function AvatarDropdown() {
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((prev) => !prev)}
-        className={`group flex h-10 w-10 items-center justify-center rounded-full border text-sm font-semibold transition-all ${
+        className={`group flex h-10 w-10 aspect-square items-center justify-center rounded-full border text-sm font-semibold tracking-[-0.01em] transition-all ${
           open
-            ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--on-primary)] shadow-[0_4px_14px_rgba(31,86,214,0.26)]"
-            : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--border-hover)] hover:shadow-[0_2px_8px_rgba(15,23,42,0.12)]"
+            ? "border-[var(--primary)] bg-[linear-gradient(145deg,var(--primary),var(--primary-hover))] text-[var(--on-primary)] shadow-[0_6px_16px_rgba(31,86,214,0.28)]"
+            : "border-[var(--border)] bg-[var(--primary-soft)] text-[var(--primary)] hover:border-[var(--border-hover)] hover:shadow-[0_2px_8px_rgba(15,23,42,0.12)]"
         }`}
         aria-expanded={open}
         aria-haspopup="menu"

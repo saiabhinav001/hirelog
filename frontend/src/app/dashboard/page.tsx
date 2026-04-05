@@ -71,6 +71,71 @@ interface AdminResponse {
   }>;
 }
 
+type FreshnessInfo = StatsResponse["data_freshness"];
+
+const relativeTimeFormatter = new Intl.RelativeTimeFormat("en", {
+  numeric: "auto",
+  style: "short",
+});
+
+function formatFreshnessRelative(data?: FreshnessInfo): string {
+  const secondsFromPayload =
+    typeof data?.freshness_seconds === "number" && Number.isFinite(data.freshness_seconds)
+      ? Math.max(0, Math.round(data.freshness_seconds))
+      : null;
+
+  const parsedGeneratedAt = data?.generated_at ? Date.parse(data.generated_at) : NaN;
+  const secondsFromGeneratedAt = Number.isNaN(parsedGeneratedAt)
+    ? null
+    : Math.max(0, Math.round((Date.now() - parsedGeneratedAt) / 1000));
+
+  const seconds = secondsFromPayload ?? secondsFromGeneratedAt;
+  if (seconds === null) {
+    return "updating";
+  }
+
+  const formatUnit = (value: number, unit: Intl.RelativeTimeFormatUnit) =>
+    relativeTimeFormatter.format(-value, unit);
+
+  if (seconds < 60) return formatUnit(seconds, "second");
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return formatUnit(minutes, "minute");
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return formatUnit(hours, "hour");
+
+  const days = Math.round(hours / 24);
+  if (days < 7) return formatUnit(days, "day");
+
+  const weeks = Math.round(days / 7);
+  if (weeks < 5) return formatUnit(weeks, "week");
+
+  const months = Math.round(days / 30);
+  if (months < 12) return formatUnit(months, "month");
+
+  const years = Math.round(days / 365);
+  return formatUnit(years, "year");
+}
+
+function formatFreshnessAbsolute(generatedAt?: string | null): string | null {
+  if (!generatedAt) {
+    return null;
+  }
+
+  const date = new Date(generatedAt);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // localStorage stale-while-revalidate cache
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,12 +231,44 @@ function LazySection({ children, fallback }: { children: React.ReactNode; fallba
 }
 
 function InfoTooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown, { passive: true });
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+    };
+  }, [open]);
+
   return (
-    <span className="relative group/tip inline-flex items-center ml-0.5 cursor-help">
-      <svg className="h-3 w-3 text-[var(--text-muted)] opacity-60 group-hover/tip:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
-      </svg>
-      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden w-max max-w-[220px] rounded bg-[var(--surface-elevated,#1e1e1e)] px-2.5 py-1.5 text-xs leading-snug text-[var(--text)] shadow-lg border border-[var(--border)] opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 text-center sm:block">
+    <span ref={wrapperRef} className="relative ml-0.5 inline-flex items-center group/tip">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="inline-flex cursor-help items-center rounded-full p-0.5 text-[var(--text-muted)] opacity-70 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]/45"
+        aria-label={text}
+        aria-expanded={open}
+      >
+        <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+        </svg>
+      </button>
+      <span
+        role="tooltip"
+        className={`absolute bottom-full left-1/2 z-50 mb-1.5 w-max max-w-[220px] -translate-x-1/2 rounded border border-[var(--border)] bg-[var(--surface-elevated,#1e1e1e)] px-2.5 py-1.5 text-center text-xs leading-snug text-[var(--text)] shadow-lg transition-opacity sm:group-hover/tip:opacity-100 sm:group-focus-within/tip:opacity-100 ${open ? "opacity-100" : "pointer-events-none opacity-0"}`}
+      >
         {text}
       </span>
     </span>
@@ -258,9 +355,10 @@ function CompanyBreakdownSection({
                     <span
                       key={`${company}-${topic}`}
                       className="badge relative group/badge cursor-default"
+                      tabIndex={0}
                     >
                       {topic} • {count}×
-                      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden w-max max-w-[220px] rounded bg-[var(--surface-elevated,#1e1e1e)] px-2.5 py-1.5 text-xs leading-snug text-[var(--text)] shadow-lg border border-[var(--border)] opacity-0 group-hover/badge:opacity-100 transition-opacity z-50 text-center sm:block">
+                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 w-max max-w-[220px] -translate-x-1/2 rounded border border-[var(--border)] bg-[var(--surface-elevated,#1e1e1e)] px-2.5 py-1.5 text-center text-xs leading-snug text-[var(--text)] opacity-0 shadow-lg transition-opacity group-hover/badge:opacity-100 group-focus-within/badge:opacity-100">
                         Frequency: number of experiences where this topic was present for this company/round.
                       </span>
                     </span>
@@ -313,6 +411,9 @@ export default function DashboardPage() {
   // Placement-cell admin analytics
   const [admin, setAdmin] = useState<AdminResponse | null>(null);
   const [adminLoading, setAdminLoading] = useState(true);
+
+  const freshnessRelative = formatFreshnessRelative(stats?.data_freshness);
+  const freshnessAbsolute = formatFreshnessAbsolute(stats?.data_freshness?.generated_at);
 
   // Track whether the initial parallel fetch was triggered
   const fetchedRef = useRef(false);
@@ -498,8 +599,8 @@ export default function DashboardPage() {
                 {stats.total_experiences} experience{stats.total_experiences !== 1 ? "s" : ""} analyzed across the institutional archive
               </p>
               <p className="mt-1 text-xs text-[var(--text-muted)] num-tabular">
-                Data freshness: {stats.data_freshness?.generated_at ? new Date(stats.data_freshness.generated_at).toLocaleString() : "updating"}
-                {typeof stats.data_freshness?.freshness_seconds === "number" ? ` (${stats.data_freshness.freshness_seconds}s ago)` : ""}
+                Data freshness: {freshnessRelative}
+                {freshnessAbsolute ? ` · ${freshnessAbsolute}` : ""}
               </p>
             </div>
           </div>
@@ -563,7 +664,7 @@ export default function DashboardPage() {
           {stats.contribution_impact?.experiences_submitted > 0 && (
             <div className="mt-6 p-4 rounded-lg bg-[var(--primary)]/10 border border-[var(--primary)]/20">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--primary)]/20">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--primary)]/20">
                   <svg className="h-5 w-5 text-[var(--primary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                   </svg>
@@ -760,11 +861,20 @@ export default function DashboardPage() {
 
           {/* Preparation CTA */}
           <div className="mt-8 p-5 sm:p-6 rounded-lg border border-dashed border-[var(--border)] text-center">
-            <p className="text-sm text-[var(--text-muted)]">
+            <p className="hidden text-sm text-[var(--text-muted)] sm:block">
               Raw Experience → AI Structuring → Semantic Discovery → Institutional Knowledge
             </p>
+            <div className="mx-auto flex max-w-xs flex-col items-center gap-1 text-sm text-[var(--text-muted)] sm:hidden">
+              <span>Raw Experience</span>
+              <span className="opacity-70">↓</span>
+              <span>AI Structuring</span>
+              <span className="opacity-70">↓</span>
+              <span>Semantic Discovery</span>
+              <span className="opacity-70">↓</span>
+              <span>Institutional Knowledge</span>
+            </div>
             <div className="mt-4 flex flex-col justify-center gap-3 sm:flex-row">
-              <Link href="/search" className="btn-ghost text-sm">
+              <Link href="/search" className="btn-secondary text-sm">
                 Search the archive
               </Link>
               <Link href="/practice" className="btn-primary text-sm">

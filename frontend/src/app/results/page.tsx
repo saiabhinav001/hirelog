@@ -306,7 +306,10 @@ function ResultsPageContent() {
           )}
         </div>
         <Link href="/search" className="btn-ghost text-sm self-start sm:self-auto">
-          ← Back to search
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+          </svg>
+          Back to search
         </Link>
       </div>
       </FadeIn>
@@ -348,6 +351,9 @@ function ResultsPageContent() {
               Try different filters or search terms.
             </p>
             <Link href="/search" className="btn-primary mt-4">
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+              </svg>
               Back to search
             </Link>
           </div>

@@ -644,14 +644,14 @@ export default function ContributionsPage() {
               </p>
             </div>
 
-            <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-1.5">
-              <div className="flex flex-wrap gap-1.5 sm:justify-end">
+            <div className="mt-3 flex justify-start sm:justify-end">
+              <div className="inline-flex max-w-full flex-wrap gap-1 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-1">
               {filterOptions.map((option) => (
                 <button
                   key={option.key}
                   onClick={() => setFilter(option.key)}
                   aria-pressed={filter === option.key}
-                  className={`inline-flex h-9 min-w-[5.6rem] flex-1 items-center justify-center gap-1 rounded-lg border px-2.5 text-[0.82rem] font-semibold transition-colors sm:h-8 sm:flex-none sm:text-[0.8rem] ${
+                  className={`inline-flex h-9 items-center justify-center gap-1 whitespace-nowrap rounded-lg border px-3 text-[0.82rem] font-semibold transition-colors sm:h-8 sm:text-[0.8rem] ${
                     filter === option.key
                       ? "border-[var(--primary)] bg-[var(--surface)] text-[var(--primary)] shadow-[inset_0_0_0_1px_var(--primary-soft)]"
                       : "border-transparent bg-transparent text-[var(--text-secondary)] hover:border-[var(--border)] hover:bg-[var(--surface)]"
