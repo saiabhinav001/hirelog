@@ -861,9 +861,21 @@ export default function DashboardPage() {
 
           {/* Preparation CTA */}
           <div className="mt-8 p-5 sm:p-6 rounded-lg border border-dashed border-[var(--border)] text-center">
-            <p className="hidden text-sm text-[var(--text-muted)] sm:block">
-              Raw Experience → AI Structuring → Semantic Discovery → Institutional Knowledge
-            </p>
+            <div className="hidden items-center justify-center gap-2 text-sm text-[var(--text-muted)] sm:flex">
+              <span>Raw Experience</span>
+              <svg className="h-3.5 w-3.5 opacity-70" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M6.5 10H13.5M13.5 10L10.5 7M13.5 10L10.5 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>AI Structuring</span>
+              <svg className="h-3.5 w-3.5 opacity-70" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M6.5 10H13.5M13.5 10L10.5 7M13.5 10L10.5 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>Semantic Discovery</span>
+              <svg className="h-3.5 w-3.5 opacity-70" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M6.5 10H13.5M13.5 10L10.5 7M13.5 10L10.5 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>Institutional Knowledge</span>
+            </div>
             <div className="mx-auto flex max-w-xs flex-col items-center gap-1 text-sm text-[var(--text-muted)] sm:hidden">
               <span>Raw Experience</span>
               <span className="opacity-70">↓</span>

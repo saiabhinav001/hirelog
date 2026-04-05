@@ -186,14 +186,14 @@ export default function Home() {
 
       <FadeIn delay={0.14}>
         <section className="mt-14 sm:mt-16">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <h2 className="text-balance text-2xl font-semibold tracking-tight sm:text-3xl">
               Built for trust, speed, and reuse
             </h2>
-            <Link href="/dashboard" className="btn-ghost w-fit px-0 text-sm sm:text-base">
+            <Link href="/dashboard" className="btn-secondary w-full sm:w-auto text-sm sm:text-base self-start sm:self-auto">
               View institutional dashboard
-              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <path d="M7 4L13 10L7 16" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+              <svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M6.5 10H13.5M13.5 10L10.5 7M13.5 10L10.5 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </Link>
           </div>

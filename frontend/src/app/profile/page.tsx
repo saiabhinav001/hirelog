@@ -365,11 +365,14 @@ export default function ProfilePage() {
 
             {/* ── Practice Activity ────────────────────────────────────── */}
             <section className="mt-8">
-              <div className="flex items-baseline justify-between">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="text-lg font-semibold">Practice Activity</h2>
                 {ps && ps.total_lists > 0 && (
-                  <Link href="/practice" className="text-xs text-[var(--primary)] hover:underline">
-                    View practice lists →
+                  <Link href="/practice" className="btn-secondary text-xs self-start sm:self-auto">
+                    View practice lists
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                    </svg>
                   </Link>
                 )}
               </div>

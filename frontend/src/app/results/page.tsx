@@ -360,7 +360,12 @@ function ResultsPageContent() {
         ) : hasResults ? (
           <>
           <StaggerContainer className="space-y-4">
-          {results.map((item, index) => (
+          {results.map((item, index) => {
+            const userProvidedCount = item.stats?.user_question_count ?? item.questions?.user_provided?.length ?? 0;
+            const aiExtractedCount = item.stats?.extracted_question_count ?? item.questions?.ai_extracted?.length ?? 0;
+            const showSourceBadge = userProvidedCount > 0 && aiExtractedCount > 0;
+
+            return (
             <StaggerItem key={`${item.id}-${index}`}>
             <div className="card p-5">
               {/* Header */}
@@ -475,14 +480,17 @@ function ResultsPageContent() {
                       .slice(0, 10)
                       .map((q, qIndex) => (
                       <li key={`${item.id}-q-${qIndex}`} className="flex items-start justify-between gap-2">
-                        <div className="flex items-start gap-2 flex-1 min-w-0">
-                          <span>• {q.question_text || q.question}</span>
-                          {q.source === "user" && (
+                        <div className="flex min-w-0 flex-1 items-start gap-2">
+                          <span className="mt-1 text-[var(--text-muted)]">•</span>
+                          <span className="min-w-0 flex-1">{q.question_text || q.question}</span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {showSourceBadge && q.source === "user" && (
                             <span className="shrink-0 badge badge-primary text-xs px-1.5 py-0.5 font-medium">
                               user
                             </span>
                           )}
-                          {q.source !== "user" && (
+                          {showSourceBadge && q.source !== "user" && (
                             <span className="shrink-0 badge text-xs px-1.5 py-0.5 font-medium">
                               ai
                             </span>
@@ -501,13 +509,15 @@ function ResultsPageContent() {
                             <span className="shrink-0 badge text-xs px-1.5 py-0.5">{q.topic}</span>
                           )}
                         </div>
-                        <SaveToListButton
-                          questionText={q.question_text || q.question}
-                          topic={q.topic || item.topics?.[0] || "General"}
-                          difficulty={item.difficulty}
-                          sourceExperienceId={item.id}
-                          sourceCompany={item.company}
-                        />
+                        <div className="shrink-0">
+                          <SaveToListButton
+                            questionText={q.question_text || q.question}
+                            topic={q.topic || item.topics?.[0] || "General"}
+                            difficulty={item.difficulty}
+                            sourceExperienceId={item.id}
+                            sourceCompany={item.company}
+                          />
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -515,7 +525,8 @@ function ResultsPageContent() {
               )}
             </div>
             </StaggerItem>
-          ))}
+          );
+          })}
           </StaggerContainer>
           <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs text-[var(--text-muted)] num-tabular">
