@@ -79,8 +79,25 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.ENV == "production"
 
+    @staticmethod
+    def _normalize_origin(origin: str) -> str:
+        value = origin.strip()
+        if not value:
+            return ""
+        if value == "*":
+            return value
+        return value.rstrip("/")
+
     def allowed_origins_list(self) -> list[str]:
-        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for origin in self.ALLOWED_ORIGINS.split(","):
+            value = self._normalize_origin(origin)
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        return normalized
 
     def placement_cell_emails_set(self) -> set[str]:
         return {

@@ -36,19 +36,49 @@ export default function SearchPage() {
 
   useEffect(() => {
     let mounted = true;
-    apiFetch<SearchFacetsResponse>("/api/search/facets", { method: "GET" })
-      .then((data) => {
-        if (mounted) {
-          setFacets(data);
-        }
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let idleId: number | null = null;
+
+    const loadFacets = () => {
+      apiFetch<SearchFacetsResponse>("/api/search/facets", {
+        method: "GET",
+        signal: controller.signal,
       })
-      .catch(() => {
-        if (mounted) {
-          setFacets(null);
-        }
-      });
+        .then((data) => {
+          if (mounted) {
+            setFacets(data);
+          }
+        })
+        .catch(() => {
+          if (mounted) {
+            setFacets(null);
+          }
+        });
+    };
+
+    // Search works without facets, so fetch these at idle for faster first paint.
+    if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+      idleId = (window as Window & {
+        requestIdleCallback: (cb: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      }).requestIdleCallback(() => {
+        loadFacets();
+      }, { timeout: 1200 });
+    } else {
+      timeoutId = setTimeout(loadFacets, 250);
+    }
+
     return () => {
       mounted = false;
+      controller.abort();
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+      if (idleId !== null && typeof window !== "undefined" && "cancelIdleCallback" in window) {
+        (window as Window & {
+          cancelIdleCallback: (id: number) => void;
+        }).cancelIdleCallback(idleId);
+      }
     };
   }, []);
 

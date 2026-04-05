@@ -1,6 +1,56 @@
 const rawBase = process.env.NEXT_PUBLIC_API_BASE_URL;
 const PROD_FALLBACK_API_BASE = "https://rockstar00-hirelog-backend.hf.space";
 const DEV_FALLBACK_API_BASE = "http://localhost:8000";
+const API_BASE_STORAGE_KEY = "hirelog_preferred_api_base";
+
+let preferredApiBaseMemory: string | null = null;
+
+function getPreferredApiBase(): string | null {
+  if (preferredApiBaseMemory) {
+    return preferredApiBaseMemory;
+  }
+
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const stored = window.localStorage.getItem(API_BASE_STORAGE_KEY);
+    preferredApiBaseMemory = normalizeApiBase(stored ?? undefined);
+    return preferredApiBaseMemory;
+  } catch {
+    return null;
+  }
+}
+
+function setPreferredApiBase(base: string) {
+  preferredApiBaseMemory = base;
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(API_BASE_STORAGE_KEY, base);
+  } catch {
+    // Ignore storage failures (private mode/quota).
+  }
+}
+
+function clearPreferredApiBase(base: string) {
+  if (preferredApiBaseMemory === base) {
+    preferredApiBaseMemory = null;
+  }
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    const stored = window.localStorage.getItem(API_BASE_STORAGE_KEY);
+    if (stored === base) {
+      window.localStorage.removeItem(API_BASE_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+}
 
 function normalizeApiBase(value: string | undefined): string | null {
   if (!value) return null;
@@ -11,6 +61,11 @@ function normalizeApiBase(value: string | undefined): string | null {
 
 function apiBaseCandidates(): string[] {
   const candidates: string[] = [];
+  const preferred = getPreferredApiBase();
+  if (preferred) {
+    candidates.push(preferred);
+  }
+
   const fromEnv = normalizeApiBase(rawBase);
   if (fromEnv) {
     candidates.push(fromEnv);
@@ -39,6 +94,8 @@ export async function apiFetch<T>(
   options: RequestInit,
   token?: string
 ): Promise<T> {
+  const method = (options.method ?? "GET").toUpperCase();
+
   const headers = new Headers(options.headers || {});
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
@@ -58,10 +115,19 @@ export async function apiFetch<T>(
         response = await fetch(`${base}${path}`, {
           ...options,
           headers,
-          cache: "no-store",
+          cache: method === "GET" ? "default" : "no-store",
         });
         break;
-      } catch {
+      } catch (error) {
+        const isNetworkOrCorsError = error instanceof TypeError;
+
+        // Fast-fail obvious bad endpoints (for example CORS-blocked env base)
+        // and move to the next candidate immediately.
+        if (isNetworkOrCorsError) {
+          clearPreferredApiBase(base);
+          break;
+        }
+
         if (attempt < MAX_RETRIES - 1) {
           const backoff = RETRY_BASE_MS * Math.pow(2, attempt);
           const jitter = Math.random() * backoff * 0.5;
@@ -87,6 +153,7 @@ export async function apiFetch<T>(
     }
 
     if (response.ok) {
+      setPreferredApiBase(base);
       return data as T;
     }
 

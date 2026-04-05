@@ -52,25 +52,25 @@
   --radius-lg: 12px;
 
   /* Material 3-inspired adaptive type roles */
-  --type-label-sm: clamp(0.72rem, 0.7rem + 0.08vw, 0.78rem);
-  --type-label-md: clamp(0.79rem, 0.76rem + 0.11vw, 0.86rem);
-  --type-label-lg: clamp(0.9rem, 0.87rem + 0.14vw, 0.98rem);
+  --type-label-sm: clamp(0.72rem, 0.71rem + 0.05vw, 0.76rem);
+  --type-label-md: clamp(0.79rem, 0.77rem + 0.08vw, 0.84rem);
+  --type-label-lg: clamp(0.86rem, 0.84rem + 0.1vw, 0.94rem);
 
-  --type-body-sm: clamp(0.88rem, 0.85rem + 0.12vw, 0.95rem);
-  --type-body-md: clamp(0.97rem, 0.93rem + 0.18vw, 1.08rem);
-  --type-body-lg: clamp(1.06rem, 1rem + 0.24vw, 1.2rem);
+  --type-body-sm: clamp(0.88rem, 0.86rem + 0.1vw, 0.94rem);
+  --type-body-md: clamp(0.95rem, 0.92rem + 0.14vw, 1rem);
+  --type-body-lg: clamp(1rem, 0.97rem + 0.18vw, 1.08rem);
 
-  --type-title-sm: clamp(1.02rem, 0.98rem + 0.2vw, 1.14rem);
-  --type-title-md: clamp(1.2rem, 1.14rem + 0.32vw, 1.4rem);
-  --type-title-lg: clamp(1.38rem, 1.28rem + 0.5vw, 1.7rem);
+  --type-title-sm: clamp(1rem, 0.98rem + 0.14vw, 1.08rem);
+  --type-title-md: clamp(1.12rem, 1.08rem + 0.22vw, 1.24rem);
+  --type-title-lg: clamp(1.28rem, 1.2rem + 0.4vw, 1.46rem);
 
-  --type-headline-sm: clamp(1.58rem, 1.4rem + 0.9vw, 2.12rem);
-  --type-headline-md: clamp(1.88rem, 1.62rem + 1.2vw, 2.62rem);
-  --type-display-sm: clamp(2.2rem, 1.8rem + 2vw, 3.2rem);
+  --type-headline-sm: clamp(1.44rem, 1.3rem + 0.72vw, 1.88rem);
+  --type-headline-md: clamp(1.68rem, 1.46rem + 1.02vw, 2.28rem);
+  --type-display-sm: clamp(1.94rem, 1.62rem + 1.5vw, 2.74rem);
 
-  --control-height: clamp(2.75rem, 2.62rem + 0.4vw, 3rem);
-  --control-height-compact: clamp(2.5rem, 2.4rem + 0.3vw, 2.75rem);
-  --icon-md: clamp(1rem, 0.95rem + 0.22vw, 1.14rem);
+  --control-height: clamp(2.625rem, 2.55rem + 0.24vw, 2.82rem);
+  --control-height-compact: clamp(2.35rem, 2.28rem + 0.22vw, 2.6rem);
+  --icon-md: clamp(0.95rem, 0.9rem + 0.2vw, 1.06rem);
 
   --type-body: var(--type-body-md);
   --type-caption: var(--type-label-sm);
@@ -151,8 +151,8 @@ body {
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  line-height: 1.62;
-  letter-spacing: -0.003em;
+  line-height: 1.6;
+  letter-spacing: -0.002em;
   font-variant-numeric: tabular-nums;
   overflow-x: hidden;
 }
@@ -197,8 +197,8 @@ a {
    ============================================ */
 
 h1, h2, h3, h4, h5, h6 {
-  font-weight: 620;
-  letter-spacing: -0.016em;
+  font-weight: 615;
+  letter-spacing: -0.014em;
 }
 
 h1 { font-size: var(--type-h1); line-height: 1.07; }
@@ -211,53 +211,12 @@ h6 { font-size: var(--type-h6); line-height: 1.34; }
 p,
 li {
   font-size: var(--type-body-md);
-  line-height: 1.62;
+  line-height: 1.58;
 }
 
 .text-xs {
   font-size: var(--type-caption) !important;
   line-height: 1.44 !important;
-}
-
-.text-sm {
-  font-size: var(--type-body-sm) !important;
-  line-height: 1.56 !important;
-}
-
-.text-base {
-  font-size: var(--type-body-md) !important;
-  line-height: 1.62 !important;
-}
-
-.text-lg {
-  font-size: var(--type-title-sm) !important;
-  line-height: 1.46 !important;
-}
-
-.text-xl {
-  font-size: var(--type-title-md) !important;
-  line-height: 1.34 !important;
-}
-
-.text-2xl {
-  font-size: var(--type-title-lg) !important;
-  line-height: 1.28 !important;
-}
-
-.text-3xl {
-  font-size: var(--type-headline-sm) !important;
-  line-height: 1.2 !important;
-}
-
-.text-4xl {
-  font-size: var(--type-headline-md) !important;
-  line-height: 1.14 !important;
-}
-
-.text-5xl,
-.text-6xl {
-  font-size: var(--type-display-sm) !important;
-  line-height: 1.06 !important;
 }
 
 [class*="text-[10px]"],
@@ -359,17 +318,19 @@ li {
     min-height: var(--control-height);
     background: var(--primary);
     color: var(--on-primary) !important;
-    border-radius: var(--radius-md);
-    padding-inline: clamp(1rem, 2.4vw, 1.25rem);
+    border-radius: 999px;
+    padding-inline: clamp(0.95rem, 2.2vw, 1.15rem);
     font-weight: 600;
     font-size: var(--type-label-lg);
-    line-height: 1.2;
-    letter-spacing: 0.005em;
+    line-height: 1.15;
+    letter-spacing: 0.003em;
     border: 1px solid transparent;
     transition: background-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
     cursor: pointer;
     position: relative;
     -webkit-tap-highlight-color: transparent;
+    white-space: nowrap;
+    box-shadow: 0 1px 2px rgba(29, 78, 216, 0.2);
   }
 
   .btn-primary:link,
@@ -381,7 +342,7 @@ li {
 
   .btn-primary:hover {
     background: var(--primary-hover);
-    box-shadow: 0 8px 18px rgba(29, 78, 216, 0.2);
+    box-shadow: 0 4px 12px rgba(29, 78, 216, 0.22);
     transform: translateY(-0.5px);
   }
 
@@ -402,16 +363,17 @@ li {
     min-height: var(--control-height);
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding-inline: clamp(1rem, 2.4vw, 1.25rem);
+    border-radius: 999px;
+    padding-inline: clamp(0.95rem, 2.2vw, 1.15rem);
     font-weight: 600;
     font-size: var(--type-label-lg);
-    line-height: 1.2;
-    letter-spacing: 0.004em;
+    line-height: 1.15;
+    letter-spacing: 0.003em;
     color: var(--text);
     transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
+    white-space: nowrap;
   }
 
   .btn-secondary:hover {
@@ -434,14 +396,15 @@ li {
     min-height: var(--control-height-compact);
     background: transparent;
     border: none;
-    border-radius: var(--radius-md);
-    padding-inline: 0.92rem;
+    border-radius: 999px;
+    padding-inline: 0.88rem;
     font-weight: 600;
-    font-size: var(--type-label-lg);
+    font-size: var(--type-label-md);
     color: var(--text-secondary);
     transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
+    white-space: nowrap;
   }
 
   .btn-ghost:hover {
@@ -468,7 +431,7 @@ li {
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface);
-  padding: 0 0.9rem;
+  padding: 0 0.85rem;
   font-size: var(--type-body-sm);
   line-height: 1.45;
   color: var(--text);
@@ -491,8 +454,8 @@ li {
 
 textarea.input-field {
   height: auto;
-  padding: 0.875rem;
-  min-height: 132px;
+  padding: 0.8rem;
+  min-height: 124px;
   resize: vertical;
 }
 
@@ -510,7 +473,7 @@ textarea.input-field {
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface);
-  padding: 1.2rem 0.9rem 0.44rem;
+  padding: 1.16rem 0.85rem 0.4rem;
   font-size: var(--type-body-sm);
   color: var(--text);
   line-height: 1.44;
@@ -533,7 +496,7 @@ textarea.input-field {
 
 .floating-group .floating-label {
   position: absolute;
-  left: 0.9rem;
+  left: 0.85rem;
   top: 50%;
   transform: translateY(-50%);
   font-size: var(--type-label-md);
@@ -544,7 +507,7 @@ textarea.input-field {
 
 .floating-group .floating-input:focus ~ .floating-label,
 .floating-group .floating-input:not(:placeholder-shown) ~ .floating-label {
-  top: 0.44rem;
+  top: 0.42rem;
   transform: translateY(0);
   font-size: var(--type-label-sm);
   color: var(--text-muted);
@@ -684,16 +647,16 @@ textarea:focus-visible {
   .btn-primary,
   .btn-secondary,
   .btn-ghost {
-    min-height: 48px;
+    min-height: 46px;
   }
 
   .input-field {
-    min-height: 48px;
-    padding: 0 0.92rem;
+    min-height: 46px;
+    padding: 0 0.85rem;
   }
 
   .floating-group .floating-input {
-    height: 48px;
+    height: 46px;
   }
 
   input[type="checkbox"],
