@@ -42,11 +42,11 @@ function HorizontalBars({ data, empty }: { data: Record<string, number>; empty: 
     <div className="space-y-2">
       {entries.map(([label, value]) => (
         <div key={label} className="flex items-center gap-3">
-          <span className="w-28 text-xs text-[var(--text-secondary)] truncate">{label}</span>
+          <span className="w-24 sm:w-28 text-xs text-[var(--text-secondary)] truncate">{label}</span>
           <div className="flex-1 h-4 rounded bg-[var(--surface-muted)] overflow-hidden">
             <div className="h-full bg-[var(--primary)]" style={{ width: `${Math.max(6, Math.round((value / max) * 100))}%` }} />
           </div>
-          <span className="text-xs text-[var(--text-muted)] w-8 text-right stat-value">{value}</span>
+          <span className="text-xs text-[var(--text-muted)] w-7 sm:w-8 text-right stat-value">{value}</span>
         </div>
       ))}
     </div>
@@ -202,13 +202,13 @@ export default function PlacementCellPage() {
 
   return (
     <ProtectedRoute requiredRole="placement_cell">
-      <div className="page-container py-12">
-        <div className="flex items-center justify-between gap-4">
+      <div className="page-container py-10 sm:py-12">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
           <div>
-            <h1 className="text-2xl font-semibold">Placement Cell Operations</h1>
+            <h1 className="text-2xl sm:text-3xl font-semibold">Placement Cell Operations</h1>
             <p className="text-sm text-[var(--text-muted)] mt-1">Operational analytics for moderation, quality, and readiness tracking.</p>
           </div>
-          <Link href="/dashboard" className="btn-secondary text-sm">Back to Dashboard</Link>
+          <Link href="/dashboard" className="btn-secondary text-sm w-full sm:w-auto text-center">Back to Dashboard</Link>
         </div>
 
         {loading ? (
@@ -392,7 +392,7 @@ export default function PlacementCellPage() {
               </p>
               {data.moderation.failed_examples.length ? (
                 <div className="mt-4 overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full min-w-[36rem] text-sm">
                     <thead>
                       <tr className="text-left text-[var(--text-muted)] border-b border-[var(--border)]">
                         <th className="py-2 pr-3">Experience</th>
@@ -486,7 +486,7 @@ export default function PlacementCellPage() {
                 </div>
               ) : queueRows.length ? (
                 <div className="mt-4 overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full min-w-[44rem] text-sm">
                     <thead>
                       <tr className="text-left text-[var(--text-muted)] border-b border-[var(--border)]">
                         <th className="py-2 pr-3">Experience</th>

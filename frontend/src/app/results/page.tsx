@@ -282,12 +282,12 @@ function ResultsPageContent() {
   }, [canGoNext, searchMeta.nextCursor, pushWithCursor]);
 
   return (
-    <div className="page-container py-12">
+    <div className="page-container py-10 sm:py-12">
       {/* Header */}
       <FadeIn>
-      <div className="flex items-baseline justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-baseline sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Results</h1>
+          <h1 className="text-2xl sm:text-3xl font-semibold">Results</h1>
           <p className="mt-1 text-[var(--text-muted)] num-tabular" aria-live="polite">
             {isLoading
               ? "Searching..."
@@ -305,7 +305,7 @@ function ResultsPageContent() {
             </p>
           )}
         </div>
-        <Link href="/search" className="btn-ghost text-sm">
+        <Link href="/search" className="btn-ghost text-sm self-start sm:self-auto">
           ← Back to search
         </Link>
       </div>
@@ -358,7 +358,7 @@ function ResultsPageContent() {
             <StaggerItem key={`${item.id}-${index}`}>
             <div className="card p-5">
               {/* Header */}
-              <div className="flex items-start justify-between gap-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <h2 className="text-lg font-semibold">
                     {item.company}
@@ -472,17 +472,17 @@ function ResultsPageContent() {
                         <div className="flex items-start gap-2 flex-1 min-w-0">
                           <span>• {q.question_text || q.question}</span>
                           {q.source === "user" && (
-                            <span className="shrink-0 text-xs px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-medium">
+                            <span className="shrink-0 badge badge-primary text-xs px-1.5 py-0.5 font-medium">
                               user
                             </span>
                           )}
                           {q.source !== "user" && (
-                            <span className="shrink-0 text-xs px-1.5 py-0.5 rounded-full bg-violet-500/10 text-violet-400 font-medium">
+                            <span className="shrink-0 badge text-xs px-1.5 py-0.5 font-medium">
                               ai
                             </span>
                           )}
                           {q.added_later && (
-                            <span className="shrink-0 text-xs px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-400 font-medium">
+                            <span className="shrink-0 badge badge-success text-xs px-1.5 py-0.5 font-medium">
                               added
                             </span>
                           )}
@@ -511,7 +511,7 @@ function ResultsPageContent() {
             </StaggerItem>
           ))}
           </StaggerContainer>
-          <div className="flex items-center justify-between pt-2">
+          <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs text-[var(--text-muted)] num-tabular">
               Showing {rangeStart}-{rangeEnd} of {searchMeta.totalCount}
             </p>
@@ -547,7 +547,7 @@ export default function ResultsPage() {
   return (
     <Suspense
       fallback={
-        <div className="page-container py-12">
+        <div className="page-container py-10 sm:py-12">
           <div>
             <h1 className="text-2xl font-semibold">Results</h1>
             <p className="mt-1 text-[var(--text-muted)]">Searching...</p>

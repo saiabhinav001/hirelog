@@ -193,7 +193,7 @@ export default function ProfilePage() {
 
   return (
     <ProtectedRoute>
-      <div className="page-container py-12">
+      <div className="page-container py-10 sm:py-12">
         {loading ? (
           <div className="space-y-6">
             <div className="flex items-center gap-4">
@@ -256,7 +256,7 @@ export default function ProfilePage() {
                           </svg>
                         </button>
                       ) : (
-                        <span className="text-[10px] text-[var(--text-muted)] bg-[var(--surface-muted)] px-2 py-0.5 rounded-full">
+                        <span className="text-xs text-[var(--text-muted)] bg-[var(--surface-muted)] px-2 py-0.5 rounded-full">
                           Editable {nextEligible}
                         </span>
                       )}
@@ -289,7 +289,7 @@ export default function ProfilePage() {
             </div>
 
             {/* Name cooldown trust microcopy */}
-            <p className="mt-2 text-[10px] text-[var(--text-muted)]">
+            <p className="mt-2 text-xs text-[var(--text-muted)]">
               For trust and accountability, name changes are limited to once every 30 days.
             </p>
 

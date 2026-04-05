@@ -80,9 +80,9 @@ export default function SearchPage() {
   const activeFilters = [company, role, year, topic, difficulty].filter(Boolean).length;
 
   return (
-    <div className="page-container py-12">
-      <div className="max-w-2xl">
-        <h1 className="text-2xl font-semibold">Search the Archive</h1>
+    <div className="page-container py-10 sm:py-12">
+      <div className="max-w-3xl">
+        <h1 className="text-2xl sm:text-3xl font-semibold">Search the Archive</h1>
         <p className="mt-2 text-[var(--text-muted)]">
           Search by meaning across the archive. Describe what you are looking for and the system intelligently blends semantic and lexical evidence.
         </p>
@@ -93,7 +93,7 @@ export default function SearchPage() {
         )}
       </div>
 
-      <form onSubmit={handleSearch} className="mt-8 max-w-2xl">
+      <form onSubmit={handleSearch} className="mt-8 max-w-3xl">
         {/* Search input */}
         <div className="relative">
           <input
@@ -114,7 +114,7 @@ export default function SearchPage() {
           </svg>
         </div>
 
-        <div className="mt-4 flex items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <span className="text-xs text-[var(--text-muted)] hidden sm:inline">
             Intelligent mode: semantic ranking with automatic keyword fallback
           </span>

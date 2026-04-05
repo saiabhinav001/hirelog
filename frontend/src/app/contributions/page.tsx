@@ -64,14 +64,14 @@ function EditMetadataModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="card w-full max-w-md p-6 space-y-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.42)] p-4">
+      <div className="card w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto p-5 sm:p-6 space-y-4">
         <h3 className="text-lg font-semibold">Edit Metadata</h3>
         <p className="text-xs text-[var(--text-muted)]">
           Changes are tracked in the edit history for auditability.
         </p>
-        <div className="rounded-md bg-blue-500/10 border border-blue-500/20 px-3 py-2">
-          <p className="text-[11px] text-blue-300 leading-relaxed">
+        <div className="rounded-md bg-[var(--primary-soft)] border border-[var(--primary)]/25 px-3 py-2">
+          <p className="text-xs text-[var(--primary)] leading-relaxed">
             <strong>🔒 Original experience text is locked.</strong>{" "}
             The AI-extracted narrative, questions, and summary cannot be edited.
             This preserves the integrity of the institutional record. You can
@@ -218,15 +218,15 @@ function AddQuestionsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="card w-full max-w-lg p-6 space-y-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.42)] p-4">
+      <div className="card w-full max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto p-5 sm:p-6 space-y-4">
         <h3 className="text-lg font-semibold">Add Remembered Questions</h3>
         <p className="text-xs text-[var(--text-muted)]">
           Enter one question per line. Questions are saved instantly — topic classification
           happens in the background.
         </p>
-        <div className="rounded-md bg-green-500/10 border border-green-500/20 px-3 py-2">
-          <p className="text-[11px] text-green-300 leading-relaxed">
+        <div className="rounded-md bg-[var(--success-soft)] border border-[var(--success)]/25 px-3 py-2">
+          <p className="text-xs text-[var(--success)] leading-relaxed">
             <strong>⚡ Instant save.</strong>{" "}
             Questions are written to the archive immediately.
             NLP classification and search indexing run in the background — you can navigate away.
@@ -297,8 +297,8 @@ function EditHistoryPanel({ experience, onClose }: { experience: Experience; onC
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="card w-full max-w-md p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.42)] p-4">
+      <div className="card w-full max-w-md p-5 sm:p-6 space-y-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <h3 className="text-lg font-semibold">Edit History</h3>
         {history.length === 0 ? (
           <p className="text-sm text-[var(--text-muted)]">No edits have been made to this contribution.</p>
@@ -443,13 +443,13 @@ function ContributionCard({
             )}
           </span>
           {nlpStatus === "pending" && (
-            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 font-medium">
+            <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 font-medium">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
               AI processing
             </span>
           )}
           {nlpStatus === "failed" && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 font-medium">
+            <span className="text-xs px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 font-medium">
               AI enrichment failed
             </span>
           )}
@@ -494,7 +494,7 @@ function ContributionCard({
             {isActive ? "Hide from archive" : "Restore to archive"}
           </button>
           {experience.created_at && (
-            <span className="ml-auto text-[10px] text-[var(--text-muted)]">
+            <span className="ml-auto text-xs text-[var(--text-muted)]">
               {new Date(experience.created_at).toLocaleDateString()}
             </span>
           )}
@@ -587,7 +587,7 @@ export default function ContributionsPage() {
 
   return (
     <ProtectedRoute>
-      <div className="page-container py-12">
+      <div className="page-container py-10 sm:py-12">
         {/* Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-baseline sm:justify-between">
           <div>

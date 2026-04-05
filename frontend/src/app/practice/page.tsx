@@ -100,8 +100,8 @@ function CreateListModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="card w-full max-w-md p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.42)] p-4">
+      <div className="card w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto p-5 sm:p-6">
         <h2 className="text-lg font-semibold">Create practice list</h2>
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
@@ -166,8 +166,8 @@ function AddQuestionModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="card w-full max-w-lg p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.42)] p-4">
+      <div className="card w-full max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto p-5 sm:p-6">
         <h2 className="text-lg font-semibold">Add question to {listName}</h2>
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
@@ -274,7 +274,7 @@ function QuestionCard({
         </div>
         <button
           onClick={onDelete}
-          className="shrink-0 p-1 text-[var(--text-muted)] hover:text-[var(--error)] opacity-0 group-hover:opacity-100 transition-opacity"
+          className="shrink-0 p-1 text-[var(--text-muted)] hover:text-[var(--error)] opacity-70 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
           aria-label="Delete question"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -472,7 +472,7 @@ function ListDetail({
         ← Back to lists
       </button>
 
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">{list.name}</h1>
           <p className="mt-1 text-[var(--text-muted)]">
@@ -598,7 +598,7 @@ export default function PracticePage() {
 
   return (
     <ProtectedRoute>
-      <div className="page-container py-12">
+      <div className="page-container py-10 sm:py-12">
         {selectedList ? (
           <ListDetail
             list={selectedList}
@@ -616,7 +616,7 @@ export default function PracticePage() {
           />
         ) : (
           <>
-            <div className="flex items-baseline justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-baseline sm:justify-between">
               <div>
                 <h1 className="text-2xl font-semibold">Practice Lists</h1>
                 <p className="mt-1 text-[var(--text-muted)]">

@@ -88,9 +88,9 @@ export default function SubmitPage() {
   }
 
   return (
-    <div className="page-container py-12">
+    <div className="page-container py-10 sm:py-12">
       <div className="max-w-2xl">
-        <h1 className="text-2xl font-semibold">Contribute to the Archive</h1>
+        <h1 className="text-2xl sm:text-3xl font-semibold">Contribute to the Archive</h1>
         <p className="mt-2 text-[var(--text-muted)]">
           Share your interview experience to build institutional knowledge for future batches.
           AI will automatically extract additional questions, classify topics, and make it discoverable in the background.
@@ -199,7 +199,7 @@ export default function SubmitPage() {
         <div className="p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)] space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-sm font-medium">Contribution Identity</p>
-            <Link href="/profile" className="text-[10px] text-[var(--primary)] hover:underline">
+            <Link href="/profile" className="text-xs text-[var(--primary)] hover:underline">
               Edit name in Profile →
             </Link>
           </div>
@@ -238,7 +238,7 @@ export default function SubmitPage() {
           </div>
         </div>
         {!isAnonymous && (
-          <p className="text-[10px] text-[var(--text-muted)] -mt-4">
+          <p className="text-xs text-[var(--text-muted)] -mt-4">
             Your public display name is set in your profile. Future name changes do not update past submissions.
           </p>
         )}
@@ -292,7 +292,7 @@ export default function SubmitPage() {
 
         {/* Performance note */}
         <div className="rounded-md bg-blue-500/10 border border-blue-500/20 px-3 py-2">
-          <p className="text-[11px] text-blue-300 leading-relaxed">
+          <p className="text-xs text-blue-300 leading-relaxed">
             <strong>⚡ Instant save.</strong>{" "}
             Your experience and questions are saved immediately.
             AI extraction, topic classification, and summary generation run in the background —

@@ -171,7 +171,7 @@ function InfoTooltip({ text }: { text: string }) {
       <svg className="h-3 w-3 text-[var(--text-muted)] opacity-60 group-hover/tip:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
       </svg>
-      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-max max-w-[200px] rounded bg-[var(--surface-elevated,#1e1e1e)] px-2.5 py-1.5 text-[10px] leading-snug text-[var(--text-primary)] shadow-lg border border-[var(--border)] opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 text-center">
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden w-max max-w-[220px] rounded bg-[var(--surface-elevated,#1e1e1e)] px-2.5 py-1.5 text-xs leading-snug text-[var(--text)] shadow-lg border border-[var(--border)] opacity-0 group-hover/tip:opacity-100 transition-opacity z-50 text-center sm:block">
         {text}
       </span>
     </span>
@@ -180,7 +180,7 @@ function InfoTooltip({ text }: { text: string }) {
 
 function StatsSkeleton() {
   return (
-    <div className="grid gap-3 sm:grid-cols-3">
+    <div className="grid gap-3 sm:gap-4 sm:grid-cols-3">
       {[1, 2, 3].map((i) => (
         <div key={i} className="skeleton skeleton-card" />
       ))}
@@ -260,7 +260,7 @@ function CompanyBreakdownSection({
                       className="badge relative group/badge cursor-default"
                     >
                       {topic} • {count}×
-                      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-max max-w-[200px] rounded bg-[var(--surface-elevated,#1e1e1e)] px-2.5 py-1.5 text-[10px] leading-snug text-[var(--text)] shadow-lg border border-[var(--border)] opacity-0 group-hover/badge:opacity-100 transition-opacity z-50 text-center">
+                      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden w-max max-w-[220px] rounded bg-[var(--surface-elevated,#1e1e1e)] px-2.5 py-1.5 text-xs leading-snug text-[var(--text)] shadow-lg border border-[var(--border)] opacity-0 group-hover/badge:opacity-100 transition-opacity z-50 text-center sm:block">
                         Frequency: number of experiences where this topic was present for this company/round.
                       </span>
                     </span>
@@ -457,7 +457,7 @@ export default function DashboardPage() {
   return (
     <ProtectedRoute>
       {statsLoading ? (
-        <div className="page-container py-12">
+        <div className="page-container py-10 sm:py-12">
           <div className="skeleton skeleton-heading w-40" />
           <div className="mt-2 skeleton skeleton-text w-64" />
           <div className="mt-8">
@@ -465,7 +465,7 @@ export default function DashboardPage() {
           </div>
         </div>
       ) : statsError ? (
-        <div className="page-container py-12">
+        <div className="page-container py-10 sm:py-12">
           <div className="card p-8 text-center max-w-md mx-auto">
             <svg className="h-10 w-10 text-[var(--text-muted)] mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
@@ -477,7 +477,7 @@ export default function DashboardPage() {
           </div>
         </div>
       ) : !stats || stats.total_experiences === 0 ? (
-        <div className="page-container py-12">
+        <div className="page-container py-10 sm:py-12">
           <div className="card p-8 text-center max-w-md mx-auto">
             <h2 className="text-xl font-semibold">No data yet</h2>
             <p className="mt-2 text-[var(--text-muted)]">
@@ -489,7 +489,7 @@ export default function DashboardPage() {
           </div>
         </div>
       ) : (
-        <div className="page-container py-12">
+        <div className="page-container py-10 sm:py-12">
           {/* Header */}
           <div className="flex items-baseline justify-between">
             <div>
@@ -511,7 +511,7 @@ export default function DashboardPage() {
                 <h2 className="text-base font-semibold">Placement Cell Command Center</h2>
                 <div className="flex items-center gap-2">
                   <span className="badge badge-primary">Role: placement_cell</span>
-                  <Link href="/placement-cell" className="btn-secondary h-8 px-3 text-xs">
+                  <Link href="/placement-cell" className="btn-secondary text-sm px-3">
                     Open full view
                   </Link>
                 </div>
@@ -521,7 +521,7 @@ export default function DashboardPage() {
                 <SectionSkeleton height="h-36" />
               ) : admin ? (
                 <>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="mt-4 grid gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <div className="stat-card">
                       <p className="text-xs text-[var(--text-muted)] uppercase tracking-wide">Sampled</p>
                       <p className="mt-1 text-2xl font-semibold stat-value">{admin.archive_overview.total_sampled}</p>
@@ -579,7 +579,7 @@ export default function DashboardPage() {
           )}
 
           {/* Stats - Tier 1, already loaded */}
-          <div className="mt-6 grid gap-3 sm:grid-cols-3">
+          <div className="mt-6 grid gap-3 sm:gap-4 sm:grid-cols-3">
             <div className="stat-card">
               <p className="text-xs text-[var(--text-muted)] uppercase tracking-wide inline-flex items-center gap-0.5">
                 Total
@@ -759,11 +759,11 @@ export default function DashboardPage() {
           )}
 
           {/* Preparation CTA */}
-          <div className="mt-8 p-6 rounded-lg border border-dashed border-[var(--border)] text-center">
+          <div className="mt-8 p-5 sm:p-6 rounded-lg border border-dashed border-[var(--border)] text-center">
             <p className="text-sm text-[var(--text-muted)]">
               Raw Experience → AI Structuring → Semantic Discovery → Institutional Knowledge
             </p>
-            <div className="mt-4 flex justify-center gap-3">
+            <div className="mt-4 flex flex-col justify-center gap-3 sm:flex-row">
               <Link href="/search" className="btn-ghost text-sm">
                 Search the archive
               </Link>

@@ -121,7 +121,7 @@ export function SaveToListButton({
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--primary)] hover:bg-[var(--primary-soft)] transition-colors"
+        className="p-2 sm:p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--primary)] hover:bg-[var(--primary-soft)] transition-colors"
         title="Save to practice list"
         aria-label={`Save question to practice list: ${questionText.slice(0, 80)}`}
         aria-haspopup="dialog"
@@ -135,16 +135,16 @@ export function SaveToListButton({
 
       {isOpen && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} aria-hidden="true" />
+          <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setIsOpen(false)} aria-hidden="true" />
           <div
             id={panelId}
             role="dialog"
             aria-modal="false"
             aria-label="Save question to practice list"
-            className="absolute right-0 top-full mt-1 z-50 w-64 rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-lg"
+            className="absolute right-0 top-full mt-1 z-50 w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-lg sm:w-64"
           >
             <div className="p-2 border-b border-[var(--border)]">
-              <p className="text-xs font-medium text-[var(--text-muted)] px-2 py-1">
+              <p className="text-sm font-medium text-[var(--text-muted)] px-2 py-1">
                 Save to practice list
               </p>
             </div>
@@ -158,7 +158,7 @@ export function SaveToListButton({
                 Loading...
               </div>
             ) : (
-              <div className="max-h-48 overflow-y-auto">
+              <div className="max-h-[min(20rem,60vh)] overflow-y-auto">
                 {lists.length === 0 && !showNewList ? (
                   <div className="p-3 text-center">
                     <p className="text-sm text-[var(--text-muted)]">No lists yet</p>
@@ -179,7 +179,7 @@ export function SaveToListButton({
                         type="button"
                         onClick={() => handleSaveToList(list.id)}
                         disabled={saving !== null}
-                        className="w-full px-3 py-2 text-left text-sm hover:bg-[var(--surface-muted)] flex items-center justify-between disabled:opacity-50"
+                        className="w-full px-3 py-2.5 text-left text-sm hover:bg-[var(--surface-muted)] flex items-center justify-between disabled:opacity-50"
                         aria-label={`Save question to list ${list.name}`}
                       >
                         <span>{list.name}</span>
@@ -198,7 +198,7 @@ export function SaveToListButton({
                 {showNewList ? (
                   <div className="flex gap-2">
                     <input
-                      className="input-field flex-1 text-sm !h-8"
+                      className="input-field flex-1 text-sm !h-9"
                       placeholder="List name"
                       value={newListName}
                       onChange={(e) => setNewListName(e.target.value)}
@@ -209,7 +209,7 @@ export function SaveToListButton({
                       type="button"
                       onClick={handleCreateList}
                       disabled={!newListName.trim() || saving !== null}
-                      className="btn-primary text-xs !h-8"
+                      className="btn-primary text-sm !h-9"
                       aria-label="Create list and save question"
                     >
                       {saving === "new" ? "..." : "Add"}
