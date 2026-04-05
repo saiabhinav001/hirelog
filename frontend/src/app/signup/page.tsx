@@ -177,7 +177,7 @@ export default function SignupPage() {
 
             <OutlinedField
               id="signup-email"
-              label="Email"
+              label="Email address"
               type="email"
               value={email}
               onChange={setEmail}
