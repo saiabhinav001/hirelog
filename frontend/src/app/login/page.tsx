@@ -199,7 +199,7 @@ export default function LoginPage() {
 
         {/* Google */}
         <button
-          className="btn-secondary w-full gap-2.5 !h-11 sm:!h-10"
+          className="btn-secondary w-full gap-2.5"
           onClick={handleGoogle}
           disabled={loading}
         >
@@ -241,7 +241,7 @@ export default function LoginPage() {
             </div>
           )}
 
-          <button className="btn-primary w-full !h-11 sm:!h-10" disabled={loading}>
+          <button className="btn-primary w-full" disabled={loading}>
             {loading ? "Signing in…" : "Sign in"}
           </button>
         </form>
@@ -255,7 +255,7 @@ export default function LoginPage() {
         </p>
 
         {/* Trust */}
-        <p className="mt-6 sm:mt-8 text-center text-[11px] text-[var(--text-disabled)]">
+        <p className="mt-6 sm:mt-8 text-center text-xs text-[var(--text-disabled)]">
           Trusted by students across campuses.
         </p>
       </div>

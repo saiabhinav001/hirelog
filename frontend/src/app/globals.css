@@ -46,13 +46,13 @@
   --radius-lg: 12px;
 
   /* Material-inspired fluid type roles (Major Second based) */
-  --type-label-sm: clamp(0.75rem, 0.73rem + 0.08vw, 0.8125rem);
-  --type-label-md: clamp(0.8125rem, 0.79rem + 0.14vw, 0.875rem);
-  --type-label-lg: clamp(0.875rem, 0.85rem + 0.22vw, 0.9375rem);
+  --type-label-sm: clamp(0.75rem, 0.73rem + 0.1vw, 0.8125rem);
+  --type-label-md: clamp(0.875rem, 0.85rem + 0.12vw, 0.9375rem);
+  --type-label-lg: clamp(0.9375rem, 0.9rem + 0.16vw, 1rem);
 
-  --type-body-sm: clamp(0.875rem, 0.85rem + 0.16vw, 0.9375rem);
-  --type-body-md: clamp(0.9375rem, 0.9rem + 0.2vw, 1rem);
-  --type-body-lg: clamp(1rem, 0.96rem + 0.28vw, 1.125rem);
+  --type-body-sm: clamp(0.9375rem, 0.91rem + 0.14vw, 1rem);
+  --type-body-md: clamp(1rem, 0.98rem + 0.12vw, 1.0625rem);
+  --type-body-lg: clamp(1.0625rem, 1.03rem + 0.2vw, 1.1875rem);
 
   --type-title-sm: clamp(1rem, 0.95rem + 0.3vw, 1.125rem);
   --type-title-md: clamp(1.125rem, 1.04rem + 0.54vw, 1.375rem);
@@ -135,7 +135,7 @@ body {
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  line-height: 1.6;
+  line-height: 1.62;
   letter-spacing: -0.007em;
   font-variant-numeric: tabular-nums;
   overflow-x: hidden;
@@ -195,7 +195,7 @@ h6 { font-size: var(--type-h6); line-height: 1.35; }
 p,
 li {
   font-size: var(--type-body-md);
-  line-height: 1.65;
+  line-height: 1.62;
 }
 
 .text-xs {
@@ -211,6 +211,31 @@ li {
 .text-base {
   font-size: var(--type-body-md) !important;
   line-height: 1.6 !important;
+}
+
+.text-lg {
+  font-size: var(--type-title-sm) !important;
+  line-height: 1.45 !important;
+}
+
+.text-xl {
+  font-size: var(--type-title-md) !important;
+  line-height: 1.35 !important;
+}
+
+.text-2xl {
+  font-size: var(--type-title-lg) !important;
+  line-height: 1.3 !important;
+}
+
+.text-3xl {
+  font-size: var(--type-headline-sm) !important;
+  line-height: 1.2 !important;
+}
+
+.text-4xl {
+  font-size: var(--type-headline-md) !important;
+  line-height: 1.15 !important;
 }
 
 [class*="text-[10px]"],
@@ -301,14 +326,14 @@ li {
     min-width: 0;
   }
 
-  /* Buttons - Premium, gradient hover */
+  /* Buttons - Flat, high-contrast, touch-friendly */
   .btn-primary {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 0.375rem;
     min-height: 44px;
-    background: linear-gradient(180deg, #2b61dc 0%, var(--primary) 100%);
+    background: var(--primary);
     color: var(--on-primary) !important;
     border-radius: var(--radius-md);
     padding: 0 1rem;
@@ -330,8 +355,8 @@ li {
   }
 
   .btn-primary:hover {
-    background: linear-gradient(180deg, #2556c9 0%, var(--primary-hover) 100%);
-    box-shadow: 0 8px 18px rgba(29, 78, 216, 0.24);
+    background: var(--primary-hover);
+    box-shadow: 0 6px 14px rgba(29, 78, 216, 0.2);
     transform: translateY(-0.5px);
   }
 
