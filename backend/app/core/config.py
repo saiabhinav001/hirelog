@@ -8,6 +8,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_FILE = BASE_DIR / ".env"
 
+# ── Document schema versions ─────────────────────────────────────────────────
+# Stamped onto newly-written documents so future migrations have a version
+# signal to key off (bump when a collection's shape changes, then migrate
+# documents with a lower version). Existing pre-versioning documents read back
+# with no `schema_version` field, which callers treat as version 0.
+EXPERIENCE_SCHEMA_VERSION = 1
+PRACTICE_LIST_SCHEMA_VERSION = 1
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_ignore_empty=True)

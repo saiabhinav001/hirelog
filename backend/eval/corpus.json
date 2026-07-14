@@ -1,0 +1,170 @@
+[
+  {
+    "id": "d_bst",
+    "company": "Google",
+    "role": "SDE",
+    "round": "DSA",
+    "difficulty": "Medium",
+    "topics": ["Trees", "Recursion"],
+    "summary": "Binary search tree traversal and balancing questions.",
+    "extracted_questions": [
+      {"question_text": "Implement in-order traversal of a binary search tree"},
+      {"question_text": "How do you balance a BST and check if a tree is a valid BST?"}
+    ],
+    "raw_text": "The interview focused on binary trees, BST insertion, deletion, and traversal orders."
+  },
+  {
+    "id": "d_graph",
+    "company": "Meta",
+    "role": "SDE",
+    "round": "DSA",
+    "difficulty": "Hard",
+    "topics": ["Graphs", "BFS", "DFS"],
+    "summary": "Graph traversal, shortest path and connected components.",
+    "extracted_questions": [
+      {"question_text": "Find the shortest path in a weighted graph using Dijkstra"},
+      {"question_text": "Detect a cycle in a directed graph"}
+    ],
+    "raw_text": "Graph algorithms: BFS, DFS, Dijkstra shortest path, union find for connected components."
+  },
+  {
+    "id": "d_dp",
+    "company": "Amazon",
+    "role": "SDE",
+    "round": "DSA",
+    "difficulty": "Hard",
+    "topics": ["Dynamic Programming"],
+    "summary": "Classic dynamic programming: knapsack and longest common subsequence.",
+    "extracted_questions": [
+      {"question_text": "Solve the 0/1 knapsack problem with dynamic programming"},
+      {"question_text": "Compute the longest common subsequence of two strings"}
+    ],
+    "raw_text": "Dynamic programming problems including knapsack, LCS, and edit distance with memoization."
+  },
+  {
+    "id": "d_sysdesign_url",
+    "company": "Google",
+    "role": "Senior SDE",
+    "round": "System Design",
+    "difficulty": "Hard",
+    "topics": ["System Design", "Scalability"],
+    "summary": "Design a URL shortener with high availability.",
+    "extracted_questions": [
+      {"question_text": "Design a scalable URL shortener like TinyURL"},
+      {"question_text": "How do you handle hashing and collisions at scale?"}
+    ],
+    "raw_text": "System design round: design a URL shortener, discuss sharding, caching, and load balancing."
+  },
+  {
+    "id": "d_sysdesign_feed",
+    "company": "Meta",
+    "role": "Staff SDE",
+    "round": "System Design",
+    "difficulty": "Hard",
+    "topics": ["System Design", "Distributed Systems"],
+    "summary": "Design a news feed with fan-out and caching.",
+    "extracted_questions": [
+      {"question_text": "Design a news feed system with fan-out on write"},
+      {"question_text": "How do you cache and paginate a social feed?"}
+    ],
+    "raw_text": "Design a scalable news feed: fan-out, caching layers, pagination, and eventual consistency."
+  },
+  {
+    "id": "d_dbms_joins",
+    "company": "Microsoft",
+    "role": "SDE",
+    "round": "DBMS",
+    "difficulty": "Medium",
+    "topics": ["DBMS", "SQL"],
+    "summary": "SQL joins, indexing and query optimization.",
+    "extracted_questions": [
+      {"question_text": "Explain inner join vs left outer join with an example"},
+      {"question_text": "How does a database index speed up query execution?"}
+    ],
+    "raw_text": "DBMS round covering SQL joins, normalization, indexing strategies, and query plans."
+  },
+  {
+    "id": "d_dbms_txn",
+    "company": "Stripe",
+    "role": "SDE",
+    "round": "DBMS",
+    "difficulty": "Medium",
+    "topics": ["DBMS", "Transactions"],
+    "summary": "ACID transactions and isolation levels.",
+    "extracted_questions": [
+      {"question_text": "Explain ACID properties and transaction isolation levels"},
+      {"question_text": "What is a deadlock and how do databases resolve it?"}
+    ],
+    "raw_text": "Transactions, ACID, isolation levels, locking, deadlock detection and MVCC."
+  },
+  {
+    "id": "d_os_thread",
+    "company": "Google",
+    "role": "SDE",
+    "round": "OS",
+    "difficulty": "Medium",
+    "topics": ["Operating Systems", "Concurrency"],
+    "summary": "Processes, threads and synchronization primitives.",
+    "extracted_questions": [
+      {"question_text": "Difference between a process and a thread"},
+      {"question_text": "Explain mutex, semaphore and how to avoid race conditions"}
+    ],
+    "raw_text": "Operating systems: process vs thread, context switching, mutex, semaphore, deadlock."
+  },
+  {
+    "id": "d_os_memory",
+    "company": "Nvidia",
+    "role": "SDE",
+    "round": "OS",
+    "difficulty": "Hard",
+    "topics": ["Operating Systems", "Memory"],
+    "summary": "Virtual memory, paging and page replacement.",
+    "extracted_questions": [
+      {"question_text": "Explain virtual memory and demand paging"},
+      {"question_text": "Compare LRU and FIFO page replacement algorithms"}
+    ],
+    "raw_text": "Memory management: virtual memory, paging, segmentation, TLB, and page replacement policies."
+  },
+  {
+    "id": "d_oop",
+    "company": "Microsoft",
+    "role": "SDE",
+    "round": "OOP",
+    "difficulty": "Easy",
+    "topics": ["OOP", "Design Patterns"],
+    "summary": "Object-oriented principles and design patterns.",
+    "extracted_questions": [
+      {"question_text": "Explain the four pillars of object-oriented programming"},
+      {"question_text": "Describe the singleton and factory design patterns"}
+    ],
+    "raw_text": "OOP concepts: encapsulation, inheritance, polymorphism, abstraction, and common design patterns."
+  },
+  {
+    "id": "d_behavioral",
+    "company": "Amazon",
+    "role": "SDE",
+    "round": "Behavioral",
+    "difficulty": "Easy",
+    "topics": ["Behavioral", "Leadership"],
+    "summary": "Behavioral interview on ownership and conflict.",
+    "extracted_questions": [
+      {"question_text": "Tell me about a time you handled a conflict on your team"},
+      {"question_text": "Describe a project where you demonstrated ownership"}
+    ],
+    "raw_text": "Behavioral round: STAR method, leadership principles, ownership, and dealing with conflict."
+  },
+  {
+    "id": "d_array",
+    "company": "Meta",
+    "role": "SDE",
+    "round": "DSA",
+    "difficulty": "Easy",
+    "topics": ["Arrays", "Two Pointers"],
+    "summary": "Array manipulation with two pointers and sliding window.",
+    "extracted_questions": [
+      {"question_text": "Find two numbers in an array that sum to a target"},
+      {"question_text": "Longest substring without repeating characters using sliding window"}
+    ],
+    "raw_text": "Array problems: two sum, sliding window, two pointers, subarray sums."
+  }
+]

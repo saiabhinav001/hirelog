@@ -40,6 +40,64 @@ jobs:
       - name: Verify backend compiles
         run: python -m compileall app
 
+  eval:
+    name: Search Quality Gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run search-quality evaluation (recall@k / MRR / nDCG gates)
+        run: PYTHONPATH=. python -m eval.run_eval
+
+  security:
+    name: Dependency and SAST Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install scanners
+        run: python -m pip install --upgrade pip pip-audit bandit
+
+      - name: Audit backend dependencies (pip-audit)
+        working-directory: backend
+        # Informational: transitive advisories aren't always immediately fixable.
+        run: pip-audit -r requirements.txt || true
+
+      - name: Python SAST (bandit)
+        working-directory: backend
+        run: bandit -r app -ll
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Audit frontend dependencies (npm audit)
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
   frontend:
     name: Frontend Lint Typecheck Unit Build
     runs-on: ubuntu-latest

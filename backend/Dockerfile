@@ -36,6 +36,17 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY app ./app
 COPY data ./data
 
+# NOTE: /app/data/faiss holds the vector index. For durable semantic search,
+# mount a persistent volume here (set FAISS_DIR to it). On ephemeral disks the
+# index is rebuilt from Firestore on startup (see faiss_reconcile), which is
+# correct but costs a re-embedding pass — a mounted volume avoids that.
+
+# Run as an unprivileged user. The FAISS index and mapping are persisted to
+# /app/data at runtime, so hand ownership of the app tree to the new user.
+RUN useradd --create-home --shell /bin/bash appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 7860
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

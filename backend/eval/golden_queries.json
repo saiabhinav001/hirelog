@@ -1,0 +1,16 @@
+[
+  {"query": "binary search tree traversal", "relevant": ["d_bst"]},
+  {"query": "shortest path in a graph dijkstra", "relevant": ["d_graph"]},
+  {"query": "dynamic programming knapsack", "relevant": ["d_dp"]},
+  {"query": "design a scalable url shortener", "relevant": ["d_sysdesign_url"]},
+  {"query": "news feed system design fan out", "relevant": ["d_sysdesign_feed"]},
+  {"query": "sql joins and indexing", "relevant": ["d_dbms_joins"]},
+  {"query": "acid transactions isolation levels deadlock", "relevant": ["d_dbms_txn"]},
+  {"query": "process vs thread mutex semaphore", "relevant": ["d_os_thread"]},
+  {"query": "virtual memory paging page replacement", "relevant": ["d_os_memory"]},
+  {"query": "object oriented programming design patterns", "relevant": ["d_oop"]},
+  {"query": "two sum sliding window array", "relevant": ["d_array"]},
+  {"query": "system design scalability", "relevant": ["d_sysdesign_url", "d_sysdesign_feed"]},
+  {"query": "database questions", "relevant": ["d_dbms_joins", "d_dbms_txn"]},
+  {"query": "operating system concurrency", "relevant": ["d_os_thread", "d_os_memory"]}
+]

@@ -1,12 +1,15 @@
 """Practice Lists API routes."""
 
+import logging
 from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from firebase_admin import firestore
+from google.cloud.firestore_v1.field_path import FieldPath
 
 from app.api.dependencies import get_current_user
+from app.core.config import PRACTICE_LIST_SCHEMA_VERSION
 from app.core.firebase import db
 from app.models.schemas import (
     PracticeListCreate,
@@ -16,11 +19,26 @@ from app.models.schemas import (
     PracticeQuestionUpdate,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/practice-lists", tags=["practice"])
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _topic_distribution_key(topic: str) -> str:
+    """Build a Firestore field-path key for a topic's distribution counter.
+
+    User-supplied `topic` must never be interpolated directly into a dotted
+    field path (`f"topic_distribution.{topic}"`) — a value like `a.b` or
+    `stats.total` would be parsed as nested path segments, letting a caller
+    write arbitrary nested fields under `topic_distribution`. `FieldPath`
+    escapes the segment (back-tick quoting dots/special chars) so the topic is
+    always treated as a single literal key.
+    """
+    return FieldPath("topic_distribution", str(topic)).to_api_repr()
 
 
 def _recompute_and_store_list_stats(list_id: str) -> dict:
@@ -72,15 +90,66 @@ def _recompute_and_store_list_stats(list_id: str) -> dict:
 
 
 def repair_all_practice_list_stats() -> int:
-    """Reconciliation: scan ALL practice_lists and recompute counters.
+    """Reconciliation: recompute practice-list counters that may be stale.
 
-    Called on backend startup to fix any stale data left by older code paths
-    or interrupted writes.  Returns the number of lists repaired.
+    Called on backend startup to fix data left by older code paths or
+    interrupted writes. A naive full-collection scan costs O(lists × questions)
+    Firestore reads on *every* deployment, which is prohibitive at scale. So we
+    only recompute lists mutated since the previous successful repair, tracked
+    via ``metadata/practice_repair.last_repaired_at`` (compared against each
+    list's ``updated_at`` stamp). The first run (no marker) — and any run whose
+    incremental query fails — falls back to a full scan so nothing is missed.
+
+    Returns the number of lists repaired.
     """
+    marker_ref = db.collection("metadata").document("practice_repair")
+    last_repaired_at = None
+    try:
+        marker = marker_ref.get()
+        if marker.exists:
+            last_repaired_at = (marker.to_dict() or {}).get("last_repaired_at")
+    except Exception:
+        logger.exception("Practice repair: could not read repair marker; full scan")
+
+    # Capture a server-side "start" timestamp BEFORE scanning and promote it to
+    # last_repaired_at only after a successful pass. Marking with the *start*
+    # time (not the end time) means any list mutated *during* the scan still has
+    # updated_at >= the new marker and is caught next run — closing the
+    # lost-update window.
+    started_at = None
+    try:
+        marker_ref.set({"repair_started_at": firestore.SERVER_TIMESTAMP}, merge=True)
+        started_at = (marker_ref.get().to_dict() or {}).get("repair_started_at")
+    except Exception:
+        logger.exception("Practice repair: could not stamp repair start time")
+
+    list_docs = None
+    if last_repaired_at is not None:
+        try:
+            list_docs = list(
+                db.collection("practice_lists")
+                .where(filter=firestore.FieldFilter("updated_at", ">=", last_repaired_at))
+                .stream()
+            )
+        except Exception:
+            logger.exception("Practice repair: incremental query failed; full scan")
+            list_docs = None
+
+    if list_docs is None:
+        list_docs = list(db.collection("practice_lists").stream())
+
     repaired = 0
-    for list_doc in db.collection("practice_lists").stream():
+    for list_doc in list_docs:
         _recompute_and_store_list_stats(list_doc.id)
         repaired += 1
+
+    try:
+        marker_ref.set(
+            {"last_repaired_at": started_at or firestore.SERVER_TIMESTAMP}, merge=True
+        )
+    except Exception:
+        logger.exception("Practice repair: could not update repair marker")
+
     return repaired
 
 
@@ -144,9 +213,13 @@ async def create_practice_list(
     
     doc_ref = db.collection("practice_lists").document()
     doc_ref.set({
+        "schema_version": PRACTICE_LIST_SCHEMA_VERSION,
         "name": payload.name,
         "user_id": user_id,
         "created_at": now,
+        # Server timestamp used by the incremental startup repair to find lists
+        # mutated since the last reconciliation.
+        "updated_at": firestore.SERVER_TIMESTAMP,
         "question_count": 0,
         "revised_count": 0,
         "practicing_count": 0,
@@ -187,7 +260,7 @@ async def update_practice_list(
     if data.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    doc_ref.update({"name": payload.name})
+    doc_ref.update({"name": payload.name, "updated_at": firestore.SERVER_TIMESTAMP})
     data["name"] = payload.name
 
     return _read_list_response(list_id, data)
@@ -210,13 +283,25 @@ async def delete_practice_list(
     if data.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    # Delete all questions in the list
+    # Delete all questions in the list using batched writes. One-by-one deletes
+    # are slow and, if the process dies mid-loop, leave orphaned questions with
+    # no parent. Batches (max 500 ops) commit atomically; the parent list is
+    # removed in the same final batch as the last chunk of questions.
     questions_ref = doc_ref.collection("questions")
+    _BATCH_LIMIT = 450  # headroom under Firestore's 500-op limit for the parent
+    batch = db.batch()
+    pending = 0
     for q in questions_ref.stream():
-        q.reference.delete()
-    
-    # Delete the list
-    doc_ref.delete()
+        batch.delete(q.reference)
+        pending += 1
+        if pending >= _BATCH_LIMIT:
+            batch.commit()
+            batch = db.batch()
+            pending = 0
+
+    # Delete the list itself in the final batch.
+    batch.delete(doc_ref)
+    batch.commit()
     return {"status": "deleted"}
 
 
@@ -307,7 +392,7 @@ async def add_question(
     batch.update(list_ref, {
         "question_count": firestore.Increment(1),
         "unvisited_count": firestore.Increment(1),
-        f"topic_distribution.{topic}": firestore.Increment(1),
+        _topic_distribution_key(topic): firestore.Increment(1),
     })
     batch.commit()
 
@@ -315,7 +400,10 @@ async def add_question(
     updated_data = list_ref.get().to_dict()
     total = updated_data.get("question_count", 0)
     revised = updated_data.get("revised_count", 0)
-    list_ref.update({"revised_percent": _compute_revised_percent(revised, total)})
+    list_ref.update({
+        "revised_percent": _compute_revised_percent(revised, total),
+        "updated_at": firestore.SERVER_TIMESTAMP,
+    })
 
     return PracticeQuestionResponse(
         id=doc_ref.id,
@@ -384,8 +472,8 @@ async def update_question(
             old_topic = old_data.get("topic", "General")
             new_topic = updates.get("topic")
             if new_topic and new_topic != old_topic:
-                counter_updates[f"topic_distribution.{old_topic}"] = firestore.Increment(-1)
-                counter_updates[f"topic_distribution.{new_topic}"] = firestore.Increment(1)
+                counter_updates[_topic_distribution_key(old_topic)] = firestore.Increment(-1)
+                counter_updates[_topic_distribution_key(new_topic)] = firestore.Increment(1)
             batch.update(list_ref, counter_updates)
             batch.commit()
 
@@ -393,7 +481,10 @@ async def update_question(
             updated_data = list_ref.get().to_dict()
             total = updated_data.get("question_count", 0)
             revised = updated_data.get("revised_count", 0)
-            list_ref.update({"revised_percent": _compute_revised_percent(revised, total)})
+            list_ref.update({
+        "revised_percent": _compute_revised_percent(revised, total),
+        "updated_at": firestore.SERVER_TIMESTAMP,
+    })
         else:
             question_ref.update(updates)
             # If topic changed, update topic_distribution incrementally
@@ -402,8 +493,9 @@ async def update_question(
                 new_topic = updates["topic"]
                 if new_topic != old_topic:
                     list_ref.update({
-                        f"topic_distribution.{old_topic}": firestore.Increment(-1),
-                        f"topic_distribution.{new_topic}": firestore.Increment(1),
+                        _topic_distribution_key(old_topic): firestore.Increment(-1),
+                        _topic_distribution_key(new_topic): firestore.Increment(1),
+                        "updated_at": firestore.SERVER_TIMESTAMP,
                     })
 
     # Return updated question
@@ -465,7 +557,7 @@ async def delete_question(
     batch.update(list_ref, {
         "question_count": firestore.Increment(-1),
         status_field[old_status]: firestore.Increment(-1),
-        f"topic_distribution.{old_topic}": firestore.Increment(-1),
+        _topic_distribution_key(old_topic): firestore.Increment(-1),
     })
     batch.commit()
 
@@ -473,10 +565,13 @@ async def delete_question(
     updated_data = list_ref.get().to_dict()
     total = updated_data.get("question_count", 0)
     revised = updated_data.get("revised_count", 0)
-    fixups: dict = {"revised_percent": _compute_revised_percent(revised, total)}
+    fixups: dict = {
+        "revised_percent": _compute_revised_percent(revised, total),
+        "updated_at": firestore.SERVER_TIMESTAMP,
+    }
     for t, c in (updated_data.get("topic_distribution") or {}).items():
         if isinstance(c, (int, float)) and c <= 0:
-            fixups[f"topic_distribution.{t}"] = firestore.DELETE_FIELD
+            fixups[_topic_distribution_key(t)] = firestore.DELETE_FIELD
     list_ref.update(fixups)
 
     return {"status": "deleted"}

@@ -5,6 +5,33 @@ const API_BASE_STORAGE_KEY = "hirelog_preferred_api_base";
 
 let preferredApiBaseMemory: string | null = null;
 
+/**
+ * The only origins we will ever send API requests (and Bearer tokens) to:
+ * the build-time configured base plus the known prod/dev fallbacks. Any
+ * localStorage value outside this set is treated as poisoned (XSS / rogue
+ * extension) and ignored — see FINDING-014.
+ */
+function allowedApiBases(): string[] {
+  // Dev fallback (localhost) is only trusted outside production so a poisoned
+  // localStorage=localhost value can't pass validation in a prod bundle.
+  const bases =
+    process.env.NODE_ENV === "production"
+      ? [PROD_FALLBACK_API_BASE]
+      : [PROD_FALLBACK_API_BASE, DEV_FALLBACK_API_BASE];
+  const allowed = bases
+    .map((b) => normalizeApiBase(b))
+    .filter((b): b is string => Boolean(b));
+  const fromEnv = normalizeApiBase(rawBase);
+  if (fromEnv) {
+    allowed.push(fromEnv);
+  }
+  return allowed;
+}
+
+function isAllowedApiBase(base: string | null): base is string {
+  return Boolean(base) && allowedApiBases().includes(base as string);
+}
+
 function getPreferredApiBase(): string | null {
   if (preferredApiBaseMemory) {
     return preferredApiBaseMemory;
@@ -16,7 +43,24 @@ function getPreferredApiBase(): string | null {
 
   try {
     const stored = window.localStorage.getItem(API_BASE_STORAGE_KEY);
-    preferredApiBaseMemory = normalizeApiBase(stored ?? undefined);
+    const normalized = normalizeApiBase(stored ?? undefined);
+
+    // Never trust an arbitrary stored origin: if it is not one of our known
+    // API bases, discard it so auth tokens can't be exfiltrated to an
+    // attacker-controlled host.
+    if (!isAllowedApiBase(normalized)) {
+      if (normalized) {
+        try {
+          window.localStorage.removeItem(API_BASE_STORAGE_KEY);
+        } catch {
+          // Ignore storage failures.
+        }
+      }
+      preferredApiBaseMemory = null;
+      return null;
+    }
+
+    preferredApiBaseMemory = normalized;
     return preferredApiBaseMemory;
   } catch {
     return null;
@@ -24,6 +68,11 @@ function getPreferredApiBase(): string | null {
 }
 
 function setPreferredApiBase(base: string) {
+  // Only ever remember an origin we already trust (defense in depth — `base`
+  // here always originates from apiBaseCandidates()).
+  if (!isAllowedApiBase(base)) {
+    return;
+  }
   preferredApiBaseMemory = base;
   if (typeof window === "undefined") {
     return;

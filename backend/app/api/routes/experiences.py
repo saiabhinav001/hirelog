@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from firebase_admin import firestore
 
 from app.api.dependencies import get_current_user, require_placement_cell
+from app.core.config import EXPERIENCE_SCHEMA_VERSION
 from app.core.firebase import db
 from app.models.schemas import (
     AddQuestionsRequest,
@@ -22,6 +24,8 @@ from app.services.search_core import build_search_terms
 from app.utils.serialization import serialize_doc
 from app.api.routes.dashboard import update_dashboard_stats_async
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/experiences", tags=["experiences"])
 
@@ -145,6 +149,68 @@ def _collect_user_questions_for_reprocess(data: dict) -> list[dict]:
     return from_flat
 
 
+def _coerce_dt(value) -> datetime | None:
+    """Best-effort coercion of a Firestore timestamp / ISO string to datetime."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def sweep_stuck_nlp_documents(max_age_minutes: int = 10) -> int:
+    """Reset documents stuck in ``nlp_status='pending'`` past a grace window.
+
+    A background NLP thread can be killed (OOM / segfault while loading torch or
+    ONNX models) *before* its ``except`` block runs, leaving the document in
+    ``pending`` forever — no summary, topics, or embedding, and invisible in
+    logs. This startup sweep marks such documents ``failed`` so they surface in
+    the moderation queue and can be reprocessed. Documents still inside the
+    grace window (likely genuinely in-flight) are left untouched.
+
+    Returns the number of documents reset.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+    swept = 0
+    try:
+        pending = list(
+            db.collection("interview_experiences")
+            .where(filter=firestore.FieldFilter("nlp_status", "==", "pending"))
+            .stream()
+        )
+    except Exception:
+        logger.exception("NLP watchdog: query for pending documents failed")
+        return 0
+
+    for snapshot in pending:
+        data = snapshot.to_dict() or {}
+        since = _coerce_dt(data.get("nlp_pending_since") or data.get("created_at"))
+        # Skip anything still within the grace window; sweep the rest (including
+        # legacy documents with no parseable pending timestamp).
+        if since is not None and since > cutoff:
+            continue
+        try:
+            db.collection("interview_experiences").document(snapshot.id).update(
+                {"nlp_status": "failed"}
+            )
+            swept += 1
+            logger.warning(
+                "NLP watchdog: reset stuck document %s (pending since %s) to failed",
+                snapshot.id,
+                since.isoformat() if since else "unknown",
+            )
+        except Exception:
+            logger.exception("NLP watchdog: failed to reset document %s", snapshot.id)
+
+    if swept:
+        logger.info("NLP watchdog: reset %d stuck pending document(s) to failed", swept)
+    return swept
+
+
 def _run_background_nlp(doc_id: str, raw_text: str, user_questions: list[dict]) -> None:
     """Background NLP enrichment — runs in a separate thread.
 
@@ -254,11 +320,21 @@ def _run_background_nlp(doc_id: str, raw_text: str, user_questions: list[dict]) 
             update_data["embedding_id"] = embedding_id
 
         # ANONYMITY INVARIANT: Background NLP must NEVER overwrite identity fields.
+        # Enforced with an explicit check (not `assert`, which is stripped under
+        # `python -O` / PYTHONOPTIMIZE, silently disabling this privacy guard).
         _IDENTITY_FIELDS = {"is_anonymous", "author", "show_name", "contributor_name", "created_by"}
-        assert not _IDENTITY_FIELDS.intersection(update_data), (
-            f"BUG: NLP enrichment tried to write identity fields: "
-            f"{_IDENTITY_FIELDS.intersection(update_data)}"
-        )
+        _violated = _IDENTITY_FIELDS.intersection(update_data)
+        if _violated:
+            logger.critical(
+                "ANONYMITY INVARIANT VIOLATED: NLP enrichment attempted to write "
+                "identity fields %s on document %s. Update aborted.",
+                sorted(_violated),
+                doc_id,
+            )
+            raise RuntimeError(
+                f"ANONYMITY INVARIANT VIOLATED: NLP enrichment tried to write "
+                f"identity fields: {sorted(_violated)}"
+            )
 
         db.collection("interview_experiences").document(doc_id).update(update_data)
         search_index_queue.enqueue_upsert(doc_id)
@@ -267,13 +343,15 @@ def _run_background_nlp(doc_id: str, raw_text: str, user_questions: list[dict]) 
         update_dashboard_stats_async()
 
     except Exception:
-        # Mark as failed so the UI can show status
+        # Mark as failed so the UI can show status. Log the cause — a silently
+        # swallowed NLP failure is invisible in ops and degrades search quality.
+        logger.exception("Background NLP enrichment failed for doc_id=%s", doc_id)
         try:
             db.collection("interview_experiences").document(doc_id).update({
                 "nlp_status": "failed",
             })
         except Exception:
-            pass
+            logger.exception("Failed to mark doc_id=%s nlp_status=failed", doc_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -406,6 +484,7 @@ def admin_reprocess_experience(
     db.collection("interview_experiences").document(experience_id).update(
         {
             "nlp_status": "pending",
+            "nlp_pending_since": firestore.SERVER_TIMESTAMP,
             "edit_history": firestore.ArrayUnion(
                 [
                     {
@@ -569,6 +648,7 @@ def create_experience(payload: ExperienceCreate, user: dict = Depends(get_curren
         }
 
     doc_data = {
+        "schema_version": EXPERIENCE_SCHEMA_VERSION,
         "company": payload.company,
         "role": payload.role,
         "year": payload.year,
@@ -590,6 +670,9 @@ def create_experience(payload: ExperienceCreate, user: dict = Depends(get_curren
         "is_anonymous": payload.is_anonymous,
         "is_active": True,
         "nlp_status": "pending",
+        # Timestamp the moment we entered "pending" so the startup watchdog can
+        # tell a genuinely stuck document from one that is still in-flight.
+        "nlp_pending_since": firestore.SERVER_TIMESTAMP,
         # Contact details — only stored when non-anonymous and explicitly opted in
         "allow_contact": False if payload.is_anonymous else payload.allow_contact,
         "contact_linkedin": None if payload.is_anonymous else (payload.contact_linkedin or None),
@@ -628,7 +711,7 @@ def create_experience(payload: ExperienceCreate, user: dict = Depends(get_curren
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/{experience_id}")
-def get_experience(experience_id: str) -> dict:
+def get_experience(experience_id: str, user: dict = Depends(get_current_user)) -> dict:
     snapshot = db.collection("interview_experiences").document(experience_id).get()
     if not snapshot.exists:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Experience not found.")
@@ -970,12 +1053,22 @@ def _run_background_question_enrichment(doc_id: str) -> None:
             ),
         }
 
-        # ANONYMITY INVARIANT: Background enrichment must NEVER overwrite identity fields.
+        # ANONYMITY INVARIANT: Background enrichment must NEVER overwrite identity
+        # fields. Enforced with an explicit check (not `assert`, which is stripped
+        # under `python -O` / PYTHONOPTIMIZE, silently disabling this guard).
         _IDENTITY_FIELDS = {"is_anonymous", "author", "show_name", "contributor_name", "created_by"}
-        assert not _IDENTITY_FIELDS.intersection(_enrichment_update), (
-            f"BUG: Question enrichment tried to write identity fields: "
-            f"{_IDENTITY_FIELDS.intersection(_enrichment_update)}"
-        )
+        _violated = _IDENTITY_FIELDS.intersection(_enrichment_update)
+        if _violated:
+            logger.critical(
+                "ANONYMITY INVARIANT VIOLATED: question enrichment attempted to write "
+                "identity fields %s on document %s. Update aborted.",
+                sorted(_violated),
+                doc_id,
+            )
+            raise RuntimeError(
+                f"ANONYMITY INVARIANT VIOLATED: question enrichment tried to write "
+                f"identity fields: {sorted(_violated)}"
+            )
 
         db.collection("interview_experiences").document(doc_id).update(_enrichment_update)
         search_index_queue.enqueue_upsert(doc_id)
@@ -983,4 +1076,5 @@ def _run_background_question_enrichment(doc_id: str) -> None:
         update_dashboard_stats_async()
 
     except Exception:
-        pass  # Background — never crash the main thread
+        # Background best-effort — never crash the caller, but don't hide the cause.
+        logger.exception("Background question enrichment failed for doc_id=%s", doc_id)

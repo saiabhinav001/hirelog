@@ -6,6 +6,7 @@ import threading
 import time
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -45,7 +46,10 @@ def _normalize_topics(topic: Optional[str]) -> list[str]:
 
 def _cache_key(*parts: object) -> str:
     raw = "|".join(str(p) for p in parts)
-    digest = hashlib.md5(raw.encode()).hexdigest()
+    # SHA-256 (not MD5): MD5 collisions are trivially craftable, which for a
+    # cache key means an attacker could force two distinct queries to collide
+    # and serve one user another's cached results.
+    digest = hashlib.sha256(raw.encode()).hexdigest()
     return f"search:{digest}"
 
 
@@ -62,7 +66,20 @@ _QUERY_VECTOR_CACHE_TTL = 600
 _QUERY_VECTOR_CACHE_MAX = 256
 _query_vector_cache_lock = threading.Lock()
 _semantic_slots = threading.BoundedSemaphore(max(1, settings.SEARCH_SEMANTIC_MAX_CONCURRENCY))
-_search_limiter = SlidingWindowLimiter(settings.SEARCH_RATE_LIMIT_PER_MINUTE, 60)
+_search_limiter = SlidingWindowLimiter(settings.SEARCH_RATE_LIMIT_PER_MINUTE, 60, namespace="search")
+
+# Shared, bounded pool for the lexical branch of hybrid search. Creating a fresh
+# ThreadPoolExecutor per request spawned one thread per in-flight search under
+# load; a single module-level pool caps concurrent lexical threads instead
+# (extra work queues rather than allocating unbounded threads).
+_LEXICAL_MAX_WORKERS = max(
+    4,
+    int(getattr(settings, "SEARCH_LEXICAL_MAX_WORKERS", 0) or 0)
+    or (max(1, settings.SEARCH_SEMANTIC_MAX_CONCURRENCY) * 2),
+)
+_lexical_executor = ThreadPoolExecutor(
+    max_workers=_LEXICAL_MAX_WORKERS, thread_name_prefix="search-lexical"
+)
 
 _search_metrics_lock = threading.Lock()
 _search_mode_counts: Counter[str] = Counter()
@@ -717,7 +734,9 @@ def _semantic_branch(
     topics: list[str],
     difficulty_normalized: Optional[str],
 ) -> tuple[dict | None, str | None]:
-    with ThreadPoolExecutor(max_workers=1) as executor:
+    # Reuse the shared bounded pool; nullcontext keeps the block structure while
+    # ensuring the long-lived executor is NOT shut down when the block exits.
+    with nullcontext(_lexical_executor) as executor:
         lexical_future = executor.submit(
             lambda: _build_lexical_rows_from_snapshots(
                 _collect_keyword_snapshots(

@@ -15,19 +15,23 @@ from firebase_admin import firestore
 from app.api.routes import dashboard, experiences, practice, search, users
 from app.core.config import settings
 from app.core.health_checks import build_api_health_report
+from app.core.logging_config import configure_logging, request_id_var
 from app.core.firebase import db
 from app.core.rate_limit import SlidingWindowLimiter, client_identifier
 from app.services.index_queue import search_index_queue
+from app.services.faiss_reconcile import rebuild_faiss_from_firestore
 from app.services.seed_data import ensure_seeded
 from app.api.routes.practice import repair_all_practice_list_stats
 from app.api.routes.dashboard import update_dashboard_stats_async
+from app.api.routes.experiences import sweep_stuck_nlp_documents
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
-)
+# Structured JSON logs in production (ingest-friendly), readable text in dev.
+# request_id is injected into every line via a contextvar filter.
+configure_logging(json_logs=settings.ENV.strip().lower() == "production")
 logger = logging.getLogger("hirelog")
-_mutation_limiter = SlidingWindowLimiter(settings.MUTATION_RATE_LIMIT_PER_MINUTE, 60)
+_mutation_limiter = SlidingWindowLimiter(
+    settings.MUTATION_RATE_LIMIT_PER_MINUTE, 60, namespace="mutation"
+)
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
@@ -54,6 +58,9 @@ async def lifespan(app: FastAPI):
             logger.info("Seed data status: %s", seed_report)
         except Exception:
             logger.exception("Seed data check failed — continuing")
+        # Reconcile FAISS in the same thread, strictly after seeding, so a fresh
+        # deploy embeds seeded docs first and we never race seed's add_vector.
+        _bg_faiss_reconcile()
 
     def _bg_dashboard():
         try:
@@ -68,6 +75,23 @@ async def lifespan(app: FastAPI):
             logger.info("Practice list stats reconciled: %d list(s)", repaired)
         except Exception:
             logger.exception("Practice list stats repair failed")
+
+    def _bg_faiss_reconcile():
+        # Runs after seeding so a fresh deploy embeds its seeded docs first; on a
+        # lost/ephemeral disk this rebuilds the vector index from Firestore.
+        try:
+            rebuilt = rebuild_faiss_from_firestore()
+            if rebuilt:
+                logger.info("FAISS index reconciled from Firestore: %d vector(s)", rebuilt)
+        except Exception:
+            logger.exception("FAISS reconciliation failed")
+
+    def _bg_nlp_watchdog():
+        try:
+            swept = sweep_stuck_nlp_documents()
+            logger.info("NLP watchdog swept %d stuck pending document(s)", swept)
+        except Exception:
+            logger.exception("NLP watchdog sweep failed")
 
     def _bg_search_warmup():
         try:
@@ -92,6 +116,7 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_bg_seed, daemon=True).start()
     threading.Thread(target=_bg_dashboard, daemon=True).start()
     threading.Thread(target=_bg_repair, daemon=True).start()
+    threading.Thread(target=_bg_nlp_watchdog, daemon=True).start()
     threading.Thread(target=_bg_search_warmup, daemon=True).start()
     threading.Thread(target=_bg_search_index_bootstrap, daemon=True).start()
     logger.info("Background tasks started")
@@ -120,6 +145,7 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 async def request_context_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
     request.state.request_id = request_id
+    request_id_var.set(request_id)  # propagates to every log line for this request
     started_at = time.perf_counter()
 
     if request.method in _WRITE_METHODS and request.url.path.startswith("/api/"):

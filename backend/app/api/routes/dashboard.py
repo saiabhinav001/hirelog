@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import re
+import threading
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -21,6 +23,8 @@ from app.api.routes.search import (
 from app.utils.serialization import serialize_doc
 
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
@@ -36,14 +40,24 @@ _REQUIRED_CACHE_FIELDS = {
 }
 
 # ── In-memory cache (avoids 4× Firestore reads per page load) ────────────
+# These module-level globals are read/written from request handlers AND from
+# background `update_dashboard_stats_async` threads. `_cache_lock` guards every
+# access so a cache payload and its timestamp are always updated atomically
+# (no torn reads / stale-data-with-fresh-timestamp races). The lock is only
+# held around the in-memory assignment — never during Firestore I/O.
+_cache_lock = threading.Lock()
 _mem_cache: dict = {}
 _mem_cache_ts: float = 0.0
 _MEM_CACHE_TTL: float = 300.0  # 5 minutes
 _admin_cache: dict = {}
 _admin_cache_ts: float = 0.0
 _ADMIN_CACHE_TTL: float = 120.0  # 2 minutes
-_dashboard_limiter = SlidingWindowLimiter(settings.DASHBOARD_RATE_LIMIT_PER_MINUTE, 60)
-_admin_dashboard_limiter = SlidingWindowLimiter(max(20, settings.DASHBOARD_RATE_LIMIT_PER_MINUTE // 2), 60)
+_dashboard_limiter = SlidingWindowLimiter(
+    settings.DASHBOARD_RATE_LIMIT_PER_MINUTE, 60, namespace="dashboard"
+)
+_admin_dashboard_limiter = SlidingWindowLimiter(
+    max(20, settings.DASHBOARD_RATE_LIMIT_PER_MINUTE // 2), 60, namespace="admin_dashboard"
+)
 
 
 def _benchmark_doc_ref():
@@ -74,10 +88,11 @@ def _get_or_compute_stats() -> dict:
 
     # 1. In-memory cache — serves all 4 endpoints from one Firestore read
     now = time.time()
-    if _mem_cache and (now - _mem_cache_ts) < _MEM_CACHE_TTL:
-        return _mem_cache
+    with _cache_lock:
+        if _mem_cache and (now - _mem_cache_ts) < _MEM_CACHE_TTL:
+            return _mem_cache
 
-    # 2. Firestore cache
+    # 2. Firestore cache (I/O performed outside the lock)
     stats_ref = db.collection("metadata").document("dashboard_stats")
     stats_doc = stats_ref.get()
 
@@ -85,15 +100,40 @@ def _get_or_compute_stats() -> dict:
         data = stats_doc.to_dict()
         # Validate cache has all required fields
         if _REQUIRED_CACHE_FIELDS.issubset(data.keys()):
-            _mem_cache = data
-            _mem_cache_ts = now
+            with _cache_lock:
+                _mem_cache = data
+                _mem_cache_ts = now
             return data
         # Stale cache — fall through to recompute
 
     result = _compute_and_cache_stats()
-    _mem_cache = result
-    _mem_cache_ts = now
+    with _cache_lock:
+        _mem_cache = result
+        _mem_cache_ts = time.time()
     return result
+
+
+def _count_active_experiences() -> int | None:
+    """Exact count of active experiences via a Firestore aggregation query.
+
+    The sampled scan below caps at DASHBOARD_SAMPLE_LIMIT, so it cannot be used
+    for the headline total (it would freeze at ~500). `count()` is a server-side
+    aggregation billed at roughly one read per 1000 matched index entries, so it
+    stays accurate and cheap as the archive grows. Returns None on failure so
+    callers fall back to the sample size.
+    """
+    try:
+        aggregation = (
+            db.collection("interview_experiences")
+            .where(filter=firestore.FieldFilter("is_active", "==", True))
+            .count()
+        )
+        for row in aggregation.get():
+            for item in row:
+                return int(item.value)
+    except Exception:
+        logger.exception("Active-experience count() aggregation failed; using sample size")
+    return None
 
 
 def _compute_and_cache_stats() -> dict:
@@ -101,16 +141,20 @@ def _compute_and_cache_stats() -> dict:
     snapshots = list(
         db.collection("interview_experiences").limit(settings.DASHBOARD_SAMPLE_LIMIT).stream()
     )
-    
+
     # Filter out soft-deleted contributions
     active_snapshots = [
         s for s in snapshots
         if (s.to_dict() or {}).get("is_active", True)
     ]
 
+    # Accurate headline count (aggregation) — the sampled scan only feeds the
+    # "top N" aggregates below, which tolerate sampling; the total must not.
+    accurate_total = _count_active_experiences()
+
     if not active_snapshots:
         stats = {
-            "total_experiences": 0,
+            "total_experiences": accurate_total or 0,
             "top_company": None,
             "top_topic": None,
             "topic_totals": {},
@@ -147,7 +191,7 @@ def _compute_and_cache_stats() -> dict:
         interview_progression = _compute_interview_progression(active_snapshots, limit=6)
         
         stats = {
-            "total_experiences": len(active_snapshots),
+            "total_experiences": accurate_total if accurate_total is not None else len(active_snapshots),
             "top_company": top_company,
             "top_topic": top_topic,
             "topic_totals": dict(topic_counter),
@@ -164,22 +208,66 @@ def _compute_and_cache_stats() -> dict:
     try:
         db.collection("metadata").document("dashboard_stats").set(stats)
     except Exception:
-        pass  # Don't fail if caching fails
+        logger.exception("Dashboard stats: Firestore cache write failed")  # non-fatal
     
     return stats
 
 
-def update_dashboard_stats_async():
-    """Called after new experience submission to refresh cached stats."""
+def _do_stats_refresh() -> None:
+    """Recompute and cache the main + admin aggregations. Expensive (scans)."""
     global _mem_cache, _mem_cache_ts, _admin_cache, _admin_cache_ts
     try:
         result = _compute_and_cache_stats()
-        _mem_cache = result
-        _mem_cache_ts = time.time()
-        _admin_cache = {}
-        _admin_cache_ts = 0.0
+        with _cache_lock:
+            _mem_cache = result
+            _mem_cache_ts = time.time()
     except Exception:
-        pass  # Non-blocking
+        logger.exception("Dashboard main stats refresh failed")
+
+    # Pre-compute the (expensive) admin aggregation here, off the request path,
+    # so admin dashboard loads read a cache instead of scanning documents.
+    try:
+        admin_payload = _compute_admin_dashboard_payload()
+        try:
+            db.collection("metadata").document("admin_dashboard_stats").set(admin_payload)
+        except Exception:
+            logger.exception("Admin dashboard: background Firestore cache write failed")
+        with _cache_lock:
+            _admin_cache = admin_payload
+            _admin_cache_ts = time.time()
+    except Exception:
+        logger.exception("Admin dashboard: background pre-compute failed")
+        # Invalidate so the next admin request recomputes rather than serving stale.
+        with _cache_lock:
+            _admin_cache = {}
+            _admin_cache_ts = 0.0
+
+
+# Coalescing guard: only one refresh runs at a time; triggers that arrive while
+# it runs collapse into exactly one trailing refresh.
+_refresh_guard = threading.Lock()
+_refresh_pending = threading.Event()
+
+
+def update_dashboard_stats_async():
+    """Refresh cached stats, coalescing concurrent triggers into one refresh.
+
+    Every experience write calls this. Running the full main+admin recompute
+    (two sampled scans + an aggregation + contributor reads) once per write
+    would stampede Firestore under concurrent submissions. Instead a single
+    refresh runs at a time; any triggers arriving mid-refresh are folded into
+    exactly one trailing pass, so the latest write is always reflected without
+    N simultaneous scans.
+    """
+    _refresh_pending.set()
+    if not _refresh_guard.acquire(blocking=False):
+        return  # a refresh is already in flight; it will observe the pending flag
+    try:
+        while _refresh_pending.is_set():
+            _refresh_pending.clear()
+            _do_stats_refresh()
+    finally:
+        _refresh_guard.release()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -459,36 +547,34 @@ def get_dashboard(request: Request, user: dict = Depends(get_current_user)) -> d
     }
 
 
-@router.get("/admin")
-def get_admin_dashboard(
-    request: Request,
-    user: dict = Depends(require_placement_cell),
-) -> dict:
-    """Placement-cell analytics with moderation and quality metrics."""
-    global _admin_cache, _admin_cache_ts
-    _enforce_dashboard_rate_limit(request, user, admin=True)
+def _coerce_admin_datetime(value) -> datetime | None:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        except ValueError:
+            return None
+    return None
 
-    now_ts = time.time()
-    if _admin_cache and (now_ts - _admin_cache_ts) < _ADMIN_CACHE_TTL:
-        return _admin_cache
 
-    def _coerce_datetime(value) -> datetime | None:
-        if isinstance(value, datetime):
-            if value.tzinfo is None:
-                return value.replace(tzinfo=timezone.utc)
-            return value
-        if isinstance(value, str):
-            candidate = value.strip()
-            if not candidate:
-                return None
-            try:
-                parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
-                if parsed.tzinfo is None:
-                    return parsed.replace(tzinfo=timezone.utc)
-                return parsed
-            except ValueError:
-                return None
-        return None
+def _compute_admin_dashboard_payload() -> dict:
+    """Heavy admin aggregation (full-collection sample scan + contributor reads).
+
+    Pre-computed off the request path by ``update_dashboard_stats_async`` and
+    cached in Firestore + memory so admin dashboard loads no longer trigger a
+    500-document scan on every cache miss. Excludes ``search_runtime``, which is
+    always attached live by the endpoint.
+    """
+    _coerce_datetime = _coerce_admin_datetime
 
     snapshots = list(
         db.collection("interview_experiences")
@@ -624,12 +710,60 @@ def get_admin_dashboard(
             "failed_examples": nlp_failed_samples,
         },
         "top_contributors": top_contributors,
-        "search_runtime": get_search_runtime_snapshot(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
-
-    _admin_cache = response
-    _admin_cache_ts = now_ts
     return response
+
+
+def _get_or_compute_admin_stats() -> dict:
+    """Resolve admin stats from memory → Firestore → fresh compute.
+
+    Mirrors ``_get_or_compute_stats`` for the placement-cell dashboard so the
+    expensive aggregation runs at most once per TTL (and usually only in the
+    background refresh), never once per admin page load.
+    """
+    global _admin_cache, _admin_cache_ts
+
+    now = time.time()
+    with _cache_lock:
+        if _admin_cache and (now - _admin_cache_ts) < _ADMIN_CACHE_TTL:
+            return _admin_cache
+
+    # Firestore-cached payload (survives restarts; I/O outside the lock)
+    try:
+        doc = db.collection("metadata").document("admin_dashboard_stats").get()
+        if doc.exists:
+            data = doc.to_dict() or {}
+            if "archive_overview" in data:
+                with _cache_lock:
+                    _admin_cache = data
+                    _admin_cache_ts = now
+                return data
+    except Exception:
+        logger.exception("Admin dashboard: Firestore cache read failed")
+
+    payload = _compute_admin_dashboard_payload()
+    try:
+        db.collection("metadata").document("admin_dashboard_stats").set(payload)
+    except Exception:
+        logger.exception("Admin dashboard: Firestore cache write failed")
+    with _cache_lock:
+        _admin_cache = payload
+        _admin_cache_ts = time.time()
+    return payload
+
+
+@router.get("/admin")
+def get_admin_dashboard(
+    request: Request,
+    user: dict = Depends(require_placement_cell),
+) -> dict:
+    """Placement-cell analytics with moderation and quality metrics."""
+    _enforce_dashboard_rate_limit(request, user, admin=True)
+
+    payload = _get_or_compute_admin_stats()
+    # search_runtime is always live (cheap in-process snapshot), never cached.
+    return {**payload, "search_runtime": get_search_runtime_snapshot()}
 
 
 @router.post("/admin/search/runtime/reset")

@@ -87,9 +87,17 @@ class SearchCache:
         redis_cleared = 0
         if self._redis is not None:
             try:
-                keys = self._redis.keys("search:*")
-                if keys:
-                    redis_cleared = self._redis.delete(*keys)
+                # SCAN (cursor-based, non-blocking) instead of KEYS, which is an
+                # O(n) blocking call that stalls the whole Redis instance while
+                # it walks the keyspace. Delete in batches to bound round-trips.
+                batch: list[str] = []
+                for key in self._redis.scan_iter(match="search:*", count=500):
+                    batch.append(key)
+                    if len(batch) >= 500:
+                        redis_cleared += self._redis.delete(*batch)
+                        batch = []
+                if batch:
+                    redis_cleared += self._redis.delete(*batch)
             except Exception:
                 logger.exception("Redis cache clear failed")
 

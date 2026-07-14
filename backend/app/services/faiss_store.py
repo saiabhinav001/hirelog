@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import threading
+import time
 from typing import List, Tuple
 
 import numpy as np
@@ -18,6 +20,15 @@ logger = logging.getLogger(__name__)
 
 _INDEX_PATH = settings.faiss_index_path
 _MAPPING_PATH = settings.faiss_mapping_path
+
+# Batched persistence: writing the *entire* index + mapping to disk on every
+# insertion serializes all submissions behind multi-MB file writes. Instead we
+# flush to disk once enough vectors have accumulated OR enough time has elapsed,
+# and always flush on interpreter shutdown. Recent unflushed vectors stay in the
+# in-memory index (fully searchable); on a hard crash they are recoverable by
+# rebuilding from Firestore, so no data is lost — only re-derivable disk state.
+_PERSIST_EVERY_N = 50           # flush after this many pending inserts
+_PERSIST_MAX_INTERVAL = 30.0    # ...or after this many seconds, whichever first
 
 
 def _normalize_l2(matrix: np.ndarray) -> np.ndarray:
@@ -70,6 +81,10 @@ class FaissStore:
         self._lock = threading.Lock()
         self._index: faiss.IndexFlatIP | None = None
         self._mapping: List[str] | None = None
+        # Batched-persistence bookkeeping (guarded by self._lock).
+        self._pending_since_persist = 0
+        self._last_persist_ts = time.monotonic()
+        atexit.register(self.flush)
 
     def _ensure_loaded(self) -> None:
         """Lazy-load FAISS index on first use."""
@@ -133,14 +148,37 @@ class FaissStore:
             return
         faiss.write_index(self.index, str(self.index_path))
 
+    def _flush_locked(self) -> None:
+        """Persist index + mapping to disk. Caller must hold self._lock."""
+        self._persist_index()
+        self._persist_mapping(self.mapping)
+        self._pending_since_persist = 0
+        self._last_persist_ts = time.monotonic()
+
+    def _should_persist_locked(self) -> bool:
+        """Whether accumulated inserts warrant a disk flush. Caller holds lock."""
+        return (
+            self._pending_since_persist >= _PERSIST_EVERY_N
+            or (time.monotonic() - self._last_persist_ts) >= _PERSIST_MAX_INTERVAL
+        )
+
+    def flush(self) -> None:
+        """Force-persist any unflushed vectors (e.g. on shutdown)."""
+        with self._lock:
+            if self._index is not None and self._pending_since_persist > 0:
+                self._flush_locked()
+
     def add_vector(self, vector: np.ndarray, doc_id: str) -> int:
         with self._lock:
             vector = np.asarray(vector, dtype="float32").reshape(1, -1)
             vector = _normalize_l2(vector)
             self.index.add(vector)
             self.mapping.append(doc_id)
-            self._persist_index()
-            self._persist_mapping(self.mapping)
+            # Batched persistence: keep the in-memory add fast and only touch
+            # disk once a threshold of pending inserts or elapsed time is hit.
+            self._pending_since_persist += 1
+            if self._should_persist_locked():
+                self._flush_locked()
             return len(self.mapping) - 1
 
     def search(self, vector: np.ndarray, k: int) -> List[Tuple[str, float]]:
@@ -170,8 +208,7 @@ class FaissStore:
                 matrix = _normalize_l2(matrix)
                 self.index.add(matrix)
             self.mapping = doc_ids
-            self._persist_index()
-            self._persist_mapping(self.mapping)
+            self._flush_locked()
 
 
 faiss_store = FaissStore(dimension=settings.EMBEDDING_DIM)

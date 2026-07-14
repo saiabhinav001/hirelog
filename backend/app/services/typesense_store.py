@@ -76,6 +76,8 @@ class TypesenseStore:
                 self._collection_ready = True
                 return
             except Exception:
+                # Expected control flow: collection not found → fall through and
+                # create it below. Not an error worth logging.
                 pass
 
             schema = {
