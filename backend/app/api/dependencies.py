@@ -72,9 +72,33 @@ def _get_or_create_user(uid: str, email: str | None, name: str | None = None) ->
     return user_data
 
 
+def _verify_firebase_token(token: str) -> dict:
+    """Pure Firebase ID token verification — no Firestore read, no caching.
+
+    Kept separate from role/authorization resolution so authorization-sensitive
+    call sites (see `get_current_user_uncached`) can verify identity without
+    also inheriting the legacy 5-minute role cache below.
+    """
+    try:
+        return firebase_auth.verify_id_token(token)
+    except Exception as exc:  # pragma: no cover - Firebase SDK provides rich error info
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired authentication token.",
+        ) from exc
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> dict:
+    """Legacy dependency: verifies the token and resolves the user, caching the
+    result (incl. role) for up to `_AUTH_CACHE_TTL` (5 minutes).
+
+    This cache trades a small staleness window for read cost on legacy,
+    lower-stakes routes. Do NOT reuse it as-is for new high-stakes
+    authorization decisions (e.g. exam faculty/admission gates) — use
+    `get_current_user_uncached` there instead, per docs/adr/0007.
+    """
     token = credentials.credentials
     now = int(time.time())
 
@@ -88,13 +112,7 @@ def get_current_user(
                 return cached_user.copy()
             _auth_cache.pop(cache_key, None)
 
-    try:
-        decoded = firebase_auth.verify_id_token(token)
-    except Exception as exc:  # pragma: no cover - Firebase SDK provides rich error info
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired authentication token.",
-        ) from exc
+    decoded = _verify_firebase_token(token)
 
     uid = decoded.get("uid")
     email = decoded.get("email")
@@ -113,6 +131,27 @@ def get_current_user(
             del _auth_cache[oldest]
         _auth_cache[cache_key] = (now, token_exp, user_data.copy())
 
+    return user_data
+
+
+def get_current_user_uncached(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> dict:
+    """Always re-verifies the token and re-reads the Firestore role fresh.
+
+    Intended for new authorization-sensitive routes (exam faculty/admission
+    checks and similar) that must not act on a role that could be up to 5
+    minutes stale — e.g. immediately after a revocation or role change.
+    """
+    decoded = _verify_firebase_token(credentials.credentials)
+    uid = decoded.get("uid")
+    email = decoded.get("email")
+    name = decoded.get("name") or decoded.get("user_id")
+    if not uid:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload.")
+    user_data = _get_or_create_user(uid, email, name)
+    user_data.setdefault("email", email or "")
+    user_data.setdefault("name", name or "")
     return user_data
 
 

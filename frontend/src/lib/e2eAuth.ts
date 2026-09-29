@@ -1,4 +1,16 @@
-export const E2E_AUTH_BYPASS = process.env.NEXT_PUBLIC_E2E_BYPASS_AUTH === "true";
+// SECURITY: this flag fully bypasses Firebase auth on the client (see
+// AuthContext/authToken). It must never be true in a production build — a
+// leaked build-time env var would let anyone sign in as any role with no
+// credentials. Fail loud at module load instead of silently shipping it.
+const rawE2EBypass = process.env.NEXT_PUBLIC_E2E_BYPASS_AUTH === "true";
+if (rawE2EBypass && process.env.NODE_ENV === "production") {
+  throw new Error(
+    "SECURITY: NEXT_PUBLIC_E2E_BYPASS_AUTH=true in a production build. " +
+      "Refusing to start with authentication bypassed. Unset this variable " +
+      "for any production/staging deployment (see docs/adr/0007-role-escalation-fix.md)."
+  );
+}
+export const E2E_AUTH_BYPASS = rawE2EBypass;
 
 const E2E_SESSION_KEY = "hirelog_e2e_session";
 const E2E_TOKEN_KEY = "hirelog_e2e_token";

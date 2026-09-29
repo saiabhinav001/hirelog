@@ -71,3 +71,56 @@ def test_get_current_user_rejects_invalid_token(monkeypatch: pytest.MonkeyPatch)
         deps.get_current_user(creds)
 
     assert exc.value.status_code == 401
+
+
+def test_get_current_user_uncached_bypasses_stale_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """New authorization-sensitive routes (e.g. exams) must observe a role
+    change immediately, unlike legacy `get_current_user`'s 5-minute cache."""
+    calls = {"verify": 0, "lookup": 0}
+    roles = iter(["viewer", "placement_cell"])
+
+    def fake_verify(_: str) -> dict:
+        calls["verify"] += 1
+        return {"uid": "u-2", "email": "demo2@example.edu", "name": "Demo2", "exp": int(time.time()) + 1800}
+
+    def fake_get_or_create(uid: str, email: str | None, name: str | None = None) -> dict:
+        calls["lookup"] += 1
+        return {"uid": uid, "email": email or "", "name": name or "", "role": next(roles)}
+
+    monkeypatch.setattr(deps.firebase_auth, "verify_id_token", fake_verify)
+    monkeypatch.setattr(deps, "_get_or_create_user", fake_get_or_create)
+
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token-2")
+
+    first = deps.get_current_user_uncached(creds)
+    second = deps.get_current_user_uncached(creds)
+
+    # Every call re-verifies and re-reads — no caching layer to serve a stale role.
+    assert calls["verify"] == 2
+    assert calls["lookup"] == 2
+    assert first["role"] == "viewer"
+    assert second["role"] == "placement_cell"
+
+
+def test_legacy_get_current_user_still_verifies_and_caches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Compatibility check: the legacy cached dependency keeps working exactly
+    as before for existing (non-exam) routes."""
+    calls = {"verify": 0}
+
+    def fake_verify(_: str) -> dict:
+        calls["verify"] += 1
+        return {"uid": "u-3", "email": "legacy@example.edu", "name": "Legacy", "exp": int(time.time()) + 1800}
+
+    def fake_get_or_create(uid: str, email: str | None, name: str | None = None) -> dict:
+        return {"uid": uid, "email": email or "", "name": name or "", "role": "viewer"}
+
+    monkeypatch.setattr(deps.firebase_auth, "verify_id_token", fake_verify)
+    monkeypatch.setattr(deps, "_get_or_create_user", fake_get_or_create)
+    deps._auth_cache.clear()
+
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token-3")
+    first = deps.get_current_user(creds)
+    second = deps.get_current_user(creds)
+
+    assert first["role"] == second["role"] == "viewer"
+    assert calls["verify"] == 1

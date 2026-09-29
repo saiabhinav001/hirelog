@@ -262,17 +262,28 @@ def update_display_name(
 
 @router.post("")
 def create_or_update_user(payload: UserCreate, user: dict = Depends(get_current_user)) -> dict:
+    """Create or sync the caller's own profile.
+
+    SECURITY: `role` is never read from the request body. `UserCreate` has no
+    `role` field at all, so a client cannot request placement_cell/faculty/
+    admin here — role only ever comes from server state (`get_current_user`,
+    which applies the email-allowlist promotion) and the previously stored
+    Firestore value, and only the higher of those two *server-derived* values
+    is kept so a legitimate privileged user is never regressed by re-auth.
+    See docs/adr/0007-role-escalation-fix.md.
+    """
     doc_ref = db.collection("users").document(user["uid"])
     snapshot = doc_ref.get()
 
     display_name = _derive_display_name(payload.name)
+    server_role = str(user.get("role") or "viewer")
 
     base = {
         "uid": user["uid"],
         "name": payload.name,
         "display_name": display_name,
         "email": user.get("email", ""),
-        "role": _highest_role(payload.role, str(user.get("role") or "viewer")),
+        "role": server_role,
     }
 
     if snapshot.exists:
@@ -282,7 +293,7 @@ def create_or_update_user(payload: UserCreate, user: dict = Depends(get_current_
             base["display_name"] = existing["display_name"]
         if existing.get("name"):
             base["name"] = existing["name"]
-        base["role"] = _highest_role(base["role"], str(existing.get("role") or "viewer"))
+        base["role"] = _highest_role(server_role, str(existing.get("role") or "viewer"))
         doc_ref.set({**base}, merge=True)
     else:
         doc_ref.set({**base, "created_at": firestore.SERVER_TIMESTAMP}, merge=True)

@@ -12,5 +12,6 @@ including decisions to deliberately **not** build something yet.
 | [0004](0004-faiss-flatip-choice.md) | FAISS `IndexFlatIP` (exact) over ANN | Accepted |
 | [0005](0005-rate-limiting.md) | Distributed sliding-window rate limiting | Accepted |
 | [0006](0006-search-evaluation.md) | Search-quality evaluation as a CI gate | Accepted |
+| [0007](0007-role-escalation-fix.md) | Fix public profile role-escalation before adding exam authority | Accepted |
 
 See [../architecture.md](../architecture.md) for the system diagram and request flow.

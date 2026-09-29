@@ -10,12 +10,18 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.auth.uid == userId
         && request.resource.data.uid == userId
-        && request.resource.data.role == 'viewer';
-      // Role upgrades are managed server-side via the backend admin SDK.
-      // Client writes only touch name/email; role changes are rejected client-side.
+        && request.resource.data.role == 'viewer'
+        && request.resource.data.keys().hasOnly(['uid', 'name', 'display_name', 'email', 'role', 'created_at']);
+      // Role upgrades AND any institution/exam authority are managed server-side
+      // via the backend Admin SDK only. Client writes may only touch name/
+      // display_name/timestamps — role and any authority field must be
+      // byte-identical to the stored value, and no other field may be
+      // introduced. See docs/adr/0007-role-escalation-fix.md.
       allow update: if signedIn()
         && request.auth.uid == userId
-        && request.resource.data.role == resource.data.role;
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'display_name', 'name_last_updated_at']);
     }
 
     match /interview_experiences/{docId} {

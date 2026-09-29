@@ -6,8 +6,13 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class UserCreate(BaseModel):
+    """Public profile create/update payload.
+
+    Deliberately has no `role` (or any other authority) field: privileged roles
+    are server-resolved only (see `app.api.dependencies._resolve_role`), never
+    accepted from the client. See docs/adr/0007-role-escalation-fix.md.
+    """
     name: str = Field(min_length=1, max_length=120)
-    role: Literal["viewer", "contributor", "placement_cell"] = "viewer"
 
 
 class NameUpdate(BaseModel):
