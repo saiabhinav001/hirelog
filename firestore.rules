@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && request.resource.data.role == 'viewer';
+      // Role upgrades are managed server-side via the backend admin SDK.
+      // Client writes only touch name/email; role changes are rejected client-side.
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == resource.data.role;
+    }
+
+    match /interview_experiences/{docId} {
+      allow read: if signedIn();
+      // All writes are backend-only through Firebase Admin SDK.
+      allow create, update, delete: if false;
+    }
+
+    match /practice_lists/{listId} {
+      allow read, write: if signedIn() 
+        && request.auth.uid == resource.data.user_id;
+      allow create: if signedIn() 
+        && request.resource.data.user_id == request.auth.uid;
+      
+      match /questions/{questionId} {
+        allow read, write: if signedIn() 
+          && get(/databases/$(database)/documents/practice_lists/$(listId)).data.user_id == request.auth.uid;
+      }
+    }
+
+    match /metadata/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

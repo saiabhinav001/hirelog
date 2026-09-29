@@ -1,0 +1,68 @@
+[
+  {
+    "query": "dsa interview questions",
+    "filters": {},
+    "relevance": {
+      "4o14qtNp16Npf2EpZEeF": 5.0,
+      "8JpyuNxxeEeMiHhmqKQu": 4.0,
+      "8jkCZMm8x46qFDNFNosS": 3.0,
+      "Ah3z48FbVpH5KNpjd5sz": 2.0,
+      "CJUH4TwqwrTf7EMFb5zr": 1.0
+    }
+  },
+  {
+    "query": "sql joins round",
+    "filters": {},
+    "relevance": {
+      "seed_008": 5.0,
+      "seed_017": 4.0,
+      "seed_044": 3.0,
+      "seed_055": 2.0,
+      "seed_069": 1.0
+    }
+  },
+  {
+    "query": "operating system scheduling",
+    "filters": {},
+    "relevance": {
+      "seed_035": 5.0,
+      "seed_080": 4.0,
+      "NmztbpnyRFEqAi5536Wz": 3.0,
+      "seed_101": 2.0,
+      "seed_128": 1.0
+    }
+  },
+  {
+    "query": "hr fit interview",
+    "filters": {},
+    "relevance": {
+      "seed_005": 5.0,
+      "seed_020": 4.0,
+      "seed_060": 3.0,
+      "seed_084": 2.0,
+      "seed_074": 1.0
+    }
+  },
+  {
+    "query": "system design backend",
+    "filters": {},
+    "relevance": {
+      "seed_130": 5.0,
+      "seed_045": 4.0,
+      "zfcrtqTu9RBGB48LnexC": 3.0,
+      "NmztbpnyRFEqAi5536Wz": 2.0,
+      "seed_001": 1.0
+    }
+  },
+  {
+    "query": "computer networks tcp udp",
+    "filters": {},
+    "relevance": {
+      "seed_171": 5.0,
+      "seed_133": 4.0,
+      "seed_050": 3.0,
+      "seed_108": 2.0,
+      "seed_109": 1.0
+    }
+  }
+]
