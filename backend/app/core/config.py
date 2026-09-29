@@ -95,6 +95,16 @@ class Settings(BaseSettings):
     EXAM_OUTBOX_LEASE_SECONDS: int = 60
     EXAM_OUTBOX_MAX_ATTEMPTS: int = 5
 
+    # ── Institution identity / roster / OTP fallback login (Prompt 2, ───────
+    # docs/adr/0010) — off by default via EXAMS_ENABLED; legacy login is
+    # completely untouched. EXAM_OTP_HMAC_SECRET should be set to a stable
+    # shared secret in any multi-instance/production deployment — unset uses
+    # a random per-process secret (dev-only, documented in auth_service.py).
+    EXAM_OTP_HMAC_SECRET: Optional[str] = None
+    EXAM_OTP_TTL_SECONDS: int = 300
+    EXAM_OTP_MAX_ATTEMPTS: int = 5
+    EXAM_STAFF_REAUTH_MAX_AGE_SECONDS: int = 900
+
     # ── KT ingestion / generation providers (Prompt 5, docs/adr/0009) ────────
     # Unset by default — falls back to the safe-by-default NullMalwareScanner
     # (never "clean") and DeterministicFakeProvider (test/dev only, no live

@@ -35,6 +35,8 @@ Defined in `.env.example`:
 | `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | Yes | Firebase web config |
 | `NEXT_PUBLIC_FIREBASE_APP_ID` | Yes | Firebase web config |
 | `NEXT_PUBLIC_E2E_BYPASS_AUTH` | Optional | Use only for local Playwright smoke runs |
+| `NEXT_PUBLIC_EXAMS_ENABLED` | Optional | Shows `/exams/login` (Prompt 2 placeholder; backend independently enforces its own `EXAMS_ENABLED` flag) |
+| `NEXT_PUBLIC_EXAMS_API_BASE_URL` | Optional | Exam API origin, e.g. `http://localhost:8020` — pinned, no failover (docs/adr/0008) |
 
 ## Scripts
 

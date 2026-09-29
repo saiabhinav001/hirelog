@@ -142,6 +142,11 @@ def get_current_user_uncached(
     Intended for new authorization-sensitive routes (exam faculty/admission
     checks and similar) that must not act on a role that could be up to 5
     minutes stale — e.g. immediately after a revocation or role change.
+
+    Also surfaces `auth_time` and any `exam_*` custom claims (set at
+    institutional sign-in — see `app.domain.institution.auth_service`) so
+    institution-membership/recent-reauth checks (Prompt 2) can be built on
+    top of this same verified token without a second verification.
     """
     decoded = _verify_firebase_token(credentials.credentials)
     uid = decoded.get("uid")
@@ -152,6 +157,9 @@ def get_current_user_uncached(
     user_data = _get_or_create_user(uid, email, name)
     user_data.setdefault("email", email or "")
     user_data.setdefault("name", name or "")
+    user_data["auth_time"] = decoded.get("auth_time")
+    user_data["exam_authz_version"] = decoded.get("exam_authz_version")
+    user_data["exam_institution_id"] = decoded.get("exam_institution_id")
     return user_data
 
 

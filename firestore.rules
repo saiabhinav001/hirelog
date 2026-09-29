@@ -51,7 +51,9 @@ service cloud.firestore {
     // exam_command_receipts/*, exam_outbox/* (see docs/adr/0008); kt_uploads/*,
     // kt_approved_sources/*, exam_blueprints/*, generation_requests/*,
     // generation_candidates/*, generation_malformed_candidates/*,
-    // exam_variant_assignments/* (see docs/adr/0009): deliberately NOT
+    // exam_variant_assignments/* (see docs/adr/0009); institutions/*,
+    // institution_memberships/*, institution_roster_imports/*,
+    // institution_otp_challenges/* (see docs/adr/0010): deliberately NOT
     // granted any rule here. They are Admin-SDK-only, covered by the
     // default-deny catch-all below — every client read/write is rejected.
 
