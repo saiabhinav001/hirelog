@@ -83,6 +83,18 @@ class Settings(BaseSettings):
 
     PLACEMENT_CELL_EMAILS: str = ""
 
+    # ── Exams module (feature-flagged, off by default) ───────────────────────
+    # See docs/adr/0008-exam-domain-state-machine.md. Kept fully separate from
+    # the legacy `role` field on `users/{uid}` — exam authority never lives in
+    # a client-editable user record (contract #2).
+    EXAMS_ENABLED: bool = False
+    EXAM_FACULTY_EMAILS: str = ""
+    EXAM_DEFAULT_WARNING_THRESHOLD: int = 3
+    EXAM_DEFAULT_LATE_ADMISSION_GRACE_SECONDS: int = 120
+    EXAM_FINALIZATION_BATCH_SIZE: int = 50
+    EXAM_OUTBOX_LEASE_SECONDS: int = 60
+    EXAM_OUTBOX_MAX_ATTEMPTS: int = 5
+
     @property
     def is_production(self) -> bool:
         return self.ENV == "production"
@@ -111,6 +123,13 @@ class Settings(BaseSettings):
         return {
             email.strip().lower()
             for email in self.PLACEMENT_CELL_EMAILS.split(",")
+            if email.strip()
+        }
+
+    def exam_faculty_emails_set(self) -> set[str]:
+        return {
+            email.strip().lower()
+            for email in self.EXAM_FACULTY_EMAILS.split(",")
             if email.strip()
         }
 

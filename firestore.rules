@@ -47,6 +47,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // exam_definitions/*, exam_runs/* (+ attempts/drafts subcollections),
+    // exam_command_receipts/*, exam_outbox/* (see docs/adr/0008): deliberately
+    // NOT granted any rule here. They are Admin-SDK-only, covered by the
+    // default-deny catch-all below — every client read/write is rejected.
+
     match /{document=**} {
       allow read, write: if false;
     }

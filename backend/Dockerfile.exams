@@ -1,0 +1,30 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Slim, exam-API-only dependency set — deliberately NOT requirements.txt.
+# The exam API never imports spaCy/sentence-transformers/FAISS/torch (see
+# app/exam_main.py), so it does not need to ship them.
+COPY requirements-exams.txt ./requirements-exams.txt
+RUN pip install --no-cache-dir -r requirements-exams.txt
+
+COPY app ./app
+
+RUN useradd --create-home --shell /bin/bash appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 7862
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD sh -c "curl -fsS http://127.0.0.1:${PORT:-7862}/health/ready >/dev/null || exit 1"
+
+CMD ["sh", "-c", "uvicorn app.exam_main:app --host 0.0.0.0 --port ${PORT:-7862}"]

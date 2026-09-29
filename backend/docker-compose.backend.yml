@@ -40,3 +40,22 @@ services:
       retries: 3
       start_period: 20s
     restart: unless-stopped
+
+  # Independently deployable exam API (docs/adr/0008). EXAMS_ENABLED defaults
+  # to false — safe to run alongside api/worker with no behavior change.
+  exams:
+    build:
+      context: .
+      dockerfile: Dockerfile.exams
+    env_file:
+      - .env
+    command: sh -c "uvicorn app.exam_main:app --host 0.0.0.0 --port 8020"
+    ports:
+      - "8020:8020"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8020/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
