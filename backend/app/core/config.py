@@ -95,6 +95,14 @@ class Settings(BaseSettings):
     EXAM_OUTBOX_LEASE_SECONDS: int = 60
     EXAM_OUTBOX_MAX_ATTEMPTS: int = 5
 
+    # ── KT ingestion / generation providers (Prompt 5, docs/adr/0009) ────────
+    # Unset by default — falls back to the safe-by-default NullMalwareScanner
+    # (never "clean") and DeterministicFakeProvider (test/dev only, no live
+    # model). Configuring these is an institutional decision, not a code change.
+    EXAM_MALWARE_SCANNER_ENDPOINT: Optional[str] = None
+    EXAM_GENERATION_PROVIDER_BASE_URL: Optional[str] = None
+    EXAM_GENERATION_PROVIDER_API_KEY: Optional[str] = None
+
     @property
     def is_production(self) -> bool:
         return self.ENV == "production"

@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi import Response as FastAPIResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import exams_faculty, exams_student
+from app.api.routes import exams_faculty, exams_generation, exams_kt, exams_student
 from app.core.config import settings
 from app.core.firebase import db
 from app.core.logging_config import configure_logging
@@ -128,4 +128,6 @@ def health_ready(response: FastAPIResponse) -> dict:
 
 
 app.include_router(exams_faculty.router)
+app.include_router(exams_kt.router)
+app.include_router(exams_generation.router)
 app.include_router(exams_student.router)

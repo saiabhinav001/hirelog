@@ -14,5 +14,6 @@ including decisions to deliberately **not** build something yet.
 | [0006](0006-search-evaluation.md) | Search-quality evaluation as a CI gate | Accepted |
 | [0007](0007-role-escalation-fix.md) | Fix public profile role-escalation before adding exam authority | Accepted |
 | [0008](0008-exam-domain-state-machine.md) | Exam domain state machine and bounded final-submit transaction | Accepted |
+| [0009](0009-kt-ingestion-and-generation.md) | KT ingestion, source registry, and provider-neutral generation | Accepted |
 
 See [../architecture.md](../architecture.md) for the system diagram and request flow.

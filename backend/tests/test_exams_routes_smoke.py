@@ -30,6 +30,11 @@ def test_faculty_create_definition_is_503_when_exams_disabled() -> None:
     assert response.status_code == 503
 
 
+def test_kt_and_generation_routes_are_503_when_exams_disabled() -> None:
+    assert client.post("/api/exams/v1/faculty/kt/sources/from-url", json={"url": "https://example.com/x"}).status_code == 503
+    assert client.post("/api/exams/v1/faculty/blueprints", json={"exam_definition_id": "d1", "title": "t", "slots": []}).status_code == 503
+
+
 def test_root_and_health_endpoints_work_even_when_disabled() -> None:
     """The API itself must stay up (only mutating routes are gated) so
     operators can still see health/readiness while the module is off."""

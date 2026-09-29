@@ -4,3 +4,8 @@ firebase-admin==6.5.0
 pydantic==2.7.4
 pydantic-settings==2.2.1
 python-dotenv==1.0.1
+# KT ingestion (Prompt 5) — pure-Python parsers, no ML/native deps.
+pypdf==6.19.0
+python-docx==1.2.0
+httpx==0.28.1
+python-multipart==0.0.32
