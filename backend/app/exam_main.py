@@ -24,6 +24,7 @@ from app.api.routes import (
     exams_generation,
     exams_institution_admin,
     exams_institution_auth,
+    exams_judge,
     exams_kt,
     exams_me,
     exams_student,
@@ -32,7 +33,7 @@ from app.core.config import settings
 from app.core.firebase import db
 from app.core.logging_config import configure_logging
 from app.domain.exams.clock import system_clock
-from app.domain.exams.outbox import LoggingNoopHandler, drain_outbox_once
+from app.domain.exams.outbox import CompositeOutboxHandler, LoggingNoopHandler, drain_outbox_once
 from app.domain.exams.repository import OutboxRepository
 
 configure_logging(json_logs=settings.ENV.strip().lower() == "production")
@@ -56,9 +57,28 @@ def _firestore_health_check() -> dict:
         return {"status": "error", "detail": str(exc)}
 
 
+def _judge_provider():
+    """Real provider only if BOTH base_url and api_key are configured (same
+    pattern as the generation provider) — an institutional decision, never a
+    code change. See docs/adr/0011 for the hardened-compute requirements a
+    real provider must satisfy before this is safe to point at it."""
+    from app.domain.judge.provider import DeterministicFakeJudgeProvider, Judge0HttpAdapter
+
+    if settings.EXAM_JUDGE_PROVIDER_BASE_URL and settings.EXAM_JUDGE_PROVIDER_API_KEY:
+        return Judge0HttpAdapter(
+            base_url=settings.EXAM_JUDGE_PROVIDER_BASE_URL, api_key=settings.EXAM_JUDGE_PROVIDER_API_KEY
+        )
+    return DeterministicFakeJudgeProvider()
+
+
 def _outbox_drain_loop() -> None:
+    from app.domain.judge.outbox_handler import GradingTriggerOutboxHandler
+    from app.domain.judge.runtime_allowlist import default_allowlist
+
     repo = OutboxRepository(db)
-    handler = LoggingNoopHandler()
+    handler = CompositeOutboxHandler(
+        [LoggingNoopHandler(), GradingTriggerOutboxHandler(db, _judge_provider(), default_allowlist())]
+    )
     while not _stop_event.is_set():
         try:
             drain_outbox_once(
@@ -71,6 +91,22 @@ def _outbox_drain_loop() -> None:
             )
         except Exception:
             logger.exception("exam outbox drain tick failed")
+        _stop_event.wait(2.0)
+
+
+def _judge_sweep_loop() -> None:
+    """Completes FINAL_GRADE submissions the outbox handler created (nobody
+    polls those over HTTP) and any PUBLIC_RUN submission a student stopped
+    polling (e.g. closed the tab) — bounded, idempotent, safe after a crash
+    (see `JudgeService.sweep_pending_once` docstring)."""
+    from app.domain.judge.service import JudgeService
+
+    service = JudgeService(db, _judge_provider())
+    while not _stop_event.is_set():
+        try:
+            service.sweep_pending_once(limit=25)
+        except Exception:
+            logger.exception("judge submission sweep tick failed")
         _stop_event.wait(2.0)
 
 
@@ -89,6 +125,7 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_bg_bootstrap, daemon=True).start()
     if settings.EXAMS_ENABLED:
         threading.Thread(target=_outbox_drain_loop, daemon=True).start()
+        threading.Thread(target=_judge_sweep_loop, daemon=True).start()
 
     logger.info("Exam API startup complete — ENV=%s EXAMS_ENABLED=%s", settings.ENV, settings.EXAMS_ENABLED)
     yield
@@ -142,3 +179,5 @@ app.include_router(exams_institution_auth.router)
 app.include_router(exams_institution_admin.router)
 app.include_router(exams_me.router)
 app.include_router(exams_student.router)
+app.include_router(exams_judge.student_router)
+app.include_router(exams_judge.faculty_router)

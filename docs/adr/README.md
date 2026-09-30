@@ -16,5 +16,6 @@ including decisions to deliberately **not** build something yet.
 | [0008](0008-exam-domain-state-machine.md) | Exam domain state machine and bounded final-submit transaction | Accepted |
 | [0009](0009-kt-ingestion-and-generation.md) | KT ingestion, source registry, and provider-neutral generation | Accepted |
 | [0010](0010-institution-identity-and-login.md) | Institution identity, roster import, and OTP fallback login | Accepted |
+| [0011](0011-judge-grading.md) | Isolated coding judge and reproducible grading | Accepted |
 
 See [../architecture.md](../architecture.md) for the system diagram and request flow.

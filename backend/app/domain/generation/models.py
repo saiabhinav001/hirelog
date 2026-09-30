@@ -124,6 +124,9 @@ class GenerationCandidate(BaseModel):
     marking_rubric: dict = Field(default_factory=dict)
     reference_solutions: dict[str, str] = Field(default_factory=dict)  # language -> code
     public_tests: list = Field(default_factory=list)
+    # Sealed grading input (Prompt 6) — never serialized to students. Shape:
+    # [{"group_name": str, "weight": float, "tests": [{"stdin": str, "expected_output": str}]}]
+    hidden_test_groups: list = Field(default_factory=list)
     supporting_anchors: list[SourceAnchorRef] = Field(default_factory=list)
     equivalence_rationale: str = ""
     status: CandidateStatus = CandidateStatus.DRAFT

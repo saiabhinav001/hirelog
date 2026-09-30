@@ -113,6 +113,14 @@ class Settings(BaseSettings):
     EXAM_GENERATION_PROVIDER_BASE_URL: Optional[str] = None
     EXAM_GENERATION_PROVIDER_API_KEY: Optional[str] = None
 
+    # ── Coding judge (Prompt 6, docs/adr/0011) ───────────────────────────────
+    # Unset by default — falls back to a deterministic fake judge (test/dev
+    # only, never executes submitted code). A real Judge0-compatible instance
+    # requires separately provisioned hardened isolated compute (see ADR) —
+    # this config alone does not create or validate that environment.
+    EXAM_JUDGE_PROVIDER_BASE_URL: Optional[str] = None
+    EXAM_JUDGE_PROVIDER_API_KEY: Optional[str] = None
+
     @property
     def is_production(self) -> bool:
         return self.ENV == "production"

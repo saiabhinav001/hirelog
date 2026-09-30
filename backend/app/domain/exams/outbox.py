@@ -37,6 +37,20 @@ class LoggingNoopHandler:
         )
 
 
+class CompositeOutboxHandler:
+    """Fans one entry out to every registered handler — each handler decides
+    for itself (via `entry.kind`) whether it applies. This is the seam real
+    consumers plug into (Prompt 6's grading trigger, Prompt 7's live-control
+    notify) without ever changing `drain_outbox_once`."""
+
+    def __init__(self, handlers: list[OutboxHandler]) -> None:
+        self._handlers = handlers
+
+    def handle(self, entry: OutboxEntry) -> None:
+        for handler in self._handlers:
+            handler.handle(entry)
+
+
 def drain_outbox_once(
     repo: OutboxRepository,
     handler: OutboxHandler,
