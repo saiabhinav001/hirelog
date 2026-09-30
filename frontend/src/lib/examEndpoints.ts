@@ -97,6 +97,123 @@ export type EvidenceSnapshotSummary = {
   missing_reason: string | null;
 };
 
+// ── Gradebook / similarity / export / feedback (Prompt 9) ───────────────────
+
+export type QuestionOutcome = "blank" | "pending" | "partially_solved" | "fully_solved";
+
+export type StudentQuestionResult = {
+  uid: string;
+  question_id: string;
+  slot_index: number;
+  item_type: string;
+  presented: boolean;
+  outcome: QuestionOutcome;
+  weighted_score: number;
+  max_score: number;
+  grading_version: number;
+  tests_passed: number | null;
+  tests_total: number | null;
+  failure_category: string | null;
+  submission_hash: string | null;
+};
+
+export type IntegrityDisposition = "clean" | "blocked_pending_review" | "blocked_upheld" | "blocked_resolved_continued";
+
+export type StudentGradebookRow = {
+  uid: string;
+  attempt_status: string;
+  finalized: boolean;
+  raw_score: number;
+  raw_max_score: number;
+  integrity_disposition: IntegrityDisposition;
+  warning_count: number;
+  question_results: StudentQuestionResult[];
+};
+
+export type GradebookCounts = {
+  question_id: string;
+  assigned: number;
+  presented: number;
+  finalized: number;
+  nonblank_attempted: number;
+  fully_solved: number;
+  partially_solved: number;
+  blank: number;
+  pending: number;
+};
+
+export type ReleaseRecord = {
+  id: string;
+  run_id: string;
+  version: number;
+  released_by: string;
+  released_at: string;
+  note: string;
+};
+
+export type DefectiveQuestionResolution = {
+  id: string;
+  run_id: string;
+  question_id: string;
+  resolution: "full_credit_all" | "exclude_from_total";
+  reason: string;
+  resolved_by: string;
+  resolved_at: string;
+};
+
+export type GradeAppeal = {
+  id: string;
+  run_id: string;
+  uid: string;
+  question_id: string;
+  student_statement: string;
+  status: "pending" | "upheld" | "corrected";
+  created_at: string;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  resolution_notes: string | null;
+  version: number;
+};
+
+export type SimilarityMatch = {
+  id: string;
+  run_id: string;
+  question_id: string;
+  language: string;
+  uid_a: string;
+  uid_b: string;
+  submission_id_a: string;
+  submission_id_b: string;
+  similarity_percent: number;
+  matched_spans: Record<string, unknown>[];
+  provider: string;
+  computed_at: string;
+};
+
+export type ExportJob = {
+  id: string;
+  run_id: string;
+  requested_by: string;
+  format: "csv" | "json";
+  status: "pending" | "running" | "succeeded" | "failed";
+  created_at: string;
+  completed_at: string | null;
+  storage_ref: string | null;
+  row_count: number | null;
+  error: string | null;
+};
+
+export type LearningFeedback = {
+  run_id: string;
+  uid: string;
+  strengths: string[];
+  gaps: string[];
+  practice_steps: string[];
+  source_anchors: string[];
+  missing_material: string[];
+  generated_at: string;
+};
+
 async function authed<T>(path: string, token: string | undefined, init: RequestInit = {}): Promise<T> {
   return examApiFetch<T>(path, init, token);
 }
@@ -227,5 +344,77 @@ export const examEndpoints = {
     authed<Appeal>(`/api/exams/v1/faculty/proctoring/appeals/${appealId}/resolve`, token, {
       method: "POST",
       body: JSON.stringify({ status, resolution_notes: notes }),
+    }),
+
+  // ── Gradebook (student) ───────────────────────────────────────────────────
+  getMyResults: (token: string | undefined, runId: string) =>
+    authed<{ row: StudentGradebookRow; release_version: number | null }>(
+      `/api/exams/v1/student/gradebook/runs/${runId}/results`,
+      token
+    ),
+  getMyFeedback: (token: string | undefined, runId: string) =>
+    authed<LearningFeedback>(`/api/exams/v1/student/gradebook/runs/${runId}/feedback`, token),
+  submitGradeAppeal: (token: string | undefined, runId: string, questionId: string, studentStatement: string) =>
+    authed<GradeAppeal>(`/api/exams/v1/student/gradebook/runs/${runId}/questions/${encodeURIComponent(questionId)}/appeals`, token, {
+      method: "POST",
+      body: JSON.stringify({ student_statement: studentStatement }),
+    }),
+  listMyGradeAppeals: (token: string | undefined, runId: string) =>
+    authed<{ results: GradeAppeal[] }>(`/api/exams/v1/student/gradebook/runs/${runId}/appeals`, token),
+
+  // ── Gradebook (faculty) ────────────────────────────────────────────────────
+  listGradebookRows: (token: string | undefined, runId: string, cursorUid?: string) =>
+    authed<{ results: StudentGradebookRow[]; next_cursor_uid: string | null }>(
+      `/api/exams/v1/faculty/gradebook/runs/${runId}/rows${cursorUid ? `?cursor_uid=${encodeURIComponent(cursorUid)}` : ""}`,
+      token
+    ),
+  getGradebookCounts: (token: string | undefined, runId: string) =>
+    authed<{ results: GradebookCounts[] }>(`/api/exams/v1/faculty/gradebook/runs/${runId}/counts`, token),
+  releaseResults: (token: string | undefined, runId: string, note: string) =>
+    authed<ReleaseRecord>(`/api/exams/v1/faculty/gradebook/runs/${runId}/release`, token, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  listReleases: (token: string | undefined, runId: string) =>
+    authed<{ results: ReleaseRecord[] }>(`/api/exams/v1/faculty/gradebook/runs/${runId}/releases`, token),
+  resolveDefectiveQuestion: (
+    token: string | undefined,
+    runId: string,
+    questionId: string,
+    resolution: "full_credit_all" | "exclude_from_total",
+    reason: string
+  ) =>
+    authed<DefectiveQuestionResolution>(
+      `/api/exams/v1/faculty/gradebook/runs/${runId}/questions/${encodeURIComponent(questionId)}/defective`,
+      token,
+      { method: "POST", body: JSON.stringify({ resolution, reason }) }
+    ),
+  listDefectiveResolutions: (token: string | undefined, runId: string) =>
+    authed<{ results: DefectiveQuestionResolution[] }>(`/api/exams/v1/faculty/gradebook/runs/${runId}/defective`, token),
+  listGradeAppealsForRun: (token: string | undefined, runId: string) =>
+    authed<{ results: GradeAppeal[] }>(`/api/exams/v1/faculty/gradebook/runs/${runId}/appeals`, token),
+  resolveGradeAppeal: (token: string | undefined, appealId: string, uphold: boolean, resolutionNotes: string) =>
+    authed<GradeAppeal>(`/api/exams/v1/faculty/gradebook/appeals/${appealId}/resolve`, token, {
+      method: "POST",
+      body: JSON.stringify({ uphold, resolution_notes: resolutionNotes }),
+    }),
+  runSimilarityCheck: (token: string | undefined, runId: string, questionId: string) =>
+    authed<{ results: SimilarityMatch[]; disclaimer: string }>(
+      `/api/exams/v1/faculty/gradebook/runs/${runId}/questions/${encodeURIComponent(questionId)}/similarity`,
+      token,
+      { method: "POST", body: JSON.stringify({}) }
+    ),
+  listSimilarityMatchesForRun: (token: string | undefined, runId: string) =>
+    authed<{ results: SimilarityMatch[] }>(`/api/exams/v1/faculty/gradebook/runs/${runId}/similarity`, token),
+  createExport: (token: string | undefined, runId: string, format: "csv" | "json") =>
+    authed<ExportJob>(`/api/exams/v1/faculty/gradebook/runs/${runId}/export`, token, {
+      method: "POST",
+      body: JSON.stringify({ format }),
+    }),
+  getExportJob: (token: string | undefined, jobId: string) =>
+    authed<ExportJob>(`/api/exams/v1/faculty/gradebook/export/${jobId}`, token),
+  issueExportDownloadTicket: (token: string | undefined, jobId: string) =>
+    authed<{ download_ticket: string; expires_at: string }>(`/api/exams/v1/faculty/gradebook/export/${jobId}/download-ticket`, token, {
+      method: "POST",
     }),
 };

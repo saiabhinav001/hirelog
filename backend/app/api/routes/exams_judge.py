@@ -48,6 +48,11 @@ class RegradeRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class McqRegradeRequest(BaseModel):
+    correct: bool
+    reason: str = Field(min_length=1, max_length=500)
+
+
 def _candidate_for_question(run_id: str, uid: str, question_id: str):
     slot_index = int(question_id.rsplit(":slot:", 1)[1])
     candidate_id = VariantAssignmentRepository(db).get_assignment(run_id=run_id, uid=uid, slot_index=slot_index)
@@ -118,6 +123,23 @@ def regrade(submission_id: str, payload: RegradeRequest, user: dict = Depends(re
     if new_version is None:
         return {"status": "processing"}
     return sealed_grade_summary_dto(new_version)
+
+
+@faculty_router.post("/mcq-results/{run_id}/{uid}/{question_id}/regrade")
+def regrade_mcq(run_id: str, uid: str, question_id: str, payload: McqRegradeRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+    """Explicit override — e.g. a defective-question resolution or an
+    upheld grade appeal. Always a new version; the original automatic
+    exact-match result is never edited (Prompt 9)."""
+    service = JudgeService(db, _judge_provider_for_request())
+    try:
+        new_version = service.regrade_mcq(
+            run_id=run_id, uid=uid, question_id=question_id, reviewer=user["uid"],
+            correct=payload.correct, reason=payload.reason,
+        )
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
+    return new_version.model_dump(mode="json")
 
 
 @faculty_router.get("/short-answer-reviews/pending")

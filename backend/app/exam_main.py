@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import (
     exams_faculty,
     exams_generation,
+    exams_gradebook,
     exams_institution_admin,
     exams_institution_auth,
     exams_judge,
@@ -71,6 +72,20 @@ def _judge_provider():
             base_url=settings.EXAM_JUDGE_PROVIDER_BASE_URL, api_key=settings.EXAM_JUDGE_PROVIDER_API_KEY
         )
     return DeterministicFakeJudgeProvider()
+
+
+def _similarity_provider():
+    """Real provider only if a JPlag jar path is configured — same pattern
+    as `_judge_provider`. See docs/adr/0014 for what "configured" actually
+    requires (a real, separately-validated JPlag CLI installation; this
+    setting alone does not create or validate one)."""
+    from app.domain.gradebook.similarity_provider import DeterministicFakeSimilarityProvider, JPlagCliAdapter
+
+    if settings.EXAM_JPLAG_JAR_PATH:
+        return JPlagCliAdapter(
+            jplag_jar_path=settings.EXAM_JPLAG_JAR_PATH, java_executable=settings.EXAM_JPLAG_JAVA_EXECUTABLE
+        )
+    return DeterministicFakeSimilarityProvider()
 
 
 def _outbox_drain_loop() -> None:
@@ -222,3 +237,5 @@ app.include_router(exams_judge.faculty_router)
 app.include_router(exams_live.router)
 app.include_router(exams_proctoring.student_router)
 app.include_router(exams_proctoring.faculty_router)
+app.include_router(exams_gradebook.student_router)
+app.include_router(exams_gradebook.faculty_router)

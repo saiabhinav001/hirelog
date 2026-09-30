@@ -1,0 +1,95 @@
+"""Deterministic, rule-based learning feedback.
+
+Never a live LLM call (contract: "Optional AI signals remain disabled
+until locally evaluated."). Assembled ONLY from a released run's own
+gradebook rows and a question's OWN `supporting_anchors` (the same
+faculty-approved KT citations already attached to that candidate at
+generation time, Prompt 5) — never hidden tests, never another student's
+submissions, and never anything from a run that hasn't been released yet.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from app.domain.gradebook.errors import ResultsNotReleasedError
+from app.domain.gradebook.models import FailureCategory, LearningFeedback, QuestionOutcome, StudentGradebookRow
+from app.domain.gradebook.aggregation_service import GradebookAggregationService
+from app.domain.gradebook.repository import ReleaseRecordRepository
+
+_FAILURE_HINTS: dict[FailureCategory, str] = {
+    FailureCategory.COMPILE_ERROR: "Your submission didn't compile/parse — re-check syntax before submitting.",
+    FailureCategory.RUNTIME_ERROR: "Your program raised a runtime error on at least one case — check edge-case inputs (empty, zero, negative).",
+    FailureCategory.TIME_LIMIT_EXCEEDED: "Your solution was too slow on at least one case — consider a more efficient algorithm or data structure.",
+    FailureCategory.MEMORY_LIMIT_EXCEEDED: "Your solution used too much memory on at least one case — look for unnecessarily large data structures.",
+    FailureCategory.OUTPUT_LIMIT_EXCEEDED: "Your program printed far more output than expected — check for an unintended loop or leftover debug output.",
+    FailureCategory.WRONG_ANSWER: "Your output didn't match the expected result on at least one case — re-check your logic against the examples.",
+}
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def build_learning_feedback(
+    row: StudentGradebookRow, *, run_id: str, supporting_anchors_by_question: dict[str, list[str]]
+) -> LearningFeedback:
+    """Pure — takes an already-built gradebook row (itself already
+    release-gated by the caller) and produces template-based feedback.
+    PENDING questions are silently excluded: grading isn't final, so there
+    is nothing honest to say about them yet."""
+    strengths: list[str] = []
+    gaps: list[str] = []
+    practice_steps: list[str] = []
+    source_anchors: list[str] = []
+    missing_material: list[str] = []
+
+    for qr in row.question_results:
+        label = f"Question {qr.slot_index + 1}"
+        anchors = supporting_anchors_by_question.get(qr.question_id, [])
+
+        if qr.outcome == QuestionOutcome.FULLY_SOLVED:
+            strengths.append(f"{label}: fully solved ({qr.weighted_score:g}/{qr.max_score:g}).")
+            continue
+        if qr.outcome == QuestionOutcome.PENDING:
+            continue
+
+        if qr.outcome == QuestionOutcome.PARTIALLY_SOLVED:
+            gaps.append(f"{label}: partially solved ({qr.weighted_score:g}/{qr.max_score:g}).")
+            if qr.failure_category and qr.failure_category != FailureCategory.NONE:
+                practice_steps.append(_FAILURE_HINTS[qr.failure_category])
+        elif qr.outcome == QuestionOutcome.BLANK:
+            gaps.append(f"{label}: not attempted.")
+
+        if anchors:
+            source_anchors.extend(anchors)
+        else:
+            missing_material.append(f"{label}: no supporting material on file to recommend.")
+
+    return LearningFeedback(
+        run_id=run_id, uid=row.uid, strengths=strengths, gaps=gaps, practice_steps=practice_steps,
+        source_anchors=sorted(set(source_anchors)), missing_material=missing_material, generated_at=_utc_now(),
+    )
+
+
+class FeedbackService:
+    def __init__(self, db) -> None:
+        self._db = db
+        self._releases = ReleaseRecordRepository(db)
+        self._aggregation = GradebookAggregationService(db)
+
+    def build_feedback_for_student(self, run_id: str, uid: str) -> LearningFeedback:
+        if self._releases.latest_for_run(run_id) is None:
+            raise ResultsNotReleasedError(f"run {run_id} results have not been released yet")
+
+        run, revision = self._aggregation.get_run_and_revision(run_id)
+        row = self._aggregation.build_student_row(run, revision, uid)
+
+        anchors_by_question: dict[str, list[str]] = {}
+        for qr in row.question_results:
+            candidate_id = self._aggregation.assignments.get_assignment(run_id=run_id, uid=uid, slot_index=qr.slot_index)
+            candidate = self._aggregation.generation.get_candidate(candidate_id) if candidate_id else None
+            if candidate is not None:
+                anchors_by_question[qr.question_id] = [f"{a.source_id}:{a.anchor_id}" for a in candidate.supporting_anchors]
+
+        return build_learning_feedback(row, run_id=run_id, supporting_anchors_by_question=anchors_by_question)

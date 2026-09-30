@@ -73,10 +73,23 @@ class _FakeGradingResultRepo:
 
 class _FakeMcqResultRepo:
     def __init__(self) -> None:
-        self.saved: list[McqGradeResult] = []
+        self.store: dict[str, McqGradeResult] = {}
 
-    def save(self, result: McqGradeResult) -> None:
-        self.saved.append(result)
+    @property
+    def saved(self) -> list[McqGradeResult]:
+        return list(self.store.values())
+
+    def create(self, result: McqGradeResult) -> None:
+        self.store[result.id] = result
+
+    def get(self, result_id: str):
+        return self.store.get(result_id)
+
+    def latest_for_question(self, run_id: str, uid: str, question_id: str):
+        matches = [r for r in self.store.values() if r.run_id == run_id and r.uid == uid and r.question_id == question_id]
+        if not matches:
+            return None
+        return max(matches, key=lambda r: r.version)
 
 
 class _FakeShortAnswerReviewRepo:
@@ -254,6 +267,27 @@ def test_grade_mcq_correct_and_incorrect() -> None:
     assert correct.correct is True
     assert incorrect.correct is False
     assert len(service._mcq_results.saved) == 2
+
+
+def test_regrade_mcq_creates_new_version_and_preserves_original() -> None:
+    service = _service(DeterministicFakeJudgeProvider())
+    original = service.grade_mcq(candidate_id="c1", run_id="r1", uid="u1", question_id="q1", student_answer="B", expected_answer="A")
+    assert original.correct is False
+
+    regraded = service.regrade_mcq(run_id="r1", uid="u1", question_id="q1", reviewer="fac-1", correct=True, reason="Question key was wrong.")
+
+    assert regraded.correct is True
+    assert regraded.version == 2
+    assert regraded.graded_by == "fac-1"
+    # Original document is untouched.
+    assert service._mcq_results.get(original.id).correct is False
+    assert service._mcq_results.get(original.id).version == 1
+
+
+def test_regrade_mcq_without_existing_result_raises() -> None:
+    service = _service(DeterministicFakeJudgeProvider())
+    with pytest.raises(LookupError):
+        service.regrade_mcq(run_id="r1", uid="u1", question_id="no-such-question", reviewer="fac-1", correct=True, reason="x")
 
 
 # ── Short answer review ───────────────────────────────────────────────────────

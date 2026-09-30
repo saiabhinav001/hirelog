@@ -145,6 +145,17 @@ class Settings(BaseSettings):
     # sets this to a provisioned Firebase Storage bucket name.
     EXAM_EVIDENCE_STORAGE_BUCKET: Optional[str] = None
 
+    # ── Gradebook / similarity / export (Prompt 9, docs/adr/0014) ───────────
+    # Export downloads reuse EXAM_EVIDENCE_STORAGE_BUCKET (same bucket, a
+    # different key prefix) — no separate bucket setting. Unset JPlag path
+    # falls back to a deterministic fake similarity provider (test/dev only,
+    # never performs real comparison). A real JPlag CLI jar requires a
+    # separately provisioned Java runtime — this config alone does not
+    # create or validate that environment (see ADR for requirements).
+    EXAM_EXPORT_DOWNLOAD_TICKET_TTL_SECONDS: int = 300
+    EXAM_JPLAG_JAR_PATH: Optional[str] = None
+    EXAM_JPLAG_JAVA_EXECUTABLE: str = "java"
+
     @property
     def is_production(self) -> bool:
         return self.ENV == "production"

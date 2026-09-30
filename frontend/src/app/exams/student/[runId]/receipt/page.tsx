@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
@@ -69,6 +70,9 @@ function ReceiptContent() {
       <p className="mt-6 text-sm text-[var(--text-muted)]">
         Results are released by your institution separately and will appear here once available.
       </p>
+      <Link className="btn-secondary mt-4 inline-flex" href={`/exams/student/${runId}/results`}>
+        View results
+      </Link>
     </div>
   );
 }

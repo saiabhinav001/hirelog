@@ -124,6 +124,14 @@ class GenerationCandidate(BaseModel):
     marking_rubric: dict = Field(default_factory=dict)
     reference_solutions: dict[str, str] = Field(default_factory=dict)  # language -> code
     public_tests: list = Field(default_factory=list)
+    # Per-language boilerplate shown to the student in the code editor before
+    # they write anything (e.g. a function signature). No existing authoring
+    # path populates this yet, so it defaults to empty for every candidate —
+    # a safe no-op. Reserved for Prompt 9's similarity review, which must
+    # strip this shared text before comparing submissions (contract:
+    # "excluding instructor starter code") so identical boilerplate across
+    # every student never registers as a false-positive match.
+    starter_code: dict[str, str] = Field(default_factory=dict)
     # Sealed grading input (Prompt 6) — never serialized to students. Shape:
     # [{"group_name": str, "weight": float, "tests": [{"stdin": str, "expected_output": str}]}]
     hidden_test_groups: list = Field(default_factory=list)

@@ -57,6 +57,25 @@ def test_live_ticket_route_is_503_when_exams_disabled() -> None:
     assert client.post("/api/exams/v1/live/ticket", json={"run_id": "r1"}).status_code == 503
 
 
+def test_gradebook_routes_are_503_when_exams_disabled() -> None:
+    assert client.get("/api/exams/v1/student/gradebook/runs/r1/results").status_code == 503
+    assert client.get("/api/exams/v1/student/gradebook/runs/r1/feedback").status_code == 503
+    assert client.post(
+        "/api/exams/v1/student/gradebook/runs/r1/questions/q1/appeals", json={"student_statement": "x"}
+    ).status_code == 503
+    assert client.get("/api/exams/v1/faculty/gradebook/runs/r1/rows").status_code == 503
+    assert client.get("/api/exams/v1/faculty/gradebook/runs/r1/counts").status_code == 503
+    assert client.post("/api/exams/v1/faculty/gradebook/runs/r1/release", json={}).status_code == 503
+    assert client.post(
+        "/api/exams/v1/faculty/gradebook/runs/r1/questions/q1/defective",
+        json={"resolution": "full_credit_all", "reason": "x"},
+    ).status_code == 503
+    assert client.post(
+        "/api/exams/v1/faculty/gradebook/runs/r1/questions/q1/similarity", json={}
+    ).status_code == 503
+    assert client.post("/api/exams/v1/faculty/gradebook/runs/r1/export", json={"format": "csv"}).status_code == 503
+
+
 def test_root_and_health_endpoints_work_even_when_disabled() -> None:
     """The API itself must stay up (only mutating routes are gated) so
     operators can still see health/readiness while the module is off."""

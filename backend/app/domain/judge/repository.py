@@ -51,6 +51,24 @@ class SubmissionRepository:
         ).limit(limit)
         return [CodeSubmission.model_validate({**(d.to_dict() or {}), "id": d.id}) for d in query.stream()]
 
+    def get_latest_final_grade(self, run_id: str, uid: str, question_id: str) -> Optional[CodeSubmission]:
+        """The sealed final-grade submission for one student's one coding
+        question — used by similarity review (Prompt 9), never the quota'd
+        public-run submissions. `created_at` breaks ties in case a retry
+        ever produced more than one (defensive; a retry currently updates
+        the existing doc in place rather than creating a new one)."""
+        query = (
+            self._db.collection(SUBMISSIONS_COLLECTION)
+            .where(filter=firestore.FieldFilter("run_id", "==", run_id))
+            .where(filter=firestore.FieldFilter("uid", "==", uid))
+            .where(filter=firestore.FieldFilter("question_id", "==", question_id))
+            .where(filter=firestore.FieldFilter("purpose", "==", "final_grade"))
+        )
+        results = [CodeSubmission.model_validate({**(d.to_dict() or {}), "id": d.id}) for d in query.stream()]
+        if not results:
+            return None
+        return max(results, key=lambda r: r.created_at)
+
 
 class GradingResultRepository:
     def __init__(self, db) -> None:
@@ -75,18 +93,65 @@ class GradingResultRepository:
             return None
         return max(results, key=lambda r: r.version)
 
+    def list_latest_for_attempt(self, run_id: str, uid: str) -> list[GradingResult]:
+        """Latest version per question_id, for gradebook aggregation
+        (Prompt 9) — one query instead of one per question."""
+        query = (
+            self._db.collection(GRADING_RESULTS_COLLECTION)
+            .where(filter=firestore.FieldFilter("run_id", "==", run_id))
+            .where(filter=firestore.FieldFilter("uid", "==", uid))
+        )
+        all_results = [GradingResult.model_validate({**(d.to_dict() or {}), "id": d.id}) for d in query.stream()]
+        latest_by_question: dict[str, GradingResult] = {}
+        for result in all_results:
+            existing = latest_by_question.get(result.question_id)
+            if existing is None or result.version > existing.version:
+                latest_by_question[result.question_id] = result
+        return list(latest_by_question.values())
+
 
 class McqResultRepository:
     def __init__(self, db) -> None:
         self._db = db
 
-    def _doc_id(self, run_id: str, uid: str, question_id: str) -> str:
-        return f"{run_id}__{uid}__{question_id}"
+    def create(self, result: McqGradeResult) -> None:
+        """Each version is its own document (id includes version) — a
+        regrade never overwrites a prior one (contract: 'never overwrite',
+        'auditable lineage')."""
+        self._db.collection(MCQ_RESULTS_COLLECTION).document(result.id).set(_model_dict(result))
 
-    def save(self, result: McqGradeResult) -> None:
-        self._db.collection(MCQ_RESULTS_COLLECTION).document(
-            self._doc_id(result.run_id, result.uid, result.question_id)
-        ).set(_model_dict(result))
+    def get(self, result_id: str) -> Optional[McqGradeResult]:
+        snap = self._db.collection(MCQ_RESULTS_COLLECTION).document(result_id).get()
+        if not snap.exists:
+            return None
+        return McqGradeResult.model_validate({**(snap.to_dict() or {}), "id": snap.id})
+
+    def latest_for_question(self, run_id: str, uid: str, question_id: str) -> Optional[McqGradeResult]:
+        query = (
+            self._db.collection(MCQ_RESULTS_COLLECTION)
+            .where(filter=firestore.FieldFilter("run_id", "==", run_id))
+            .where(filter=firestore.FieldFilter("uid", "==", uid))
+            .where(filter=firestore.FieldFilter("question_id", "==", question_id))
+        )
+        results = [McqGradeResult.model_validate({**(d.to_dict() or {}), "id": d.id}) for d in query.stream()]
+        if not results:
+            return None
+        return max(results, key=lambda r: r.version)
+
+    def list_for_attempt(self, run_id: str, uid: str) -> list[McqGradeResult]:
+        """Latest version per question_id, for gradebook aggregation."""
+        query = (
+            self._db.collection(MCQ_RESULTS_COLLECTION)
+            .where(filter=firestore.FieldFilter("run_id", "==", run_id))
+            .where(filter=firestore.FieldFilter("uid", "==", uid))
+        )
+        all_results = [McqGradeResult.model_validate({**(d.to_dict() or {}), "id": d.id}) for d in query.stream()]
+        latest_by_question: dict[str, McqGradeResult] = {}
+        for result in all_results:
+            existing = latest_by_question.get(result.question_id)
+            if existing is None or result.version > existing.version:
+                latest_by_question[result.question_id] = result
+        return list(latest_by_question.values())
 
 
 class ShortAnswerReviewRepository:
@@ -115,3 +180,19 @@ class ShortAnswerReviewRepository:
             .limit(limit)
         )
         return [ShortAnswerReview.model_validate({**(d.to_dict() or {}), "id": d.id}) for d in query.stream()]
+
+    def list_latest_for_attempt(self, run_id: str, uid: str) -> list[ShortAnswerReview]:
+        """Latest version per question_id, for gradebook aggregation
+        (Prompt 9)."""
+        query = (
+            self._db.collection(SHORT_ANSWER_REVIEWS_COLLECTION)
+            .where(filter=firestore.FieldFilter("run_id", "==", run_id))
+            .where(filter=firestore.FieldFilter("uid", "==", uid))
+        )
+        all_reviews = [ShortAnswerReview.model_validate({**(d.to_dict() or {}), "id": d.id}) for d in query.stream()]
+        latest_by_question: dict[str, ShortAnswerReview] = {}
+        for review in all_reviews:
+            existing = latest_by_question.get(review.question_id)
+            if existing is None or review.version > existing.version:
+                latest_by_question[review.question_id] = review
+        return list(latest_by_question.values())

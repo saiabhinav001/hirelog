@@ -136,12 +136,19 @@ class GradingResult(BaseModel):
 
 
 class McqGradeResult(BaseModel):
+    """Same immutable-plus-explicit-regrade-version pattern as
+    `GradingResult` (Prompt 9: 'auditable lineage', 'never overwrite')."""
+
+    id: str
     run_id: str
     uid: str
     question_id: str
     candidate_id: str
     correct: bool
+    version: int = 1
     graded_at: datetime
+    graded_by: Optional[str] = None  # None for automatic exact-match grading
+    regrade_reason: Optional[str] = None
 
 
 class ShortAnswerReviewStatus(str, Enum):

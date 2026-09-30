@@ -145,11 +145,25 @@ class JudgeService:
 
     def grade_mcq(self, *, candidate_id: str, run_id: str, uid: str, question_id: str, student_answer: str, expected_answer: str) -> McqGradeResult:
         result = McqGradeResult(
-            run_id=run_id, uid=uid, question_id=question_id, candidate_id=candidate_id,
+            id=uuid4().hex, run_id=run_id, uid=uid, question_id=question_id, candidate_id=candidate_id,
             correct=grade_mcq_exact_match(student_answer, expected_answer), graded_at=_utc_now(),
         )
-        self._mcq_results.save(result)
+        self._mcq_results.create(result)
         return result
+
+    def regrade_mcq(self, *, run_id: str, uid: str, question_id: str, reviewer: str, correct: bool, reason: str) -> McqGradeResult:
+        """Explicit faculty override — e.g. a defective-question resolution
+        or a grade appeal upheld. Always a NEW version; the original
+        automatic result is never edited (contract: 'never overwrite')."""
+        previous = self._mcq_results.latest_for_question(run_id, uid, question_id)
+        if previous is None:
+            raise LookupError(f"no existing MCQ result for run={run_id} uid={uid} question={question_id}")
+        new_version = McqGradeResult(
+            id=uuid4().hex, run_id=run_id, uid=uid, question_id=question_id, candidate_id=previous.candidate_id,
+            correct=correct, version=previous.version + 1, graded_at=_utc_now(), graded_by=reviewer, regrade_reason=reason,
+        )
+        self._mcq_results.create(new_version)
+        return new_version
 
     # ── Short answer (human rubric review) ────────────────────────────────────
 
