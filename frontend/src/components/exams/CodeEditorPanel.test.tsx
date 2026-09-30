@@ -28,4 +28,17 @@ describe("CodeEditorPanel", () => {
     render(<CodeEditorPanel value="locked" onChange={vi.fn()} language="python3.11" readOnly />);
     expect(screen.getByLabelText("Code editor for python3.11")).toHaveAttribute("readonly");
   });
+
+  it("never traps Tab focus inside the textarea (WCAG 2.1.2 no keyboard trap)", async () => {
+    render(
+      <div>
+        <CodeEditorPanel value="" onChange={vi.fn()} language="python3.11" />
+        <button>Next control</button>
+      </div>
+    );
+    const textarea = screen.getByLabelText("Code editor for python3.11");
+    textarea.focus();
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Next control" })).toHaveFocus();
+  });
 });

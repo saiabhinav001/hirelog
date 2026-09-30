@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>You're offline — Hirelog Exams</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0b0f19;
+      color: #e5e7eb;
+      padding: 24px;
+    }
+    main {
+      max-width: 32rem;
+      text-align: center;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 0.75rem; }
+    p { line-height: 1.6; color: #9ca3af; }
+    button {
+      margin-top: 1.5rem;
+      padding: 0.6rem 1.25rem;
+      border-radius: 0.5rem;
+      border: 1px solid #4F46E5;
+      background: #4F46E5;
+      color: white;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    button:hover { background: #4338ca; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>You're offline</h1>
+    <p>
+      This page and a few static assets were cached so the app can explain what's
+      happening — nothing else. Exam questions, answers, evidence, results, and every
+      API response are always fetched live and are never cached for offline use.
+    </p>
+    <p>
+      <strong>You cannot submit a final answer while offline.</strong> Reconnect to the
+      internet and reload to continue your exam. If you were in the middle of an
+      attempt, your last saved draft is safe on the server — nothing is lost by
+      losing connection.
+    </p>
+    <button onclick="location.reload()">Try again</button>
+  </main>
+</body>
+</html>

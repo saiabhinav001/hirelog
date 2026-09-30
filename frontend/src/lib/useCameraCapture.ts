@@ -14,7 +14,7 @@ const EXAMS_API_BASE = (process.env.NEXT_PUBLIC_EXAMS_API_BASE_URL || "http://lo
 
 export type CaptureState = {
   lastCaptureAt: string | null;
-  permission: "unknown" | "granted" | "denied" | "unsupported";
+  permission: "unknown" | "granted" | "denied" | "unsupported" | "waived";
 };
 
 async function captureOneFrame(): Promise<Blob | { missingReason: string }> {
@@ -54,18 +54,43 @@ async function sha256Hex(blob: Blob): Promise<string> {
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export function useCameraCapture(runId: string | null, getToken: () => Promise<string | undefined>) {
+export function useCameraCapture(
+  runId: string | null,
+  getToken: () => Promise<string | undefined>,
+  cameraWaived = false
+) {
   const [state, setState] = useState<CaptureState>({ lastCaptureAt: null, permission: "unknown" });
   const runIdRef = useRef(runId);
   useEffect(() => {
     runIdRef.current = runId;
   }, [runId]);
 
+  const cameraWaivedRef = useRef(cameraWaived);
+  useEffect(() => {
+    cameraWaivedRef.current = cameraWaived;
+  }, [cameraWaived]);
+
   const capture = useCallback(
     async (kind: "check_in" | "periodic" | "submission") => {
       const currentRunId = runIdRef.current;
       if (!currentRunId) return;
       const token = await getToken();
+
+      if (cameraWaivedRef.current) {
+        // Institution-approved accommodation — never even request camera
+        // permission. One honest, explained MISSING record per capture
+        // moment, not silence (contract: 'camera alternatives approved by
+        // institution').
+        setState((s) => ({ ...s, permission: "waived" }));
+        await fetch(`${EXAMS_API_BASE}/api/exams/v1/student/proctoring/runs/${currentRunId}/snapshots/missing`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ kind, reason: "camera_waived_accommodation" }),
+          cache: "no-store",
+        }).catch(() => undefined);
+        return;
+      }
+
       const result = await captureOneFrame();
 
       if (!(result instanceof Blob)) {

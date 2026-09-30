@@ -28,6 +28,7 @@ from app.api.routes import (
     exams_judge,
     exams_kt,
     exams_live,
+    exams_lockdown,
     exams_me,
     exams_proctoring,
     exams_student,
@@ -239,3 +240,4 @@ app.include_router(exams_proctoring.student_router)
 app.include_router(exams_proctoring.faculty_router)
 app.include_router(exams_gradebook.student_router)
 app.include_router(exams_gradebook.faculty_router)
+app.include_router(exams_lockdown.router)

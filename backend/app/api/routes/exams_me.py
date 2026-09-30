@@ -6,12 +6,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.api.exams_dependencies import get_current_exam_user
+from app.api.exams_dependencies import get_current_exam_user, require_exams_enabled
 from app.core.config import settings
 from app.core.firebase import db
 from app.domain.institution.repository import MembershipRepository
 
-router = APIRouter(prefix="/api/exams/v1", tags=["exams-me"])
+router = APIRouter(prefix="/api/exams/v1", tags=["exams-me"], dependencies=[Depends(require_exams_enabled)])
 
 
 @router.get("/me")

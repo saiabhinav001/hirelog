@@ -11,6 +11,7 @@ const getCurrentQuestionMock = vi.fn();
 const getMyDraftMock = vi.fn();
 const listMyDraftVersionsMock = vi.fn();
 const submitMock = vi.fn();
+const getMyAccommodationsMock = vi.fn().mockResolvedValue({ extra_minutes: 0, camera_waived: false });
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ runId: "run-1" }),
@@ -38,6 +39,7 @@ vi.mock("@/lib/examEndpoints", () => ({
     getMyDraft: (...args: unknown[]) => getMyDraftMock(...args),
     listMyDraftVersions: (...args: unknown[]) => listMyDraftVersionsMock(...args),
     submit: (...args: unknown[]) => submitMock(...args),
+    getMyAccommodations: (...args: unknown[]) => getMyAccommodationsMock(...args),
   },
 }));
 
@@ -63,6 +65,7 @@ describe("Student exam page — submit confirmation", () => {
     getMyDraftMock.mockReset();
     listMyDraftVersionsMock.mockReset();
     submitMock.mockReset();
+    getMyAccommodationsMock.mockReset().mockResolvedValue({ extra_minutes: 0, camera_waived: false });
   });
 
   it("shows an irreversible-submit confirmation dialog before actually submitting", async () => {
@@ -86,6 +89,14 @@ describe("Student exam page — submit confirmation", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Yes, submit" }));
 
     await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("fetches the student's own accommodations (never another student's)", async () => {
+    mockLastSlotShortAnswer();
+    render(<ExamPage />);
+
+    await screen.findByRole("button", { name: "Submit exam" });
+    await waitFor(() => expect(getMyAccommodationsMock).toHaveBeenCalledWith("token", "run-1"));
   });
 
   it("does not show a submit button before the last question", async () => {

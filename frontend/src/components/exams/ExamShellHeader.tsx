@@ -58,12 +58,13 @@ export function ExamShellHeader({
   connectionHealth: ConnectionHealth;
   saveReceipt?: { savedAt: string; version: number } | null;
   warningCount?: number;
-  camera?: { permission: "unknown" | "granted" | "denied" | "unsupported"; lastCaptureAt: string | null };
+  camera?: { permission: "unknown" | "granted" | "denied" | "unsupported" | "waived"; lastCaptureAt: string | null };
 }) {
   const cameraLabel =
     !camera || camera.permission === "unknown" ? "Unknown"
       : camera.permission === "denied" ? "Permission denied"
       : camera.permission === "unsupported" ? "Unsupported"
+      : camera.permission === "waived" ? "Waived (accommodation)"
       : formatCaptureAge(camera.lastCaptureAt);
 
   return (
@@ -89,7 +90,7 @@ export function ExamShellHeader({
       <div className="flex items-center gap-4">
         <div className="flex flex-col items-center" aria-label="Camera status">
           <div className="flex h-10 w-14 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--surface-muted)] text-[0.65rem] text-[var(--text-muted)]">
-            {camera?.permission === "granted" ? "●" : "Unknown"}
+            {camera?.permission === "granted" ? "●" : camera?.permission === "waived" ? "—" : "Unknown"}
           </div>
           <span className="mt-1 text-[0.65rem] text-[var(--text-muted)]">{cameraLabel}</span>
         </div>

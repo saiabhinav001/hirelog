@@ -25,6 +25,21 @@ def test_faculty_route_is_503_when_exams_disabled() -> None:
     assert response.status_code == 503
 
 
+def test_student_accommodations_route_is_503_when_exams_disabled() -> None:
+    assert client.get("/api/exams/v1/student/runs/r1/accommodations").status_code == 503
+
+
+def test_me_route_is_503_when_exams_disabled_even_without_auth() -> None:
+    """Regression test: `exams_student.py` and `exams_me.py` previously had
+    no ROUTER-level `require_exams_enabled` dependency, relying solely on
+    `get_current_exam_user`'s internal ordering — which FastAPI's
+    `HTTPBearer` security dependency can pre-empt with a 403 'Not
+    authenticated' for a caller with no Authorization header at all,
+    before the feature-flag check ever runs. Both routers now declare it
+    at the router level, exactly like every other exam router."""
+    assert client.get("/api/exams/v1/me").status_code == 503
+
+
 def test_faculty_create_definition_is_503_when_exams_disabled() -> None:
     response = client.post("/api/exams/v1/faculty/definitions", json={"title": "Midterm"})
     assert response.status_code == 503
@@ -74,6 +89,12 @@ def test_gradebook_routes_are_503_when_exams_disabled() -> None:
         "/api/exams/v1/faculty/gradebook/runs/r1/questions/q1/similarity", json={}
     ).status_code == 503
     assert client.post("/api/exams/v1/faculty/gradebook/runs/r1/export", json={"format": "csv"}).status_code == 503
+
+
+def test_lockdown_routes_are_503_when_exams_disabled() -> None:
+    assert client.get("/api/exams/v1/faculty/lockdown/runs/r1/profile").status_code == 503
+    assert client.post("/api/exams/v1/faculty/lockdown/runs/r1/profile", json={"enabled": True}).status_code == 503
+    assert client.get("/api/exams/v1/faculty/lockdown/runs/r1/admission-log").status_code == 503
 
 
 def test_root_and_health_endpoints_work_even_when_disabled() -> None:

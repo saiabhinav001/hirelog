@@ -164,7 +164,7 @@ function MobileMenu() {
 
       {open && (
         <div className="absolute right-0 z-50 mt-2 w-[min(21rem,calc(100vw-1rem))] overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface-elevated)] shadow-[0_18px_42px_rgba(15,23,42,0.2)] animate-in fade-in slide-in-from-top-1 duration-150">
-          <nav className="grid gap-1 p-2">
+          <nav aria-label="Mobile" className="grid gap-1 p-2">
             {navLinks.map((item) => {
               const active = isActivePath(pathname, item.href);
               return (
@@ -288,7 +288,7 @@ export function Navbar() {
           </Link>
 
           {!isAuthRoute && (
-            <nav className="hidden items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-1.5 py-1 md:flex">
+            <nav aria-label="Main" className="hidden items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-1.5 py-1 md:flex">
               {navLinks.map((item) => (
                 <Link
                   key={item.href}

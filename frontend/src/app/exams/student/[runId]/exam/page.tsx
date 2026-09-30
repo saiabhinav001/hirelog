@@ -12,6 +12,7 @@ import { examEndpoints, type Attempt, type PublicQuestion } from "@/lib/examEndp
 import { useLiveSocket } from "@/lib/liveSocket";
 import { useProctoringObservations } from "@/lib/proctoringObservations";
 import { useCameraCapture } from "@/lib/useCameraCapture";
+import { useExamServiceWorker } from "@/lib/useExamServiceWorker";
 
 const AUTOSAVE_DEBOUNCE_MS = 1200;
 
@@ -30,6 +31,7 @@ function ExamContent() {
   const [submitting, setSubmitting] = useState(false);
   const [publicRunStatus, setPublicRunStatus] = useState<string | null>(null);
   const [publicRunResults, setPublicRunResults] = useState<unknown[]>([]);
+  const [cameraWaived, setCameraWaived] = useState(false);
 
   const draftVersionsRef = useRef<Record<string, number>>({});
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -64,9 +66,21 @@ function ExamContent() {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    getToken()
+      .then((token) => examEndpoints.getMyAccommodations(token, runId))
+      .then((accommodations) => setCameraWaived(accommodations.camera_waived))
+      .catch(() => undefined); // accommodations are an enhancement, never a blocker
+  }, [getToken, runId]);
+
   const { health } = useLiveSocket({ runId, getToken, onReconcile: refresh });
   useProctoringObservations(attempt?.status === "in_progress" ? runId : null, getToken);
-  const { state: cameraState, captureNow } = useCameraCapture(attempt?.status === "in_progress" ? runId : null, getToken);
+  const { state: cameraState, captureNow } = useCameraCapture(
+    attempt?.status === "in_progress" ? runId : null,
+    getToken,
+    cameraWaived
+  );
+  useExamServiceWorker({ attemptActive: attempt?.status === "in_progress" });
 
   useEffect(() => {
     if (!attempt || redirectedRef.current) return;

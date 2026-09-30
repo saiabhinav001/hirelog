@@ -7,6 +7,12 @@
  * safety/accessibility-sensitive input reliable and fully keyboard/screen-
  * reader operable everywhere, rather than depending on an unvetted heavy
  * dependency. Loaded via `next/dynamic` so it's lazy-loaded on exam routes.
+ *
+ * Tab is intentionally NEVER intercepted here (Prompt 10: "do not disable
+ * browser shortcuts in ways that break accessibility") — trapping Tab to
+ * insert spaces, as many code editors do, creates a keyboard trap (WCAG
+ * 2.1.2) for keyboard-only and screen-reader users, who could never leave
+ * this field. Tab always moves focus to the next control.
  */
 
 export function CodeEditorPanel({
@@ -20,20 +26,6 @@ export function CodeEditorPanel({
   language: string;
   readOnly?: boolean;
 }) {
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Tab") {
-      event.preventDefault();
-      const target = event.currentTarget;
-      const start = target.selectionStart;
-      const end = target.selectionEnd;
-      const next = `${value.slice(0, start)}    ${value.slice(end)}`;
-      onChange(next);
-      requestAnimationFrame(() => {
-        target.selectionStart = target.selectionEnd = start + 4;
-      });
-    }
-  };
-
   return (
     <div className="card p-0 overflow-hidden">
       <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2">
@@ -52,7 +44,6 @@ export function CodeEditorPanel({
         autoCorrect="off"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onKeyDown={handleKeyDown}
         readOnly={readOnly}
       />
     </div>

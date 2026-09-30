@@ -51,6 +51,31 @@ export type PublicQuestion = {
   public_content: Record<string, unknown>;
 };
 
+export type MyAccommodations = {
+  extra_minutes: number;
+  camera_waived: boolean;
+};
+
+export type LockdownProfile = {
+  run_id: string;
+  enabled: boolean;
+  expected_config_key_hash: string | null;
+  expected_browser_exam_key_hashes: string[];
+  piloted_platforms: string[];
+  updated_by: string | null;
+  updated_at: string | null;
+};
+
+export type LockdownAdmissionLogEntry = {
+  id: string;
+  run_id: string;
+  uid: string;
+  outcome: "admitted" | "denied_not_configured" | "denied_missing_headers" | "denied_hash_mismatch";
+  config_key_header_present: boolean;
+  request_hash_header_present: boolean;
+  at: string;
+};
+
 export type GenerationCandidate = {
   id: string;
   item_type: "single_choice" | "multiple_select" | "short_answer" | "coding";
@@ -267,9 +292,26 @@ export const examEndpoints = {
       body: JSON.stringify({ extra_minutes: extraMinutes }),
     }),
 
+  // ── Managed lockdown (faculty) ───────────────────────────────────────────
+  getLockdownProfile: (token: string | undefined, runId: string) =>
+    authed<LockdownProfile>(`/api/exams/v1/faculty/lockdown/runs/${runId}/profile`, token),
+  configureLockdownProfile: (
+    token: string | undefined,
+    runId: string,
+    payload: { enabled: boolean; expected_config_key_hash: string | null; expected_browser_exam_key_hashes: string[]; piloted_platforms: string[] }
+  ) =>
+    authed<LockdownProfile>(`/api/exams/v1/faculty/lockdown/runs/${runId}/profile`, token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  listLockdownAdmissionLog: (token: string | undefined, runId: string) =>
+    authed<{ results: LockdownAdmissionLogEntry[] }>(`/api/exams/v1/faculty/lockdown/runs/${runId}/admission-log`, token),
+
   // ── Student ──────────────────────────────────────────────────────────────
   listMyRuns: (token?: string) => authed<{ results: StudentRunSummary[] }>("/api/exams/v1/student/runs", token),
   getState: (token: string | undefined, runId: string) => authed<Attempt>(`/api/exams/v1/student/runs/${runId}/state`, token),
+  getMyAccommodations: (token: string | undefined, runId: string) =>
+    authed<MyAccommodations>(`/api/exams/v1/student/runs/${runId}/accommodations`, token),
   admit: (token: string | undefined, runId: string) =>
     authed<Attempt>(`/api/exams/v1/student/runs/${runId}/admit`, token, { method: "POST" }),
   getCurrentQuestion: (token: string | undefined, runId: string) =>

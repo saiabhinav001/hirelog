@@ -22,6 +22,7 @@ export default defineConfig({
     env: {
       NEXT_PUBLIC_E2E_BYPASS_AUTH: "true",
       NEXT_PUBLIC_API_BASE_URL: "http://127.0.0.1:3000",
+      NEXT_PUBLIC_EXAMS_ENABLED: "true",
     },
   },
   projects: [

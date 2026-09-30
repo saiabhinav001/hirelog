@@ -1,0 +1,19 @@
+{
+  "name": "Hirelog Exams",
+  "short_name": "Hirelog Exams",
+  "description": "Proctored exam delivery for Hirelog. Installable app shell only — exam content, answers, evidence, and results are always fetched live and are never available offline.",
+  "id": "/exams/",
+  "start_url": "/exams/",
+  "scope": "/exams/",
+  "display": "standalone",
+  "background_color": "#0b0f19",
+  "theme_color": "#4F46E5",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

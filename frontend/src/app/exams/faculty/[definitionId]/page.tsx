@@ -253,6 +253,7 @@ function DefinitionDetail() {
                 <Link className="btn-secondary" href={`/exams/faculty/${definitionId}/runs/${run.id}/lobby`}>Lobby</Link>
                 <Link className="btn-secondary" href={`/exams/faculty/${definitionId}/runs/${run.id}/control`}>Live control</Link>
                 <Link className="btn-secondary" href={`/exams/faculty/${definitionId}/runs/${run.id}/results`}>Results</Link>
+                <Link className="btn-secondary" href={`/exams/faculty/${definitionId}/runs/${run.id}/lockdown`}>Lockdown</Link>
               </div>
             </div>
           ))}

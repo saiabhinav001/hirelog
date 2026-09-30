@@ -82,6 +82,23 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        // Exam routes need camera access for proctoring evidence capture
+        // (ADR 0013's `useCameraCapture`) — the site-wide deny above would
+        // otherwise silently block every `getUserMedia` call on these
+        // pages (a real bug found while auditing for Prompt 10: student
+        // camera captures would always fail closed as "permission
+        // denied", with nothing to indicate the cause was this header,
+        // not the student). Microphone/geolocation remain denied — the
+        // exam module uses neither.
+        source: "/exams/:path*",
+        headers: [
+          {
+            key: "Permissions-Policy",
+            value: "camera=(self), microphone=(), geolocation=()",
+          },
+        ],
+      },
+      {
         // Cache static assets aggressively
         source: "/_next/static/(.*)",
         headers: [

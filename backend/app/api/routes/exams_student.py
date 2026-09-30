@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
-from app.api.exams_dependencies import get_current_exam_user
+from app.api.exams_dependencies import get_current_exam_user, require_exams_enabled, require_seb_admission
 from app.api.exams_errors import raise_for_conflict_reason, raise_for_domain_error
 from app.core.firebase import db
 from app.domain.exams.commands import ExamCommandService
@@ -21,7 +21,7 @@ from app.domain.generation.public_content import build_public_content
 from app.domain.generation.repository import GenerationRepository, VariantAssignmentRepository
 from app.domain.live.publisher import publish_attempt_status_changed
 
-router = APIRouter(prefix="/api/exams/v1/student", tags=["exams-student"])
+router = APIRouter(prefix="/api/exams/v1/student", tags=["exams-student"], dependencies=[Depends(require_exams_enabled)])
 
 
 def _service() -> ExamStudentService:
@@ -70,6 +70,27 @@ def list_my_runs(response: Response, user: dict = Depends(get_current_exam_user)
     return {"results": results}
 
 
+@router.get("/runs/{run_id}/accommodations")
+def get_my_accommodations(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+    """Own accommodation window only — never another student's (contract:
+    'explicit, faculty-authored, never auto-derived'). `camera_waived`
+    lets the client skip requesting camera permission entirely for a
+    student with an institution-approved alternative, rather than
+    prompting and then recording a permission-denied outcome."""
+    _set_no_store(response)
+    service = _service()
+    try:
+        service.get_state(run_id, user["uid"])  # enforces enrollment; result unused here
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
+    run = service.get_run_or_404(run_id)
+    return {
+        "extra_minutes": run.policy.extra_minutes_for(user["uid"]),
+        "camera_waived": run.policy.camera_waived_for(user["uid"]),
+    }
+
+
 @router.get("/runs/{run_id}/state")
 def get_state(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
     _set_no_store(response)
@@ -82,7 +103,7 @@ def get_state(run_id: str, response: Response, user: dict = Depends(get_current_
 
 
 @router.post("/runs/{run_id}/admit")
-def admit(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def admit(run_id: str, response: Response, user: dict = Depends(require_seb_admission)) -> dict:
     _set_no_store(response)
     try:
         attempt = _service().admit(run_id, user["uid"])
@@ -94,7 +115,7 @@ def admit(run_id: str, response: Response, user: dict = Depends(get_current_exam
 
 
 @router.get("/runs/{run_id}/question")
-def get_current_question(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_current_question(run_id: str, response: Response, user: dict = Depends(require_seb_admission)) -> dict:
     """Only the CURRENT slot is ever constructed — never a guessed/future
     question id, never locked content (contract #3)."""
     _set_no_store(response)
@@ -119,7 +140,7 @@ def get_current_question(run_id: str, response: Response, user: dict = Depends(g
 
 
 @router.post("/runs/{run_id}/next-question")
-def advance_to_next_question(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def advance_to_next_question(run_id: str, response: Response, user: dict = Depends(require_seb_admission)) -> dict:
     """Forward-only — there is no corresponding 'previous question' route
     (contract: 'Keyboard Back/Next cannot access locked or rewrite submitted
     content')."""
@@ -145,7 +166,7 @@ def save_draft(
     question_id: str,
     payload: SaveDraftRequest,
     response: Response,
-    user: dict = Depends(get_current_exam_user),
+    user: dict = Depends(require_seb_admission),
 ) -> dict:
     _set_no_store(response)
     try:
@@ -183,7 +204,7 @@ def list_my_draft_versions(run_id: str, response: Response, user: dict = Depends
 
 
 @router.post("/runs/{run_id}/submit")
-def submit(run_id: str, payload: SubmitRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def submit(run_id: str, payload: SubmitRequest, response: Response, user: dict = Depends(require_seb_admission)) -> dict:
     _set_no_store(response)
     service = _service()
     try:
@@ -206,7 +227,7 @@ def submit(run_id: str, payload: SubmitRequest, response: Response, user: dict =
 
 
 @router.post("/runs/{run_id}/finish")
-def finish(run_id: str, payload: FinishRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def finish(run_id: str, payload: FinishRequest, response: Response, user: dict = Depends(require_seb_admission)) -> dict:
     _set_no_store(response)
     service = _service()
     try:

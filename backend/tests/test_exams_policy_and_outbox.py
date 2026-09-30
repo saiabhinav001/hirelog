@@ -38,6 +38,16 @@ def test_policy_accommodation_extra_minutes_lookup() -> None:
     assert policy.extra_minutes_for("unknown-uid") == 0
 
 
+def test_policy_camera_waived_defaults_false_and_is_explicit_per_student() -> None:
+    policy = ExamPolicy(
+        duration_minutes=60,
+        accommodations={"u1": AccommodationWindow(extra_minutes=0, camera_waived=True, note="approved alternative check-in")},
+    )
+    assert policy.camera_waived_for("u1") is True
+    assert policy.camera_waived_for("u2") is False  # no accommodation at all
+    assert policy.camera_waived_for("unknown-uid") is False
+
+
 def test_policy_rejects_empty_accommodation_uid() -> None:
     with pytest.raises(ValidationError):
         ExamPolicy(duration_minutes=60, accommodations={"": AccommodationWindow(extra_minutes=10)})

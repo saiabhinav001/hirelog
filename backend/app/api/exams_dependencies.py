@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 
 from app.api.dependencies import get_current_user_uncached
 from app.core.config import settings
@@ -88,4 +88,43 @@ def require_recent_staff_reauth(user: dict = Depends(get_current_exam_user)) -> 
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "reauthentication_required", "max_age_seconds": settings.EXAM_STAFF_REAUTH_MAX_AGE_SECONDS},
         )
+    return user
+
+
+def require_seb_admission(run_id: str, request: Request, user: dict = Depends(get_current_exam_user)) -> dict:
+    """Managed-lockdown admission gate (Prompt 10). A no-op (fast path) for
+    the overwhelming majority of runs that never enable strict mode.
+    Never uses User-Agent as proof — only the two SEB-documented
+    cryptographic headers are ever consulted (see
+    `app.domain.lockdown.decisions`). Composed into individual student
+    routes via `Depends(require_seb_admission)` — see ADR 0015 for exactly
+    which routes re-check this (admit/question/draft/submit/finish), not
+    literally every request."""
+    from app.domain.lockdown.decisions import CONFIG_KEY_HASH_HEADER, REQUEST_HASH_HEADER
+    from app.domain.lockdown.errors import LockdownAdmissionDeniedError
+    from app.domain.lockdown.service import LockdownService
+
+    service = LockdownService(db)
+    profile = service.get_or_default_profile(run_id)
+    if not profile.enabled:
+        return user
+
+    try:
+        service.check_admission(
+            run_id=run_id,
+            uid=user["uid"],
+            url=str(request.url),
+            config_key_hash_header=request.headers.get(CONFIG_KEY_HASH_HEADER),
+            request_hash_header=request.headers.get(REQUEST_HASH_HEADER),
+        )
+    except LockdownAdmissionDeniedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": exc.code,
+                "message": "This exam requires a verified managed-lockdown browser (Safe Exam Browser). "
+                "An ordinary browser — even with the exam PWA installed — cannot be admitted.",
+                "reason": str(exc),
+            },
+        ) from exc
     return user

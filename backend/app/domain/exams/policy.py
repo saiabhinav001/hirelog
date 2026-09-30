@@ -10,6 +10,10 @@ class AccommodationWindow(BaseModel):
     """Per-student accommodation — explicit extra time, never inferred."""
 
     extra_minutes: int = Field(ge=0, le=24 * 60)
+    # Institution-approved camera alternative (Prompt 10 accessibility
+    # contract) — explicit, faculty-authored, never auto-derived or
+    # inferred from a permission-denied event after the fact.
+    camera_waived: bool = False
     note: str = Field(default="", max_length=240)
 
 
@@ -34,3 +38,7 @@ class ExamPolicy(BaseModel):
     def extra_minutes_for(self, uid: str) -> int:
         window = self.accommodations.get(uid)
         return window.extra_minutes if window else 0
+
+    def camera_waived_for(self, uid: str) -> bool:
+        window = self.accommodations.get(uid)
+        return window.camera_waived if window else False
