@@ -18,5 +18,6 @@ including decisions to deliberately **not** build something yet.
 | [0010](0010-institution-identity-and-login.md) | Institution identity, roster import, and OTP fallback login | Accepted |
 | [0011](0011-judge-grading.md) | Isolated coding judge and reproducible grading | Accepted |
 | [0012](0012-faculty-student-interfaces-and-live-control.md) | Faculty/student interfaces and live control | Accepted |
+| [0013](0013-proctoring-evidence-and-appeals.md) | Proctoring evidence, warning block and appeals | Accepted |
 
 See [../architecture.md](../architecture.md) for the system diagram and request flow.

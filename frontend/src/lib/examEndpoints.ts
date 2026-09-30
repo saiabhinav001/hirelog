@@ -66,6 +66,37 @@ export type ApprovedSourceSummary = {
   url?: string;
 };
 
+export type IncidentLogEntry = {
+  id: string;
+  kind: string;
+  counted: boolean;
+  client_timestamp: string;
+  received_at: string;
+  duration_seconds: number | null;
+  note: string;
+};
+
+export type Appeal = {
+  id: string;
+  run_id: string;
+  uid: string;
+  student_statement: string;
+  status: "pending" | "upheld" | "overturned";
+  created_at: string;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  resolution_notes: string | null;
+  version: number;
+};
+
+export type EvidenceSnapshotSummary = {
+  id: string;
+  kind: "check_in" | "periodic" | "submission";
+  status: "requested" | "uploaded" | "verified" | "missing";
+  requested_at: string;
+  missing_reason: string | null;
+};
+
 async function authed<T>(path: string, token: string | undefined, init: RequestInit = {}): Promise<T> {
   return examApiFetch<T>(path, init, token);
 }
@@ -165,4 +196,36 @@ export const examEndpoints = {
       `/api/exams/v1/student/judge/public-run/${submissionId}?run_id=${encodeURIComponent(runId)}&question_id=${encodeURIComponent(questionId)}`,
       token
     ),
+
+  // ── Proctoring (student) ─────────────────────────────────────────────────
+  listMyIncidents: (token: string | undefined, runId: string) =>
+    authed<{ results: IncidentLogEntry[] }>(`/api/exams/v1/student/proctoring/runs/${runId}/incidents`, token),
+  submitAppeal: (token: string | undefined, runId: string, studentStatement: string) =>
+    authed<Appeal>(`/api/exams/v1/student/proctoring/runs/${runId}/appeals`, token, {
+      method: "POST",
+      body: JSON.stringify({ student_statement: studentStatement }),
+    }),
+
+  // ── Proctoring (faculty) ──────────────────────────────────────────────────
+  listIncidentsForStudent: (token: string | undefined, runId: string, uid: string) =>
+    authed<{ results: IncidentLogEntry[]; client_reported_disclaimer: string }>(
+      `/api/exams/v1/faculty/proctoring/runs/${runId}/uids/${uid}/incidents`,
+      token
+    ),
+  resolveBlock: (token: string | undefined, runId: string, uid: string, allowContinue: boolean, notes: string) =>
+    authed(`/api/exams/v1/faculty/proctoring/runs/${runId}/uids/${uid}/resolve`, token, {
+      method: "POST",
+      body: JSON.stringify({ allow_continue: allowContinue, notes }),
+    }),
+  listSnapshotsForStudent: (token: string | undefined, runId: string, uid: string) =>
+    authed<{ results: EvidenceSnapshotSummary[] }>(`/api/exams/v1/faculty/proctoring/runs/${runId}/uids/${uid}/snapshots`, token),
+  issueViewTicket: (token: string | undefined, snapshotId: string) =>
+    authed<{ view_ticket: string; expires_at: string }>(`/api/exams/v1/faculty/proctoring/snapshots/${snapshotId}/view-ticket`, token),
+  listAppealsForRun: (token: string | undefined, runId: string) =>
+    authed<{ results: Appeal[] }>(`/api/exams/v1/faculty/proctoring/runs/${runId}/appeals`, token),
+  resolveAppeal: (token: string | undefined, appealId: string, status: "upheld" | "overturned", notes: string) =>
+    authed<Appeal>(`/api/exams/v1/faculty/proctoring/appeals/${appealId}/resolve`, token, {
+      method: "POST",
+      body: JSON.stringify({ status, resolution_notes: notes }),
+    }),
 };

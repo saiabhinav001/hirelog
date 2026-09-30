@@ -10,6 +10,8 @@ import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
 import { examEndpoints, type Attempt, type PublicQuestion } from "@/lib/examEndpoints";
 import { useLiveSocket } from "@/lib/liveSocket";
+import { useProctoringObservations } from "@/lib/proctoringObservations";
+import { useCameraCapture } from "@/lib/useCameraCapture";
 
 const AUTOSAVE_DEBOUNCE_MS = 1200;
 
@@ -63,6 +65,8 @@ function ExamContent() {
   }, [refresh]);
 
   const { health } = useLiveSocket({ runId, getToken, onReconcile: refresh });
+  useProctoringObservations(attempt?.status === "in_progress" ? runId : null, getToken);
+  const { state: cameraState, captureNow } = useCameraCapture(attempt?.status === "in_progress" ? runId : null, getToken);
 
   useEffect(() => {
     if (!attempt || redirectedRef.current) return;
@@ -135,6 +139,9 @@ function ExamContent() {
 
   const handleSubmitExam = useCallback(async () => {
     setSubmitting(true);
+    // Best-effort only — a failed/denied capture never blocks submission
+    // (contract: "Submission acceptance cannot depend on a successful image upload.").
+    void captureNow("submission").catch(() => undefined);
     try {
       const token = await getToken();
       await examEndpoints.submit(token, runId, `submit-${runId}-${attempt?.uid ?? ""}`, attempt?.epoch ?? 0, draftVersionsRef.current);
@@ -145,7 +152,7 @@ function ExamContent() {
       setSubmitting(false);
       setShowSubmitConfirm(false);
     }
-  }, [attempt, getToken, refresh, runId]);
+  }, [attempt, captureNow, getToken, refresh, runId]);
 
   if (error) return <ErrorState title="Something went wrong" description={error} />;
   if (!attempt || !question) return <LoadingState message="Loading your question…" />;
@@ -160,6 +167,7 @@ function ExamContent() {
         connectionHealth={health}
         saveReceipt={saveReceipt}
         warningCount={attempt.warning_count}
+        camera={cameraState}
       />
 
       <div className="mt-6 card p-6">

@@ -28,6 +28,7 @@ from app.api.routes import (
     exams_kt,
     exams_live,
     exams_me,
+    exams_proctoring,
     exams_student,
 )
 from app.core.config import settings
@@ -111,6 +112,40 @@ def _judge_sweep_loop() -> None:
         _stop_event.wait(2.0)
 
 
+def _proctoring_stale_incident_sweep_loop() -> None:
+    """Closes departure incidents for students who left the tab entirely
+    without ever sending an end event — otherwise those incidents would
+    stay open (and uncounted) forever."""
+    from app.domain.proctoring.ledger_service import ProctoringLedgerService
+
+    service = ProctoringLedgerService(db)
+    while not _stop_event.is_set():
+        try:
+            service.sweep_stale_incidents_once(
+                grace_seconds=settings.EXAM_PROCTORING_GRACE_SECONDS,
+                stale_after_seconds=settings.EXAM_PROCTORING_STALE_INCIDENT_SECONDS,
+            )
+        except Exception:
+            logger.exception("proctoring stale-incident sweep tick failed")
+        _stop_event.wait(15.0)
+
+
+def _evidence_retention_sweep_loop() -> None:
+    """Deletes evidence (storage bytes + Firestore record together) once
+    past the configured retention window — bounded, idempotent."""
+    from app.api.routes.exams_proctoring import _storage
+    from app.domain.proctoring.evidence_service import EvidenceService
+    from app.domain.proctoring.retention import RetentionSweeper
+
+    sweeper = RetentionSweeper(EvidenceService(db, _storage()))
+    while not _stop_event.is_set():
+        try:
+            sweeper.sweep_once(retention_days=settings.EXAM_EVIDENCE_RETENTION_DAYS, limit=100)
+        except Exception:
+            logger.exception("evidence retention sweep tick failed")
+        _stop_event.wait(3600.0)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not settings.EXAMS_ENABLED:
@@ -127,6 +162,8 @@ async def lifespan(app: FastAPI):
     if settings.EXAMS_ENABLED:
         threading.Thread(target=_outbox_drain_loop, daemon=True).start()
         threading.Thread(target=_judge_sweep_loop, daemon=True).start()
+        threading.Thread(target=_proctoring_stale_incident_sweep_loop, daemon=True).start()
+        threading.Thread(target=_evidence_retention_sweep_loop, daemon=True).start()
 
     logger.info("Exam API startup complete — ENV=%s EXAMS_ENABLED=%s", settings.ENV, settings.EXAMS_ENABLED)
     yield
@@ -183,3 +220,5 @@ app.include_router(exams_student.router)
 app.include_router(exams_judge.student_router)
 app.include_router(exams_judge.faculty_router)
 app.include_router(exams_live.router)
+app.include_router(exams_proctoring.student_router)
+app.include_router(exams_proctoring.faculty_router)

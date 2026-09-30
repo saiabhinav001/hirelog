@@ -42,6 +42,14 @@ def test_judge_routes_are_503_when_exams_disabled() -> None:
     ).status_code == 503
 
 
+def test_proctoring_routes_are_503_when_exams_disabled() -> None:
+    assert client.post(
+        "/api/exams/v1/student/proctoring/runs/r1/observations",
+        json={"kind": "page_hidden", "client_event_id": "e1", "client_timestamp": "2026-06-01T10:00:00Z"},
+    ).status_code == 503
+    assert client.get("/api/exams/v1/faculty/proctoring/runs/r1/uids/u1/incidents").status_code == 503
+
+
 def test_live_ticket_route_is_503_when_exams_disabled() -> None:
     """The WebSocket route itself can't be exercised without a real
     Firestore-backed ticket (see docs/adr/0012 'Known limitations') — this

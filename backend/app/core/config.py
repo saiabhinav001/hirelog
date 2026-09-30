@@ -127,6 +127,24 @@ class Settings(BaseSettings):
     # "authenticated WebSocket ticket admission").
     EXAM_LIVE_TICKET_TTL_SECONDS: int = 60
 
+    # ── Proctoring evidence (Prompt 8, docs/adr/0013) ────────────────────────
+    # grace: a departure shorter than this never counts (e.g. a quick,
+    # accidental blur). cooldown: a new departure starting within this long
+    # after the previous one closed is treated as a CONTINUATION of the same
+    # incident, not a new one (contract: "count one continuous departure
+    # once"). The actual block THRESHOLD is per-run policy
+    # (ExamPolicy.warning_threshold), never a global setting.
+    EXAM_PROCTORING_GRACE_SECONDS: float = 2.0
+    EXAM_PROCTORING_COOLDOWN_SECONDS: float = 5.0
+    EXAM_PROCTORING_STALE_INCIDENT_SECONDS: float = 120.0
+    EXAM_EVIDENCE_UPLOAD_TICKET_TTL_SECONDS: int = 120
+    EXAM_EVIDENCE_VIEW_TICKET_TTL_SECONDS: int = 60
+    EXAM_EVIDENCE_RETENTION_DAYS: int = 90
+    # Unset by default — falls back to InMemoryEvidenceStorage (dev/test
+    # only; content does not survive a process restart). A real deployment
+    # sets this to a provisioned Firebase Storage bucket name.
+    EXAM_EVIDENCE_STORAGE_BUCKET: Optional[str] = None
+
     @property
     def is_production(self) -> bool:
         return self.ENV == "production"

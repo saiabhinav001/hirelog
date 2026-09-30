@@ -365,6 +365,21 @@ def test_seal_on_expiry_skips_already_resolved_attempts() -> None:
     assert decide_seal_on_expiry(attempt=attempt, now=NOW, current_draft_versions={}) is None
 
 
+def test_seal_on_expiry_also_seals_a_blocked_attempt_past_its_deadline() -> None:
+    """Prompt 8: a review-blocked attempt is not exempt from expiry — the
+    window still closes and the last acknowledged draft is still sealed."""
+    attempt = _attempt(status=AttemptStatus.BLOCKED, deadline=NOW - timedelta(seconds=1))
+    decision = decide_seal_on_expiry(attempt=attempt, now=NOW, current_draft_versions={"q1": 2})
+    assert decision is not None
+    assert decision.new_status == AttemptStatus.EXPIRED
+    assert decision.receipt.sealed_draft_versions == {"q1": 2}
+
+
+def test_seal_on_expiry_leaves_a_blocked_attempt_alone_before_its_deadline() -> None:
+    attempt = _attempt(status=AttemptStatus.BLOCKED, deadline=NOW + timedelta(minutes=30))
+    assert decide_seal_on_expiry(attempt=attempt, now=NOW, current_draft_versions={}) is None
+
+
 def test_finalization_batch_is_bounded() -> None:
     """Never processes the whole run in one call — batch_size caps it."""
     attempts = [

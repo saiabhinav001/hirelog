@@ -7,7 +7,7 @@ import Link from "next/link";
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
 import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
-import { examEndpoints, type Attempt, type ExamRunSummary } from "@/lib/examEndpoints";
+import { examEndpoints, type Appeal, type Attempt, type ExamRunSummary } from "@/lib/examEndpoints";
 import { useLiveSocket } from "@/lib/liveSocket";
 
 function statusBadge(status: string): string {
@@ -22,6 +22,7 @@ function ControlRoomContent() {
   const { getToken } = useExamAuth();
   const [run, setRun] = useState<ExamRunSummary | null>(null);
   const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [appeals, setAppeals] = useState<Appeal[]>([]);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,13 +34,15 @@ function ControlRoomContent() {
     async (cursorUid?: string) => {
       try {
         const token = await getToken();
-        const [runData, attemptsData] = await Promise.all([
+        const [runData, attemptsData, appealsData] = await Promise.all([
           examEndpoints.getRun(token, runId),
           examEndpoints.listAttemptsForRun(token, runId, cursorUid),
+          examEndpoints.listAppealsForRun(token, runId),
         ]);
         setRun(runData);
         setAttempts(attemptsData.results);
         setNextCursor(attemptsData.next_cursor_uid);
+        setAppeals(appealsData.results);
         setFetchedAt(Date.now());
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load the candidate grid.");
@@ -152,6 +155,43 @@ function ControlRoomContent() {
           <button className="btn-secondary" disabled={!cursor} onClick={() => setCursor(undefined)}>First page</button>
           <button className="btn-secondary" disabled={!nextCursor} onClick={() => setCursor(nextCursor ?? undefined)}>Next page</button>
         </div>
+      </div>
+
+      <div className="card mt-4 p-5">
+        <h2 className="text-lg font-semibold">Pending appeals</h2>
+        <ul className="mt-3 space-y-3 text-sm">
+          {appeals.filter((a) => a.status === "pending").length === 0 && (
+            <li className="text-[var(--text-muted)]">No pending appeals.</li>
+          )}
+          {appeals.filter((a) => a.status === "pending").map((appeal) => (
+            <li key={appeal.id} className="rounded-md border border-[var(--border)] p-3">
+              <p className="font-mono text-xs text-[var(--text-muted)]">{appeal.uid}</p>
+              <p className="mt-1">{appeal.student_statement}</p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  className="btn-secondary"
+                  onClick={async () => {
+                    const token = await getToken();
+                    await examEndpoints.resolveAppeal(token, appeal.id, "upheld", "Reviewed — upheld.");
+                    await loadPage(cursor);
+                  }}
+                >
+                  Uphold
+                </button>
+                <button
+                  className="btn-primary"
+                  onClick={async () => {
+                    const token = await getToken();
+                    await examEndpoints.resolveAppeal(token, appeal.id, "overturned", "Reviewed — overturned.");
+                    await loadPage(cursor);
+                  }}
+                >
+                  Overturn
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );

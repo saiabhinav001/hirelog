@@ -2,12 +2,11 @@
 
 /**
  * Shared header for every exam route: labelled timer, connection health,
- * own camera thumbnail/capture age, save receipt, warning count, delivery
- * profile. Unknown capabilities say "Unknown" rather than a fabricated
- * value (contract: "No fabricated background-app or Wi-Fi-strength
- * indicators. Unknown capabilities say unknown.") — camera capture isn't
- * implemented until Prompt 8, and managed-lockdown detection isn't
- * implemented until Prompt 10, so both slots are honest placeholders here.
+ * own camera capture-age, save receipt, warning count, delivery profile.
+ * Unknown capabilities say "Unknown" rather than a fabricated value
+ * (contract: "No fabricated background-app or Wi-Fi-strength indicators.
+ * Unknown capabilities say unknown.") — managed-lockdown detection isn't
+ * implemented until Prompt 10, so that slot stays an honest placeholder.
  */
 
 import type { ConnectionHealth } from "@/lib/liveSocket";
@@ -23,6 +22,13 @@ function formatRemaining(deadline: string | null): string {
   const mm = String(minutes).padStart(2, "0");
   const ss = String(seconds).padStart(2, "0");
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function formatCaptureAge(lastCaptureAt: string | null): string {
+  if (!lastCaptureAt) return "No capture yet";
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(lastCaptureAt).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  return `${Math.floor(seconds / 60)}m ago`;
 }
 
 const HEALTH_LABEL: Record<ConnectionHealth, string> = {
@@ -46,12 +52,20 @@ export function ExamShellHeader({
   connectionHealth,
   saveReceipt,
   warningCount,
+  camera,
 }: {
   deadline?: string | null;
   connectionHealth: ConnectionHealth;
   saveReceipt?: { savedAt: string; version: number } | null;
   warningCount?: number;
+  camera?: { permission: "unknown" | "granted" | "denied" | "unsupported"; lastCaptureAt: string | null };
 }) {
+  const cameraLabel =
+    !camera || camera.permission === "unknown" ? "Unknown"
+      : camera.permission === "denied" ? "Permission denied"
+      : camera.permission === "unsupported" ? "Unsupported"
+      : formatCaptureAge(camera.lastCaptureAt);
+
   return (
     <header
       className="card flex flex-wrap items-center justify-between gap-3 px-4 py-3"
@@ -75,9 +89,9 @@ export function ExamShellHeader({
       <div className="flex items-center gap-4">
         <div className="flex flex-col items-center" aria-label="Camera status">
           <div className="flex h-10 w-14 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--surface-muted)] text-[0.65rem] text-[var(--text-muted)]">
-            Unknown
+            {camera?.permission === "granted" ? "●" : "Unknown"}
           </div>
-          <span className="mt-1 text-[0.65rem] text-[var(--text-muted)]">Camera not yet configured</span>
+          <span className="mt-1 text-[0.65rem] text-[var(--text-muted)]">{cameraLabel}</span>
         </div>
 
         <div className="flex flex-col">

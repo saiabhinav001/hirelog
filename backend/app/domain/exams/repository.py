@@ -190,6 +190,18 @@ class AttemptRepository:
         )
         return [Attempt.model_validate(doc.to_dict() or {}) for doc in query.stream()]
 
+    def list_blocked(self, run_id: str) -> list[Attempt]:
+        """Same bounded-batch contract as `list_in_progress` — BLOCKED
+        attempts are also seal-eligible once their deadline passes
+        (Prompt 8: a review-blocked attempt is not exempt from expiry)."""
+        query = (
+            self._db.collection(RUNS_COLLECTION)
+            .document(run_id)
+            .collection(ATTEMPTS_SUBCOLLECTION)
+            .where(filter=firestore.FieldFilter("status", "==", "blocked"))
+        )
+        return [Attempt.model_validate(doc.to_dict() or {}) for doc in query.stream()]
+
     def list_page_for_run(self, run_id: str, *, limit: int, cursor_uid: Optional[str] = None) -> tuple[list[Attempt], Optional[str]]:
         """Candidate grid data, paginated by uid. Fetches one extra row to
         decide whether a next page exists without a separate count query."""

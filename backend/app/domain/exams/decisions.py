@@ -262,11 +262,16 @@ def decide_seal_on_expiry(
     """One attempt's slice of a bounded finalization sweep. Returns None if
     this attempt does not need sealing right now (e.g. still within an
     accommodated deadline, or already resolved) — every write independently
-    re-checks deadline/state, so a delayed worker never seals early."""
+    re-checks deadline/state, so a delayed worker never seals early.
+
+    BLOCKED is deliberately seal-eligible too (Prompt 8): a student whose
+    exam window expires while blocked for review must still be sealed —
+    faculty review/appeal happens against the preserved receipt afterward,
+    never by leaving the attempt stuck open past its own deadline."""
 
     if attempt.status in RESOLVED_ATTEMPT_STATUSES:
         return None
-    if attempt.status != AttemptStatus.IN_PROGRESS:
+    if attempt.status not in (AttemptStatus.IN_PROGRESS, AttemptStatus.BLOCKED):
         return None
     if attempt.deadline is None or now <= attempt.deadline:
         return None  # accommodated / not-yet-expired students are left alone

@@ -31,7 +31,7 @@ class ExamFinalizationSweeper:
         """One bounded pass. Returns the number of attempts sealed this call
         — callers loop until this returns 0."""
         now = self._clock.now()
-        candidates = self._attempts.list_in_progress(run_id)
+        candidates = self._attempts.list_in_progress(run_id) + self._attempts.list_blocked(run_id)
         draft_versions_by_uid = {
             attempt.uid: self._drafts.all_versions(run_id, attempt.uid) for attempt in candidates
         }
