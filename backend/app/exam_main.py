@@ -26,6 +26,7 @@ from app.api.routes import (
     exams_institution_auth,
     exams_judge,
     exams_kt,
+    exams_live,
     exams_me,
     exams_student,
 )
@@ -181,3 +182,4 @@ app.include_router(exams_me.router)
 app.include_router(exams_student.router)
 app.include_router(exams_judge.student_router)
 app.include_router(exams_judge.faculty_router)
+app.include_router(exams_live.router)

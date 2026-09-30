@@ -90,6 +90,14 @@ def get_blueprint(blueprint_id: str, user: dict = Depends(require_exam_faculty))
     return blueprint.model_dump(mode="json")
 
 
+@router.get("/blueprints/{blueprint_id}/candidates")
+def list_candidates_for_blueprint(blueprint_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+    """Question/test review screen data — every candidate for this
+    blueprint, any status, regardless of which generation request made it."""
+    candidates = GenerationRepository(db).list_candidates_by_blueprint(blueprint_id)
+    return {"results": [c.model_dump(mode="json") for c in candidates]}
+
+
 def _resolve_source_bundle(anchors: list[SourceAnchorInput]) -> list[dict]:
     """Only APPROVED sources may ever be cited — this is re-checked here,
     not trusted from the request, and again inside `validation.py`."""

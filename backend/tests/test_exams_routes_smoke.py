@@ -35,6 +35,20 @@ def test_kt_and_generation_routes_are_503_when_exams_disabled() -> None:
     assert client.post("/api/exams/v1/faculty/blueprints", json={"exam_definition_id": "d1", "title": "t", "slots": []}).status_code == 503
 
 
+def test_judge_routes_are_503_when_exams_disabled() -> None:
+    assert client.post(
+        "/api/exams/v1/student/judge/public-run",
+        json={"run_id": "r1", "question_id": "q1", "language_key": "python3.11", "source_code": "x"},
+    ).status_code == 503
+
+
+def test_live_ticket_route_is_503_when_exams_disabled() -> None:
+    """The WebSocket route itself can't be exercised without a real
+    Firestore-backed ticket (see docs/adr/0012 'Known limitations') — this
+    only proves the feature flag gate, matching every other route here."""
+    assert client.post("/api/exams/v1/live/ticket", json={"run_id": "r1"}).status_code == 503
+
+
 def test_root_and_health_endpoints_work_even_when_disabled() -> None:
     """The API itself must stay up (only mutating routes are gated) so
     operators can still see health/readiness while the module is off."""

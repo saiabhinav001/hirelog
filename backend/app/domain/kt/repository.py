@@ -76,3 +76,12 @@ class ApprovedSourceRepository:
 
     def save(self, source: ApprovedSource) -> None:
         self._ref(source.id).set(_model_dict(source), merge=True)
+
+    def list_all(self) -> list[ApprovedSource]:
+        """KT/source review screen data. Sources are a shared institutional
+        registry, not scoped to one uploader — any faculty member reviews
+        any pending source."""
+        return [
+            ApprovedSource.model_validate({**(doc.to_dict() or {}), "id": doc.id})
+            for doc in self._db.collection(APPROVED_SOURCES_COLLECTION).stream()
+        ]

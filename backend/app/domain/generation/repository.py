@@ -34,6 +34,12 @@ class GenerationRepository:
             return None
         return ExamBlueprint.model_validate({**(snap.to_dict() or {}), "id": snap.id})
 
+    def list_blueprints_by_definition(self, exam_definition_id: str) -> list[ExamBlueprint]:
+        query = self._db.collection(BLUEPRINTS_COLLECTION).where(
+            filter=firestore.FieldFilter("exam_definition_id", "==", exam_definition_id)
+        )
+        return [ExamBlueprint.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]
+
     # ── Requests ───────────────────────────────────────────────────────────
 
     def create_request(self, request: GenerationRequest) -> None:
@@ -75,6 +81,17 @@ class GenerationRepository:
             .where(filter=firestore.FieldFilter("blueprint_id", "==", blueprint_id))
             .where(filter=firestore.FieldFilter("slot_index", "==", slot_index))
             .where(filter=firestore.FieldFilter("status", "==", "approved"))
+        )
+        return [
+            GenerationCandidate.model_validate({**(doc.to_dict() or {}), "id": doc.id})
+            for doc in query.stream()
+        ]
+
+    def list_candidates_by_blueprint(self, blueprint_id: str) -> list[GenerationCandidate]:
+        """Question/test review screen data — every candidate regardless of
+        status or which generation request produced it."""
+        query = self._db.collection(CANDIDATES_COLLECTION).where(
+            filter=firestore.FieldFilter("blueprint_id", "==", blueprint_id)
         )
         return [
             GenerationCandidate.model_validate({**(doc.to_dict() or {}), "id": doc.id})

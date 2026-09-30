@@ -193,6 +193,12 @@ def register_source_from_url(payload: RegisterUrlSourceRequest, user: dict = Dep
     return {"source": source.model_dump(mode="json"), "upload_id": upload_id}
 
 
+@router.get("/sources")
+def list_sources(user: dict = Depends(require_exam_faculty)) -> dict:
+    sources = _sources_repo().list_all()
+    return {"results": [s.model_dump(mode="json") for s in sources]}
+
+
 @router.get("/sources/{source_id}")
 def get_source(source_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
     source = _sources_repo().get(source_id)

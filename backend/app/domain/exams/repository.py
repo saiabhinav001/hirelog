@@ -92,6 +92,12 @@ class ExamDefinitionRepository:
             {"latest_published_revision_id": revision_id, "updated_at": now.isoformat()},
         )
 
+    def list_by_owner(self, owner_uid: str) -> list[ExamDefinition]:
+        query = self._db.collection(DEFINITIONS_COLLECTION).where(
+            filter=firestore.FieldFilter("owner_uid", "==", owner_uid)
+        )
+        return [ExamDefinition.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]
+
 
 class ExamRunRepository:
     def __init__(self, db) -> None:
@@ -126,6 +132,20 @@ class ExamRunRepository:
             **extra,
         }
         transaction.update(ref, update)
+
+    def list_by_definition(self, definition_id: str) -> list[ExamRun]:
+        query = self._db.collection(RUNS_COLLECTION).where(
+            filter=firestore.FieldFilter("definition_id", "==", definition_id)
+        )
+        return [ExamRun.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]
+
+    def list_for_student(self, uid: str) -> list[ExamRun]:
+        """'Assigned exams' screen data. Draft runs are never enrolled, so
+        this can never surface a run before it has been published/scheduled."""
+        query = self._db.collection(RUNS_COLLECTION).where(
+            filter=firestore.FieldFilter("enrolled_uids", "array_contains", uid)
+        )
+        return [ExamRun.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]
 
 
 class AttemptRepository:
@@ -169,6 +189,23 @@ class AttemptRepository:
             .where(filter=firestore.FieldFilter("status", "==", "in_progress"))
         )
         return [Attempt.model_validate(doc.to_dict() or {}) for doc in query.stream()]
+
+    def list_page_for_run(self, run_id: str, *, limit: int, cursor_uid: Optional[str] = None) -> tuple[list[Attempt], Optional[str]]:
+        """Candidate grid data, paginated by uid. Fetches one extra row to
+        decide whether a next page exists without a separate count query."""
+        query = (
+            self._db.collection(RUNS_COLLECTION)
+            .document(run_id)
+            .collection(ATTEMPTS_SUBCOLLECTION)
+            .order_by("uid")
+            .limit(limit + 1)
+        )
+        if cursor_uid:
+            query = query.start_after({"uid": cursor_uid})
+        docs = list(query.stream())
+        attempts = [Attempt.model_validate(d.to_dict() or {}) for d in docs[:limit]]
+        next_cursor = attempts[-1].uid if len(docs) > limit else None
+        return attempts, next_cursor
 
 
 class DraftRepository:

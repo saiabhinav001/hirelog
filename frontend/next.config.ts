@@ -22,12 +22,19 @@ const apiConnectSrc = [
 
 // The exam API is a separate, independently deployed origin (docs/adr/0008) —
 // pinned to exactly one base, unlike the legacy multi-base failover above.
-const examsApiConnectSrc = [
+// The live-control WebSocket (docs/adr/0012) reuses this SAME origin with the
+// scheme swapped (http->ws, https->wss) — no separate env var, keeping the
+// "pinned to one configured origin" contract intact for both REST and WS.
+const examsApiHttpBases = [
   process.env.NEXT_PUBLIC_EXAMS_API_BASE_URL,
   isDev ? "http://localhost:8020" : null,
 ]
   .filter((b): b is string => Boolean(b))
   .map((b) => b.replace(/\/+$/, ""));
+const examsApiConnectSrc = [
+  ...examsApiHttpBases,
+  ...examsApiHttpBases.map((b) => b.replace(/^http/, "ws")),
+];
 
 const contentSecurityPolicy = [
   "default-src 'self'",

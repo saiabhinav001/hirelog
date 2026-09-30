@@ -121,6 +121,12 @@ class Settings(BaseSettings):
     EXAM_JUDGE_PROVIDER_BASE_URL: Optional[str] = None
     EXAM_JUDGE_PROVIDER_API_KEY: Optional[str] = None
 
+    # ── Live control (Prompt 7, docs/adr/0012) — WebSocket admission tickets.
+    # Short TTL by design: a client mints a fresh ticket for every connect/
+    # reconnect attempt rather than reusing one (single-use, contract:
+    # "authenticated WebSocket ticket admission").
+    EXAM_LIVE_TICKET_TTL_SECONDS: int = 60
+
     @property
     def is_production(self) -> bool:
         return self.ENV == "production"

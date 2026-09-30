@@ -12,9 +12,11 @@ from firebase_admin import firestore
 
 from app.domain.exams.clock import Clock, system_clock
 from app.domain.exams.decisions import (
+    AdvanceSlotOutcome,
     DraftSaveOutcome,
     SubmitOutcome,
     compute_deadline,
+    decide_advance_slot,
     decide_save_draft,
     decide_submit,
     is_content_reachable,
@@ -139,6 +141,32 @@ class ExamStudentService:
             slot_index=index,
             total_slots=revision.slot_count,
         )
+
+    def advance_to_next_question(self, run_id: str, uid: str, revision: ExamRevision) -> AdvanceSlotOutcome:
+        """Forward-only slot advance — see `decide_advance_slot` docstring.
+        Transactional so a double-click/two-tab race can't skip two slots."""
+        transaction = self._db.transaction()
+
+        @firestore.transactional
+        def _txn(transaction) -> AdvanceSlotOutcome:
+            now = self._clock.now()
+            run = self.runs.get_in_transaction(transaction, run_id)
+            if run is None:
+                raise LookupError(f"exam run {run_id} not found")
+            self._require_enrolled(run, uid)
+            attempt = self.attempts.get_in_transaction(transaction, run_id, uid)
+            if attempt is None:
+                raise NotEnrolledError("attempt not admitted yet")
+
+            outcome = decide_advance_slot(attempt=attempt, run=run, total_slots=revision.slot_count, now=now)
+            if outcome.accepted:
+                self.attempts.update_in_transaction(
+                    transaction, run_id, uid,
+                    {"current_slot_index": outcome.new_slot_index, "version": attempt.version + 1, "updated_at": now.isoformat()},
+                )
+            return outcome
+
+        return _txn(transaction)
 
     # ── drafts ─────────────────────────────────────────────────────────────
 

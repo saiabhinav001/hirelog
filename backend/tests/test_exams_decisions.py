@@ -12,6 +12,7 @@ import pytest
 from app.domain.exams.decisions import (
     check_epoch,
     compute_deadline,
+    decide_advance_slot,
     decide_finalization_batch,
     decide_run_command,
     decide_save_draft,
@@ -307,6 +308,41 @@ def test_content_unreachable_when_blocked() -> None:
     run = _run()
     attempt = _attempt(status=AttemptStatus.BLOCKED)
     assert is_content_reachable(run=run, attempt=attempt, now=NOW) == "attempt_blocked"
+
+
+# ── Forward-only slot advance (Prompt 7 addition) ────────────────────────────
+
+def test_advance_slot_moves_forward_by_one() -> None:
+    run = _run()
+    attempt = _attempt(current_slot_index=0)
+    outcome = decide_advance_slot(attempt=attempt, run=run, total_slots=3, now=NOW)
+    assert outcome.accepted
+    assert outcome.new_slot_index == 1
+
+
+def test_advance_slot_rejected_on_last_slot() -> None:
+    """No 'next' past the last slot — the student submits instead."""
+    run = _run()
+    attempt = _attempt(current_slot_index=2)
+    outcome = decide_advance_slot(attempt=attempt, run=run, total_slots=3, now=NOW)
+    assert not outcome.accepted
+    assert outcome.conflict_reason == "no_further_questions"
+
+
+def test_advance_slot_rejected_when_content_not_reachable() -> None:
+    run = _run(status=RunStatus.ENDED)
+    attempt = _attempt(current_slot_index=0)
+    outcome = decide_advance_slot(attempt=attempt, run=run, total_slots=3, now=NOW)
+    assert not outcome.accepted
+    assert outcome.conflict_reason == "run_ended"
+
+
+def test_advance_slot_rejected_when_blocked() -> None:
+    run = _run()
+    attempt = _attempt(status=AttemptStatus.BLOCKED, current_slot_index=0)
+    outcome = decide_advance_slot(attempt=attempt, run=run, total_slots=3, now=NOW)
+    assert not outcome.accepted
+    assert outcome.conflict_reason == "attempt_blocked"
 
 
 # ── Bounded finalization sweep / accommodation preservation ──────────────────

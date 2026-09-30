@@ -5,6 +5,7 @@ requires an explicit expected_version + idempotency_key.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,6 +16,9 @@ from app.api.exams_errors import raise_for_domain_error
 from app.core.firebase import db
 from app.domain.exams.commands import ExamCommandService
 from app.domain.exams.policy import ExamPolicy
+from app.domain.exams.repository import AttemptRepository
+from app.domain.generation.repository import GenerationRepository
+from app.domain.live.publisher import publish_attempt_status_changed, publish_run_state_changed
 
 router = APIRouter(
     prefix="/api/exams/v1/faculty",
@@ -104,8 +108,9 @@ def run_command(
     payload: RunCommandRequest,
     user: dict = Depends(require_exam_faculty),
 ) -> dict:
+    service = _service()
     try:
-        outcome = _service().execute(
+        outcome = service.execute(
             run_id=run_id,
             command=command,
             expected_version=payload.expected_version,
@@ -115,6 +120,10 @@ def run_command(
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
+    if outcome.applied:
+        updated_run = service.runs.get(run_id)
+        if updated_run is not None:
+            publish_run_state_changed(updated_run, now=datetime.now(timezone.utc))
     return {
         "applied": outcome.applied,
         "reused_existing_receipt": outcome.reused_existing_receipt,
@@ -131,4 +140,34 @@ def extend_time(
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
+    updated_attempt = AttemptRepository(db).get(run_id, uid)
+    if updated_attempt is not None:
+        publish_attempt_status_changed(updated_attempt, now=datetime.now(timezone.utc))
     return {"status": "extended", "run_id": run_id, "uid": uid, "extra_minutes": payload.extra_minutes}
+
+
+@router.get("/definitions")
+def list_my_definitions(user: dict = Depends(require_exam_faculty)) -> dict:
+    """'Assigned courses' screen data — definitions this faculty member owns."""
+    definitions = _service().definitions.list_by_owner(user["uid"])
+    return {"results": [d.model_dump(mode="json") for d in definitions]}
+
+
+@router.get("/definitions/{definition_id}/runs")
+def list_runs_for_definition(definition_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+    runs = _service().runs.list_by_definition(definition_id)
+    return {"results": [r.model_dump(mode="json") for r in runs]}
+
+
+@router.get("/definitions/{definition_id}/blueprints")
+def list_blueprints_for_definition(definition_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+    blueprints = GenerationRepository(db).list_blueprints_by_definition(definition_id)
+    return {"results": [b.model_dump(mode="json") for b in blueprints]}
+
+
+@router.get("/runs/{run_id}/attempts")
+def list_attempts_for_run(run_id: str, user: dict = Depends(require_exam_faculty), limit: int = 100, cursor_uid: str | None = None) -> dict:
+    """Candidate grid data — paginated (contract: 'pagination/virtualization')."""
+    bounded_limit = max(1, min(limit, 200))
+    attempts, next_cursor = AttemptRepository(db).list_page_for_run(run_id, limit=bounded_limit, cursor_uid=cursor_uid)
+    return {"results": [a.model_dump(mode="json") for a in attempts], "next_cursor_uid": next_cursor}

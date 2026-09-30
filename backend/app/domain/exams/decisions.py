@@ -223,6 +223,27 @@ def is_content_reachable(*, run: ExamRun, attempt: Attempt, now: datetime) -> Op
     return None
 
 
+@dataclass(frozen=True)
+class AdvanceSlotOutcome:
+    accepted: bool
+    new_slot_index: int = 0
+    conflict_reason: Optional[str] = None
+
+
+def decide_advance_slot(*, attempt: Attempt, run: ExamRun, total_slots: int, now: datetime) -> AdvanceSlotOutcome:
+    """Forward-only — `current_slot_index` never decrements. This is the
+    server-side backing for 'Keyboard Back/Next cannot access locked or
+    rewrite submitted content': there is no server action that ever moves it
+    backward, so no client control can either. The LAST slot has no 'next' —
+    the student submits instead (contract #3/#4)."""
+    reachable_reason = is_content_reachable(run=run, attempt=attempt, now=now)
+    if reachable_reason is not None:
+        return AdvanceSlotOutcome(False, conflict_reason=reachable_reason)
+    if attempt.current_slot_index + 1 >= total_slots:
+        return AdvanceSlotOutcome(False, conflict_reason="no_further_questions")
+    return AdvanceSlotOutcome(True, new_slot_index=attempt.current_slot_index + 1)
+
+
 # ── Bounded finalization sweep (close/expiry) ────────────────────────────────
 
 @dataclass(frozen=True)
