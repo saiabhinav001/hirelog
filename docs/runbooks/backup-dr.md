@@ -62,6 +62,38 @@ gcloud firestore import gs://<BACKUP_BUCKET>/<EXPORT_PATH>
 After a Firestore restore, restart the backend (or run the forced FAISS rebuild
 above) so the vector index and dashboard caches reconcile to the restored data.
 
+## Exams module — private collections and evidence storage (Prompt 11)
+
+The exam domain's Firestore collections (`exam_definitions` + `revisions`
+subcollection, `exam_runs` + `attempts`/`drafts` subcollections,
+`exam_command_receipts`, `exam_outbox`, `kt_uploads`, `kt_approved_sources`,
+`exam_blueprints`, `generation_requests`, `generation_candidates`,
+`generation_malformed_candidates`, `exam_variant_assignments`,
+`institutions`, `institution_memberships`, `institution_roster_imports`,
+`institution_otp_challenges`, gradebook/similarity/feedback collections)
+live in the **same Firestore project/database** as the legacy collections —
+the `gcloud firestore export`/`import` commands above back up and restore
+them automatically, with no exam-specific procedure needed. They are
+"private" only in the `firestore.rules` sense (no client rule grants them;
+Admin-SDK-only, covered by the default-deny catch-all) — not in a separate
+database requiring separate export commands.
+
+**Gap: evidence storage is not covered by this runbook.** Proctoring
+evidence blobs (`EXAM_EVIDENCE_STORAGE_BUCKET`, a Firebase Storage bucket —
+see ADR 0013) are **not** Firestore documents and are **not** included in the
+`gcloud firestore export`/`import` commands above. This bucket needs its own
+backup/retention strategy (e.g. GCS bucket versioning + a lifecycle policy
+matching `EXAM_EVIDENCE_RETENTION_DAYS`) before a real deployment — not yet
+documented anywhere in this repo. Track this as an open item in
+[institution-onboarding-checklist.md](../exams/institution-onboarding-checklist.md).
+
+**Rollback vs. restore:** the levers in
+[rollback-runbook.md](../exams/rollback-runbook.md) (per-run pause,
+new-admissions-pause, module-wide disable) are traffic/admission controls,
+not data-recovery procedures — none of them delete data, and none of them
+require or trigger a Firestore restore. Only use the restore procedure above
+for genuine data loss/corruption, never as a rollback mechanism.
+
 ## Post-incident checklist
 
 1. Confirm Firestore document counts look sane (`/api/dashboard/stats` →

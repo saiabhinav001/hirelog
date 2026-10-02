@@ -21,5 +21,6 @@ including decisions to deliberately **not** build something yet.
 | [0013](0013-proctoring-evidence-and-appeals.md) | Proctoring evidence, warning block and appeals | Accepted |
 | [0014](0014-gradebook-similarity-and-feedback.md) | Gradebook, similarity review, and learning feedback | Accepted |
 | [0015](0015-pwa-accessibility-and-managed-lockdown.md) | PWA shell, accessibility, and managed-lockdown admission | Accepted |
+| [0016](0016-production-qualification-and-release.md) | Production qualification and release package | Accepted |
 
 See [../architecture.md](../architecture.md) for the system diagram and request flow.

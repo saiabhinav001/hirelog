@@ -10,6 +10,7 @@ from typing import Optional
 
 from firebase_admin import firestore
 
+from app.core.config import settings
 from app.domain.exams.clock import Clock, system_clock
 from app.domain.exams.decisions import (
     AdvanceSlotOutcome,
@@ -95,6 +96,14 @@ class ExamStudentService:
             attempt = self.attempts.get_in_transaction(transaction, run_id, uid)
             if attempt is not None and attempt.status != AttemptStatus.NOT_STARTED:
                 return attempt  # already admitted — idempotent no-op
+
+            # Rollback lever (contract #12, docs/adr/0016): blocks only this
+            # brand-new NOT_STARTED -> ADMITTED transition. Checked AFTER the
+            # idempotent-return above, so an already-admitted/in-progress
+            # student replaying this call (page refresh, retry) is never
+            # affected — "preserving safe completion" for anyone already in.
+            if settings.EXAM_NEW_ADMISSIONS_PAUSED:
+                raise PermissionError("new_admissions_paused")
 
             require_attempt_transition(AttemptStatus.NOT_STARTED, AttemptStatus.ADMITTED)
             deadline = compute_deadline(

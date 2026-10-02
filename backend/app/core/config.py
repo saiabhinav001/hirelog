@@ -95,6 +95,17 @@ class Settings(BaseSettings):
     EXAM_OUTBOX_LEASE_SECONDS: int = 60
     EXAM_OUTBOX_MAX_ATTEMPTS: int = 5
 
+    # ── Rollback lever (Prompt 11, docs/adr/0016) ────────────────────────────
+    # A targeted alternative to flipping `EXAMS_ENABLED` off: blocks only NEW
+    # admissions (`ExamStudentService.admit()`'s NOT_STARTED -> ADMITTED
+    # transition) while leaving every already-admitted/in-progress attempt
+    # completely unaffected (contract #12: "disable new admissions while
+    # preserving safe completion"). Per-run pausing of an already-unsafe run
+    # still goes through the existing `RunStatus.PAUSED` faculty command
+    # (Prompt 3) — this flag is the *global, every-run* lever for an
+    # operational rollback of the exams module itself.
+    EXAM_NEW_ADMISSIONS_PAUSED: bool = False
+
     # ── Institution identity / roster / OTP fallback login (Prompt 2, ───────
     # docs/adr/0010) — off by default via EXAMS_ENABLED; legacy login is
     # completely untouched. EXAM_OTP_HMAC_SECRET should be set to a stable
