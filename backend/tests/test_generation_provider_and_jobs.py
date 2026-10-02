@@ -147,3 +147,81 @@ def test_job_runner_records_malformed_candidate_without_failing_whole_batch() ->
     assert result.status == "succeeded"
     assert result.ready_count == 1
     assert len(repo.malformed) == 1
+
+
+# ── "Backend model prompt A" wiring: system prompt + enforced envelope ──────
+
+def test_system_prompt_forbids_self_approval_and_fabrication() -> None:
+    from app.domain.generation.provider import GENERATION_SYSTEM_PROMPT_A_V1
+
+    assert "Never mark an item approved or verified" in GENERATION_SYSTEM_PROMPT_A_V1
+    assert "do not invent URLs, citations, facts or source IDs" in GENERATION_SYSTEM_PROMPT_A_V1
+    assert "You have no student identities" in GENERATION_SYSTEM_PROMPT_A_V1
+
+
+def test_http_adapter_exposes_the_same_system_prompt_constant() -> None:
+    from app.domain.generation.provider import GENERATION_SYSTEM_PROMPT_A_V1, HttpGenerationProviderAdapter
+
+    assert HttpGenerationProviderAdapter.SYSTEM_PROMPT == GENERATION_SYSTEM_PROMPT_A_V1
+
+
+def test_provider_response_envelope_rejects_a_self_asserted_approved_status() -> None:
+    from app.domain.generation.provider import ProviderError, ProviderResponse
+
+    try:
+        ProviderResponse.parse_payload({"request_id": "r1", "status": "approved", "candidates": []})
+        raise AssertionError("expected ProviderError")
+    except ProviderError:
+        pass
+
+
+def test_provider_response_envelope_rejects_missing_request_id() -> None:
+    from app.domain.generation.provider import ProviderError, ProviderResponse
+
+    try:
+        ProviderResponse.parse_payload({"status": "draft", "candidates": []})
+        raise AssertionError("expected ProviderError")
+    except ProviderError:
+        pass
+
+
+def test_provider_response_envelope_accepts_the_deterministic_fake_providers_shape() -> None:
+    """Proves the schema is realistic, not just decorative — even the fake
+    provider's own output round-trips through it unchanged."""
+    from app.domain.generation.provider import ProviderResponse
+
+    repo = _FakeGenerationRepo()
+    request = _request(repo)
+    response = DeterministicFakeProvider().generate(request)
+    reparsed = ProviderResponse.parse_payload(response.model_dump())
+    assert reparsed == response
+
+
+def test_build_request_payload_contains_only_the_allowlisted_fields() -> None:
+    from app.domain.generation.provider import build_provider_request_payload
+
+    repo = _FakeGenerationRepo()
+    request = _request(repo)
+    payload = build_provider_request_payload(request, previously_used_signatures={"sig-old-1"})
+
+    assert set(payload.keys()) == {
+        "request_id", "blueprint_revision", "question_slot", "objective_ids", "item_type",
+        "difficulty", "marks", "target_minutes", "requested_variant_count", "permitted_languages",
+        "approved_source_bundle", "previously_used_signatures", "deterministic_seed",
+    }
+    assert payload["request_id"] == request.id
+    assert payload["previously_used_signatures"] == ["sig-old-1"]
+    assert payload["approved_source_bundle"] == [
+        {"source_id": "src-1", "source_version": 1, "anchor_id": "a1", "excerpt": "x"}
+    ]
+
+
+def test_http_adapter_build_request_payload_matches_the_module_function() -> None:
+    from app.domain.generation.provider import HttpGenerationProviderAdapter, build_provider_request_payload
+
+    repo = _FakeGenerationRepo()
+    request = _request(repo)
+    adapter = HttpGenerationProviderAdapter(base_url="https://example.test", api_key="k")
+    assert adapter.build_request_payload(request, previously_used_signatures=set()) == (
+        build_provider_request_payload(request, previously_used_signatures=set())
+    )
