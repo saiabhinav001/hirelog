@@ -12,6 +12,12 @@ from datetime import datetime
 from uuid import uuid4
 
 from app.domain.exams.clock import Clock, system_clock
+from app.domain.generation.independent_review import apply_independent_review
+from app.domain.generation.independent_review_provider import (
+    IndependentReviewProvider,
+    ReviewProviderError,
+    ReviewProviderTimeoutError,
+)
 from app.domain.generation.models import CandidateStatus, GenerationRequest
 from app.domain.generation.provider import GenerationProvider, ProviderError, ProviderTimeoutError
 from app.domain.generation.repository import GenerationRepository
@@ -103,6 +109,66 @@ class GenerationJobRunner:
             needs_revision_count=needs_revision_count,
             shortfall=shortfall,
             candidate_ids=candidate_ids,
+        )
+
+
+@dataclass
+class IndependentReviewJobResult:
+    status: str  # "succeeded" | "failed" | "noop_already_reviewed" | "noop_not_ready"
+    agreement: str | None = None
+    new_status: str | None = None
+    fabricated_anchor_warnings: list[str] = field(default_factory=list)
+    error: str | None = None
+
+
+class IndependentReviewJobRunner:
+    """"Backend model prompt B" job runner — a SEPARATE job from
+    `GenerationJobRunner` (contract: "Use a separate review job"). Durable/
+    restart-safe the same way: all state lives on the candidate document, so
+    re-running after a crash is a safe no-op once `independent_review_completed_at`
+    is set, and re-running before that point simply redoes the (deterministic-
+    for-tests) review call.
+    """
+
+    def __init__(self, repo: GenerationRepository, provider: IndependentReviewProvider, clock: Clock = system_clock) -> None:
+        self._repo = repo
+        self._provider = provider
+        self._clock = clock
+
+    def run(self, candidate_id: str) -> IndependentReviewJobResult:
+        candidate = self._repo.get_candidate(candidate_id)
+        if candidate is None:
+            raise LookupError(f"generation candidate {candidate_id} not found")
+
+        if candidate.independent_review_completed_at is not None:
+            return IndependentReviewJobResult(status="noop_already_reviewed")
+        if candidate.status != CandidateStatus.READY_FOR_HUMAN_REVIEW:
+            return IndependentReviewJobResult(status="noop_not_ready")
+
+        request = self._repo.get_request(candidate.request_id)
+        if request is None:
+            raise LookupError(f"generation request {candidate.request_id} not found")
+
+        now = self._clock.now()
+        try:
+            result = self._provider.review(candidate, request)
+        except ReviewProviderTimeoutError as exc:
+            return IndependentReviewJobResult(status="failed", error=f"timeout: {exc}")
+        except ReviewProviderError as exc:
+            return IndependentReviewJobResult(status="failed", error=str(exc))
+        except Exception as exc:  # noqa: BLE001 - never let a malformed provider crash the worker
+            return IndependentReviewJobResult(status="failed", error=f"unexpected error: {exc}")
+
+        known_anchors = {
+            (anchor.source_id, anchor.source_version, anchor.anchor_id) for anchor in request.approved_source_bundle
+        }
+        application = apply_independent_review(candidate, result, known_anchors=known_anchors, now=now)
+        self._repo.save_candidate(application.candidate)
+        return IndependentReviewJobResult(
+            status="succeeded",
+            agreement=application.candidate.independent_review_agreement,
+            new_status=application.candidate.status.value,
+            fabricated_anchor_warnings=application.fabricated_anchor_warnings,
         )
 
 

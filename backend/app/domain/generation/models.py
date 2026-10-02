@@ -102,6 +102,19 @@ class ValidationIssue(BaseModel):
     reason: str
 
 
+class IndependentReviewIssue(BaseModel):
+    """One issue from "Backend model prompt B"'s independent review — unlike
+    `ValidationIssue`, this can cite a `source_anchor` or `counterexample`,
+    since it comes from a model that actually re-solved the item rather than
+    a structural check."""
+
+    severity: Literal["blocker", "major", "minor"]
+    field: str
+    reason: str
+    source_anchor: Optional[SourceAnchorRef] = None
+    counterexample: Optional[str] = None
+
+
 class GenerationCandidate(BaseModel):
     id: str
     request_id: str
@@ -144,3 +157,11 @@ class GenerationCandidate(BaseModel):
     reviewed_at: Optional[datetime] = None
     rejection_reason: Optional[str] = None
     published_at: Optional[datetime] = None
+    # Independent model review ("Backend model prompt B") — set at most once
+    # by `IndependentReviewJobRunner`, never by faculty review. `agreement`
+    # is informational only; `recommended_status` is what can move a
+    # READY_FOR_HUMAN_REVIEW candidate back to NEEDS_REVISION — it can never
+    # advance a candidate further (contract: "never published or verified").
+    independent_review_agreement: Optional[Literal["agree", "disagree", "uncertain"]] = None
+    independent_review_issues: list[IndependentReviewIssue] = Field(default_factory=list)
+    independent_review_completed_at: Optional[datetime] = None

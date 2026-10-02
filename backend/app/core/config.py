@@ -124,6 +124,13 @@ class Settings(BaseSettings):
     EXAM_GENERATION_PROVIDER_BASE_URL: Optional[str] = None
     EXAM_GENERATION_PROVIDER_API_KEY: Optional[str] = None
 
+    # ── Independent item review (Backend model prompt B, docs/adr/0009) ─────
+    # A separate provider/endpoint from generation above — may be the same
+    # model or a different one, an institutional choice. Unset by default —
+    # falls back to DeterministicFakeReviewProvider (test/dev only).
+    EXAM_REVIEW_PROVIDER_BASE_URL: Optional[str] = None
+    EXAM_REVIEW_PROVIDER_API_KEY: Optional[str] = None
+
     # ── Coding judge (Prompt 6, docs/adr/0011) ───────────────────────────────
     # Unset by default — falls back to a deterministic fake judge (test/dev
     # only, never executes submitted code). A real Judge0-compatible instance

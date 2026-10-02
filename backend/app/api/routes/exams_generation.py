@@ -17,8 +17,12 @@ from app.api.exams_dependencies import require_exam_faculty, require_exams_enabl
 from app.core.config import settings
 from app.core.firebase import db
 from app.domain.generation.commands import GenerationCommandService
-from app.domain.generation.jobs import GenerationJobRunner, new_generation_request
-from app.domain.generation.models import BlueprintSlot, ExamBlueprint
+from app.domain.generation.independent_review_provider import (
+    DeterministicFakeReviewProvider,
+    HttpIndependentReviewProviderAdapter,
+)
+from app.domain.generation.jobs import GenerationJobRunner, IndependentReviewJobRunner, new_generation_request
+from app.domain.generation.models import BlueprintSlot, CandidateStatus, ExamBlueprint
 from app.domain.generation.provider import DeterministicFakeProvider, HttpGenerationProviderAdapter
 from app.domain.generation.repository import GenerationRepository
 from app.domain.kt.models import ApprovedSource
@@ -40,6 +44,16 @@ def _generation_provider():
             base_url=settings.EXAM_GENERATION_PROVIDER_BASE_URL, api_key=settings.EXAM_GENERATION_PROVIDER_API_KEY
         )
     return DeterministicFakeProvider()
+
+
+def _independent_review_provider():
+    """Same safe-default pattern as `_generation_provider` — a separate,
+    independently configurable provider/endpoint (Backend model prompt B)."""
+    if settings.EXAM_REVIEW_PROVIDER_BASE_URL and settings.EXAM_REVIEW_PROVIDER_API_KEY:
+        return HttpIndependentReviewProviderAdapter(
+            base_url=settings.EXAM_REVIEW_PROVIDER_BASE_URL, api_key=settings.EXAM_REVIEW_PROVIDER_API_KEY
+        )
+    return DeterministicFakeReviewProvider()
 
 
 class CreateBlueprintRequest(BaseModel):
@@ -147,6 +161,30 @@ def create_and_run_generation_request(
 
     runner = GenerationJobRunner(repo, _generation_provider())
     result = runner.run(request.id)
+
+    # Independent review (Backend model prompt B) runs immediately for every
+    # candidate that cleared structural validation — it can only pull one
+    # back to NEEDS_REVISION, never advance it further (see
+    # independent_review.py). A review failure/timeout is logged on the
+    # candidate's job result but never blocks this response — faculty still
+    # see the candidate at READY_FOR_HUMAN_REVIEW and can review it manually.
+    review_runner = IndependentReviewJobRunner(repo, _independent_review_provider())
+    independent_review_results = []
+    for candidate_id in result.candidate_ids:
+        candidate = repo.get_candidate(candidate_id)
+        if candidate is None or candidate.status != CandidateStatus.READY_FOR_HUMAN_REVIEW:
+            continue
+        review_result = review_runner.run(candidate_id)
+        independent_review_results.append(
+            {
+                "candidate_id": candidate_id,
+                "status": review_result.status,
+                "agreement": review_result.agreement,
+                "new_status": review_result.new_status,
+                "error": review_result.error,
+            }
+        )
+
     return {
         "request_id": request.id,
         "status": result.status,
@@ -155,6 +193,7 @@ def create_and_run_generation_request(
         "shortfall": result.shortfall,
         "candidate_ids": result.candidate_ids,
         "error": result.error,
+        "independent_review_results": independent_review_results,
     }
 
 
