@@ -1,11 +1,16 @@
 """Deterministic, rule-based learning feedback.
 
-Never a live LLM call (contract: "Optional AI signals remain disabled
-until locally evaluated."). Assembled ONLY from a released run's own
-gradebook rows and a question's OWN `supporting_anchors` (the same
+Never a live LLM call by default (contract: "Optional AI signals remain
+disabled until locally evaluated."). Assembled ONLY from a released run's
+own gradebook rows and a question's OWN `supporting_anchors` (the same
 faculty-approved KT citations already attached to that candidate at
 generation time, Prompt 5) — never hidden tests, never another student's
 submissions, and never anything from a run that hasn't been released yet.
+
+`FeedbackService` is provider-pluggable (see `feedback_provider.py`,
+"Backend model prompt C") but defaults to `TemplateFeedbackProvider` below,
+preserving this exact behavior for every institution that never configures
+a real provider.
 """
 
 from __future__ import annotations
@@ -13,6 +18,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.domain.gradebook.errors import ResultsNotReleasedError
+from app.domain.gradebook.feedback_provider import (
+    FeedbackProvider,
+    FeedbackProviderResult,
+    sanitize_feedback_result,
+)
 from app.domain.gradebook.models import FailureCategory, LearningFeedback, QuestionOutcome, StudentGradebookRow
 from app.domain.gradebook.aggregation_service import GradebookAggregationService
 from app.domain.gradebook.repository import ReleaseRecordRepository
@@ -72,11 +82,35 @@ def build_learning_feedback(
     )
 
 
+class TemplateFeedbackProvider:
+    """The real, permanent default — wraps `build_learning_feedback` above.
+    Not a placeholder/fake; this is what every institution gets unless they
+    explicitly configure a real provider (see `feedback_provider.py`)."""
+
+    def generate_feedback(
+        self,
+        row: StudentGradebookRow,
+        *,
+        run_id: str,
+        anchors_by_question: dict[str, list[str]],
+        objective_ids_by_question: dict[str, list[str]],
+    ) -> FeedbackProviderResult:
+        feedback = build_learning_feedback(row, run_id=run_id, supporting_anchors_by_question=anchors_by_question)
+        return FeedbackProviderResult(
+            strengths=feedback.strengths,
+            gaps=feedback.gaps,
+            practice_steps=feedback.practice_steps,
+            source_anchors=feedback.source_anchors,
+            missing_material=feedback.missing_material,
+        )
+
+
 class FeedbackService:
-    def __init__(self, db) -> None:
+    def __init__(self, db, provider: FeedbackProvider | None = None) -> None:
         self._db = db
         self._releases = ReleaseRecordRepository(db)
         self._aggregation = GradebookAggregationService(db)
+        self._provider = provider or TemplateFeedbackProvider()
 
     def build_feedback_for_student(self, run_id: str, uid: str) -> LearningFeedback:
         if self._releases.latest_for_run(run_id) is None:
@@ -86,10 +120,33 @@ class FeedbackService:
         row = self._aggregation.build_student_row(run, revision, uid)
 
         anchors_by_question: dict[str, list[str]] = {}
+        objective_ids_by_question: dict[str, list[str]] = {}
         for qr in row.question_results:
             candidate_id = self._aggregation.assignments.get_assignment(run_id=run_id, uid=uid, slot_index=qr.slot_index)
             candidate = self._aggregation.generation.get_candidate(candidate_id) if candidate_id else None
             if candidate is not None:
                 anchors_by_question[qr.question_id] = [f"{a.source_id}:{a.anchor_id}" for a in candidate.supporting_anchors]
+                objective_ids_by_question[qr.question_id] = candidate.objective_ids
 
-        return build_learning_feedback(row, run_id=run_id, supporting_anchors_by_question=anchors_by_question)
+        known_anchor_ids = {anchor for anchors in anchors_by_question.values() for anchor in anchors}
+        try:
+            result = self._provider.generate_feedback(
+                row, run_id=run_id, anchors_by_question=anchors_by_question,
+                objective_ids_by_question=objective_ids_by_question,
+            )
+        except Exception:
+            # A configured-but-unavailable/unimplemented real provider must
+            # never break this student-facing page — always fall back to
+            # the always-correct template (contract: this feature is a
+            # supplementary enhancement, never a hard dependency).
+            result = TemplateFeedbackProvider().generate_feedback(
+                row, run_id=run_id, anchors_by_question=anchors_by_question,
+                objective_ids_by_question=objective_ids_by_question,
+            )
+
+        sanitized, _fabricated_anchor_warnings = sanitize_feedback_result(result, known_anchor_ids=known_anchor_ids)
+        return LearningFeedback(
+            run_id=run_id, uid=uid, strengths=sanitized.strengths, gaps=sanitized.gaps,
+            practice_steps=sanitized.practice_steps, source_anchors=sanitized.source_anchors,
+            missing_material=sanitized.missing_material, generated_at=_utc_now(),
+        )

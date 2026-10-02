@@ -23,7 +23,8 @@ from app.domain.exams.repository import ExamRunRepository
 from app.domain.gradebook.aggregation_service import GradebookAggregationService
 from app.domain.gradebook.errors import ResultsNotReleasedError
 from app.domain.gradebook.export_service import GradebookExportService
-from app.domain.gradebook.feedback_service import FeedbackService
+from app.domain.gradebook.feedback_provider import HttpFeedbackProviderAdapter
+from app.domain.gradebook.feedback_service import FeedbackService, TemplateFeedbackProvider
 from app.domain.gradebook.models import ExportFormat
 from app.domain.gradebook.release_service import GradebookReleaseService
 from app.domain.gradebook.similarity_service import SimilarityService
@@ -42,6 +43,16 @@ def _similarity_provider():
     from app.exam_main import _similarity_provider as provider_factory
 
     return provider_factory()
+
+
+def _feedback_provider():
+    """Real provider only if BOTH base_url and api_key are configured — same
+    institutional-decision pattern as every other provider in this codebase."""
+    if settings.EXAM_FEEDBACK_PROVIDER_BASE_URL and settings.EXAM_FEEDBACK_PROVIDER_API_KEY:
+        return HttpFeedbackProviderAdapter(
+            base_url=settings.EXAM_FEEDBACK_PROVIDER_BASE_URL, api_key=settings.EXAM_FEEDBACK_PROVIDER_API_KEY
+        )
+    return TemplateFeedbackProvider()
 
 
 def _set_no_store(response: Response) -> None:
@@ -102,7 +113,7 @@ def get_my_results(run_id: str, response: Response, user: dict = Depends(get_cur
 def get_my_feedback(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
     _set_no_store(response)
     try:
-        feedback = FeedbackService(db).build_feedback_for_student(run_id, user["uid"])
+        feedback = FeedbackService(db, _feedback_provider()).build_feedback_for_student(run_id, user["uid"])
     except Exception as exc:
         raise_for_domain_error(exc)
         raise

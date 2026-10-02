@@ -180,6 +180,21 @@ see yet. No LLM call, no network request, no model — fully deterministic
 and fully unit-testable without mocking (contract: "Optional AI signals
 remain disabled until locally evaluated.").
 
+**Addendum (Prompt 11 follow-up, "Backend model prompt C"):** `FeedbackService`
+is now provider-pluggable (`app/domain/gradebook/feedback_provider.py`),
+defaulting to `TemplateFeedbackProvider` — a thin wrapper around
+`build_learning_feedback` above, preserving every word of this section
+unchanged for any institution that never configures
+`EXAM_FEEDBACK_PROVIDER_BASE_URL`/`_API_KEY`. An `HttpFeedbackProviderAdapter`
+exists with the exact "Backend model prompt C" system prompt and an
+enforced response schema, but — like every other external-provider adapter
+in this codebase (Judge0, generation, independent review) — its real HTTP
+call is intentionally `NotImplementedError`; no real endpoint exists here to
+test against. Configuring it is the institution's own act of opting in once
+they have "locally evaluated" a real provider, exactly per the contract
+above; even then, any provider failure/exception falls back to the template
+rather than ever breaking the student results page.
+
 ### 11. Legacy search indexing never reads exam data (verified, not assumed)
 
 Grepped `app/services/**` and `app/main.py` for any reference to

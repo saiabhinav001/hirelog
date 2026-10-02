@@ -131,6 +131,15 @@ class Settings(BaseSettings):
     EXAM_REVIEW_PROVIDER_BASE_URL: Optional[str] = None
     EXAM_REVIEW_PROVIDER_API_KEY: Optional[str] = None
 
+    # ── Learning feedback provider (Backend model prompt C, docs/adr/0014) ───
+    # Unset by default — feedback stays on the permanent, deterministic
+    # TemplateFeedbackProvider (ADR 0014: "no live LLM call"). Configuring
+    # this is an institution's own act of opting into a real provider once
+    # "locally evaluated" (master prompt contract); any failure from it
+    # still falls back to the template rather than breaking the page.
+    EXAM_FEEDBACK_PROVIDER_BASE_URL: Optional[str] = None
+    EXAM_FEEDBACK_PROVIDER_API_KEY: Optional[str] = None
+
     # ── Coding judge (Prompt 6, docs/adr/0011) ───────────────────────────────
     # Unset by default — falls back to a deterministic fake judge (test/dev
     # only, never executes submitted code). A real Judge0-compatible instance

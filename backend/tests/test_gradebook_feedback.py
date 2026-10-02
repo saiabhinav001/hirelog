@@ -12,7 +12,7 @@ from typing import Optional
 import pytest
 
 from app.domain.gradebook.errors import ResultsNotReleasedError
-from app.domain.gradebook.feedback_service import FeedbackService, build_learning_feedback
+from app.domain.gradebook.feedback_service import FeedbackService, TemplateFeedbackProvider, build_learning_feedback
 from app.domain.gradebook.models import FailureCategory, IntegrityDisposition, QuestionOutcome, ReleaseRecord, StudentGradebookRow, StudentQuestionResult
 
 NOW = datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
@@ -131,6 +131,7 @@ def _feedback_service(*, released: bool, row: StudentGradebookRow) -> FeedbackSe
     svc = FeedbackService.__new__(FeedbackService)
     svc._releases = _FakeReleaseRepo(released)
     svc._aggregation = _FakeAggregation(row)
+    svc._provider = TemplateFeedbackProvider()
     return svc
 
 
@@ -146,3 +147,83 @@ def test_feedback_service_resolves_anchors_when_released() -> None:
     svc = _feedback_service(released=True, row=row)
     feedback = svc.build_feedback_for_student(RUN_ID, "u1")
     assert feedback.source_anchors == ["src-1:a1"]
+
+
+# ── "Backend model prompt C" wiring: system prompt + enforced schema ───────
+
+def test_system_prompt_c_forbids_grade_changes_and_citation_fabrication() -> None:
+    from app.domain.gradebook.feedback_provider import GENERATION_SYSTEM_PROMPT_C_V1
+
+    assert "Do not change grades" in GENERATION_SYSTEM_PROMPT_C_V1
+    assert "disclose other students' answers" in GENERATION_SYSTEM_PROMPT_C_V1
+    assert "rather than inventing a resource" in GENERATION_SYSTEM_PROMPT_C_V1
+
+
+def test_http_adapter_exposes_the_same_system_prompt_constant() -> None:
+    from app.domain.gradebook.feedback_provider import GENERATION_SYSTEM_PROMPT_C_V1, HttpFeedbackProviderAdapter
+
+    assert HttpFeedbackProviderAdapter.SYSTEM_PROMPT == GENERATION_SYSTEM_PROMPT_C_V1
+
+
+def test_response_schema_rejects_a_non_schema_field_type() -> None:
+    from app.domain.gradebook.feedback_provider import FeedbackProviderError, FeedbackProviderResult
+
+    try:
+        FeedbackProviderResult.parse_payload({"strengths": "not-a-list"})
+        raise AssertionError("expected FeedbackProviderError")
+    except FeedbackProviderError:
+        pass
+
+
+def test_response_schema_accepts_the_template_providers_shape() -> None:
+    from app.domain.gradebook.feedback_provider import FeedbackProviderResult
+
+    row = _row([_qr(0, QuestionOutcome.FULLY_SOLVED, weighted_score=10.0, max_score=10.0)])
+    result = TemplateFeedbackProvider().generate_feedback(
+        row, run_id=RUN_ID, anchors_by_question={}, objective_ids_by_question={}
+    )
+    reparsed = FeedbackProviderResult.parse_payload(result.model_dump())
+    assert reparsed == result
+
+
+def test_sanitize_strips_a_fabricated_source_anchor() -> None:
+    from app.domain.gradebook.feedback_provider import FeedbackProviderResult, sanitize_feedback_result
+
+    result = FeedbackProviderResult(source_anchors=["src-1:a1", "src-FABRICATED:a9"])
+    sanitized, warnings = sanitize_feedback_result(result, known_anchor_ids={"src-1:a1"})
+    assert sanitized.source_anchors == ["src-1:a1"]
+    assert len(warnings) == 1
+
+
+def test_build_request_payload_omits_pending_questions_and_uid() -> None:
+    from app.domain.gradebook.feedback_provider import build_feedback_provider_request_payload
+
+    row = _row(
+        [
+            _qr(0, QuestionOutcome.FULLY_SOLVED, weighted_score=10.0, max_score=10.0),
+            _qr(1, QuestionOutcome.PENDING),
+        ]
+    )
+    payload = build_feedback_provider_request_payload(
+        row, run_id=RUN_ID, anchors_by_question={"rev-1:slot:0": ["src-1:a1"]},
+        objective_ids_by_question={"rev-1:slot:0": ["o1"]},
+    )
+    assert "uid" not in payload
+    assert len(payload["released_objective_scores"]) == 1
+    assert payload["released_objective_scores"][0]["objective_ids"] == ["o1"]
+
+
+def test_feedback_service_falls_back_to_template_when_real_provider_unconfigured() -> None:
+    """A real provider that's "configured" but still unimplemented (the
+    honestly-unimplemented HTTP adapter) must never break the results page —
+    the service silently falls back to the template."""
+    from app.domain.gradebook.feedback_provider import HttpFeedbackProviderAdapter
+
+    row = _row([_qr(0, QuestionOutcome.FULLY_SOLVED, weighted_score=10.0, max_score=10.0)])
+    svc = FeedbackService.__new__(FeedbackService)
+    svc._releases = _FakeReleaseRepo(True)
+    svc._aggregation = _FakeAggregation(row)
+    svc._provider = HttpFeedbackProviderAdapter(base_url="https://example.test", api_key="k")
+
+    feedback = svc.build_feedback_for_student(RUN_ID, "u1")
+    assert len(feedback.strengths) == 1
