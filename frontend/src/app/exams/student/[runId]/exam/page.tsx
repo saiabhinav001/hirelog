@@ -153,6 +153,15 @@ function ExamContent() {
 
   const handleSubmitExam = useCallback(async () => {
     setSubmitting(true);
+    // Flush any pending debounced autosave first — otherwise a save still in
+    // flight can race the submit's expected_draft_versions snapshot and
+    // spuriously trigger a draft_version_conflict on a perfectly normal
+    // "pick an answer, then submit quickly" sequence.
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      await persistDraft(answer);
+    }
     // Best-effort only — a failed/denied capture never blocks submission
     // (contract: "Submission acceptance cannot depend on a successful image upload.").
     void captureNow("submission").catch(() => undefined);
@@ -166,7 +175,7 @@ function ExamContent() {
       setSubmitting(false);
       setShowSubmitConfirm(false);
     }
-  }, [attempt, captureNow, getToken, refresh, runId]);
+  }, [answer, attempt, captureNow, getToken, persistDraft, refresh, runId]);
 
   if (error) return <ErrorState title="Something went wrong" description={error} />;
   if (!attempt || !question) return <LoadingState message="Loading your question…" />;

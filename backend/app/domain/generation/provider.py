@@ -213,7 +213,14 @@ class DeterministicFakeProvider:
                     "public_prompt": f"[fake] Question variant {i} for slot {request.slot_index}",
                     "constraints": {},
                     "public_examples": [],
-                    "options": [] if request.item_type != "single_choice" else ["A", "B", "C", "D"],
+                    # {key, text} objects — matches the real provider contract
+                    # and the frontend's rendering shape (plain strings here
+                    # previously left every option's `key`/`text` undefined).
+                    "options": (
+                        []
+                        if request.item_type != "single_choice"
+                        else [{"key": k, "text": f"Option {k}"} for k in ("A", "B", "C", "D")]
+                    ),
                     "private_expected_answer": "A" if request.item_type == "single_choice" else "fake-answer",
                     "private_explanation": "fake explanation",
                     "marking_rubric": {"points": request.marks},
