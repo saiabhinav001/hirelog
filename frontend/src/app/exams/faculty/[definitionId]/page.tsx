@@ -31,6 +31,7 @@ function DefinitionDetail() {
   const [blueprintTitle, setBlueprintTitle] = useState("");
   const [slotCount, setSlotCount] = useState(1);
   const [enrolledUidsText, setEnrolledUidsText] = useState("");
+  const [generatingBlueprintId, setGeneratingBlueprintId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -109,6 +110,29 @@ function DefinitionDetail() {
     await load();
   };
 
+  const handleGenerateCandidates = async (blueprintId: string) => {
+    const approvedSources = (sources ?? []).filter((s) => s.review_status === "approved");
+    if (approvedSources.length === 0) {
+      setError("Approve at least one source before generating questions.");
+      return;
+    }
+    setGeneratingBlueprintId(blueprintId);
+    try {
+      const token = await getToken();
+      await examEndpoints.createGenerationRequest(token, {
+        blueprint_id: blueprintId,
+        slot_index: 0,
+        source_anchors: approvedSources.map((s) => ({ source_id: s.id, anchor_id: "full-document" })),
+        deterministic_seed: Date.now(),
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not generate questions.");
+    } finally {
+      setGeneratingBlueprintId(null);
+    }
+  };
+
   const handlePublishRevision = async () => {
     const token = await getToken();
     await examApiFetch(`/api/exams/v1/faculty/definitions/${definitionId}/publish`, {
@@ -153,13 +177,17 @@ function DefinitionDetail() {
       <h1 className="text-2xl font-semibold">Exam workspace</h1>
 
       <section className="card mt-6 p-5">
-        <h2 className="text-lg font-semibold">Source (KT) review</h2>
+        <h2 className="text-lg font-semibold">Reference materials</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">
+          Course notes, slides, or documentation your questions will be generated from. Add a link below — it must
+          be approved before it can be used for question generation.
+        </p>
         <form onSubmit={handleAddSourceUrl} className="mt-3 flex gap-3">
           <input className="input-field flex-1" placeholder="https://approved-source.example.edu/notes" value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} />
-          <button className="btn-secondary" type="submit">Add source URL</button>
+          <button className="btn-secondary" type="submit">Add reference link</button>
         </form>
         <div className="mt-4 space-y-2">
-          {sources.length === 0 && <p className="text-sm text-[var(--text-muted)]">No sources submitted yet.</p>}
+          {sources.length === 0 && <p className="text-sm text-[var(--text-muted)]">No reference materials submitted yet.</p>}
           {sources.map((s) => (
             <div key={s.id} className="flex items-center justify-between rounded-md border border-[var(--border)] p-3 text-sm">
               <div>
@@ -181,7 +209,11 @@ function DefinitionDetail() {
       </section>
 
       <section className="card mt-4 p-5">
-        <h2 className="text-lg font-semibold">Blueprints &amp; question review</h2>
+        <h2 className="text-lg font-semibold">Question blueprint</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">
+          Sets how many questions this exam needs. Create a blueprint, generate AI-drafted questions from your
+          approved reference materials, then approve the ones you want to keep.
+        </p>
         <form onSubmit={handleCreateBlueprint} className="mt-3 flex gap-3">
           <input className="input-field flex-1" placeholder="Blueprint title" value={blueprintTitle} onChange={(e) => setBlueprintTitle(e.target.value)} />
           <button className="btn-secondary" type="submit">Create blueprint (1 slot)</button>
@@ -190,7 +222,16 @@ function DefinitionDetail() {
           {blueprints.length === 0 && <p className="text-sm text-[var(--text-muted)]">No blueprints yet.</p>}
           {blueprints.map((bp) => (
             <div key={bp.id} className="rounded-md border border-[var(--border)] p-3">
-              <h3 className="font-semibold">{bp.title}</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold">{bp.title}</h3>
+                <button
+                  className="btn-secondary"
+                  disabled={generatingBlueprintId === bp.id}
+                  onClick={() => handleGenerateCandidates(bp.id)}
+                >
+                  {generatingBlueprintId === bp.id ? "Generating…" : "Generate questions"}
+                </button>
+              </div>
               <div className="mt-2 space-y-2">
                 {(candidatesByBlueprint[bp.id] ?? []).map((c) => (
                   <div key={c.id} className="flex items-center justify-between rounded-md bg-[var(--surface-muted)] p-2 text-sm">
@@ -208,7 +249,7 @@ function DefinitionDetail() {
                   </div>
                 ))}
                 {(candidatesByBlueprint[bp.id] ?? []).length === 0 && (
-                  <p className="text-xs text-[var(--text-muted)]">No candidates generated for this blueprint yet.</p>
+                  <p className="text-xs text-[var(--text-muted)]">No questions generated for this blueprint yet.</p>
                 )}
               </div>
             </div>
@@ -217,10 +258,11 @@ function DefinitionDetail() {
       </section>
 
       <section className="card mt-4 p-5">
-        <h2 className="text-lg font-semibold">Publish &amp; schedule</h2>
+        <h2 className="text-lg font-semibold">Finalize &amp; schedule</h2>
         <p className="mt-1 text-sm text-[var(--text-muted)]">
-          Publishing creates an immutable revision. Releasing a run is a separate, later action — preview (viewing a
-          run) never mutates it.
+          Publishing locks in your approved questions as a final version. Scheduling then creates a specific
+          session — with its own duration and enrolled students — using that version; scheduling never changes
+          the questions themselves.
         </p>
         <div className="mt-3 flex items-center gap-3">
           <label htmlFor="slot-count" className="label mb-0">Slot count</label>
@@ -235,14 +277,18 @@ function DefinitionDetail() {
             value={enrolledUidsText}
             onChange={(e) => setEnrolledUidsText(e.target.value)}
           />
-          <button className="btn-primary" type="submit">Schedule run</button>
+          <button className="btn-primary" type="submit">Schedule session</button>
         </form>
       </section>
 
       <section className="card mt-4 p-5">
-        <h2 className="text-lg font-semibold">Runs</h2>
+        <h2 className="text-lg font-semibold">Scheduled sessions</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">
+          Each session is a specific sitting of this exam for one group of students — with its own lobby, live
+          monitoring, and results.
+        </p>
         <div className="mt-3 space-y-2">
-          {runs.length === 0 && <p className="text-sm text-[var(--text-muted)]">No runs scheduled yet.</p>}
+          {runs.length === 0 && <p className="text-sm text-[var(--text-muted)]">No sessions scheduled yet.</p>}
           {runs.map((run) => (
             <div key={run.id} className="flex items-center justify-between rounded-md border border-[var(--border)] p-3 text-sm">
               <div>

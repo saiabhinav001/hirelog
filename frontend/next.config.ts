@@ -98,16 +98,30 @@ const nextConfig: NextConfig = {
           },
         ],
       },
-      {
-        // Cache static assets aggressively
-        source: "/_next/static/(.*)",
-        headers: [
-          {
-            key: "Cache-Control",
-            value: "public, max-age=31536000, immutable",
-          },
-        ],
-      },
+      // Cache static assets aggressively — PRODUCTION ONLY. Turbopack dev
+      // chunk filenames are not reliably content-hashed per edit, so an
+      // `immutable, max-age=31536000` header in dev makes the browser
+      // permanently cache the first-loaded JS chunk and never revalidate
+      // it again — every subsequent code change silently fails to show up
+      // in the browser (confirmed live: correct source, clean compiles,
+      // stale DOM, surviving even a full `.next` wipe + dev-server
+      // restart, until this header was excluded in dev and the browser
+      // cache was bypassed). Next.js's own startup warning ("Setting a
+      // custom Cache-Control header can break Next.js development
+      // behavior") was pointing at exactly this.
+      ...(isDev
+        ? []
+        : [
+            {
+              source: "/_next/static/(.*)",
+              headers: [
+                {
+                  key: "Cache-Control",
+                  value: "public, max-age=31536000, immutable",
+                },
+              ],
+            },
+          ]),
     ];
   },
 

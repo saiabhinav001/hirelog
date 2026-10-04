@@ -257,6 +257,26 @@ export const examEndpoints = {
     ),
   listCandidatesForBlueprint: (token: string | undefined, blueprintId: string) =>
     authed<{ results: GenerationCandidate[] }>(`/api/exams/v1/faculty/blueprints/${blueprintId}/candidates`, token),
+  createGenerationRequest: (
+    token: string | undefined,
+    payload: { blueprint_id: string; slot_index: number; source_anchors: { source_id: string; anchor_id: string }[]; deterministic_seed: number }
+  ) =>
+    authed<{ status: string; ready_count: number; needs_revision_count: number; shortfall: number; error: string | null }>(
+      "/api/exams/v1/faculty/generation-requests",
+      token,
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  reserveVariantsForSlot: (
+    token: string | undefined,
+    blueprintId: string,
+    slotIndex: number,
+    payload: { run_id: string; uids: string[]; allow_balanced_reuse?: boolean }
+  ) =>
+    authed<{ assignments: Record<string, string> }>(
+      `/api/exams/v1/faculty/blueprints/${blueprintId}/slots/${slotIndex}/reserve-variants`,
+      token,
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
   reviewCandidate: (token: string | undefined, candidateId: string, decision: "approve" | "reject", rejectionReason?: string) =>
     authed(`/api/exams/v1/faculty/candidates/${candidateId}/review`, token, {
       method: "POST",

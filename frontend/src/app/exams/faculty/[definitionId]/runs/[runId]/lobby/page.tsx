@@ -9,6 +9,8 @@ import { useExamAuth } from "@/lib/examAuth";
 import { examEndpoints, type ExamRunSummary } from "@/lib/examEndpoints";
 import { useLiveSocket } from "@/lib/liveSocket";
 
+type Blueprint = { id: string; title: string; slots: { slot_index: number }[] };
+
 function LobbyContent() {
   const { runId } = useParams<{ runId: string }>();
   const router = useRouter();
@@ -17,12 +19,18 @@ function LobbyContent() {
   const [error, setError] = useState<string | null>(null);
   const [showReleaseConfirm, setShowReleaseConfirm] = useState(false);
   const [releasing, setReleasing] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [blueprints, setBlueprints] = useState<Blueprint[] | null>(null);
+  const [assigning, setAssigning] = useState(false);
+  const [assignedCount, setAssignedCount] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const token = await getToken();
       const data = await examEndpoints.getRun(token, runId);
       setRun(data);
+      const blueprintsData = await examEndpoints.listBlueprintsForDefinition(token, data.definition_id);
+      setBlueprints(blueprintsData.results as Blueprint[]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load run.");
     }
@@ -33,6 +41,43 @@ function LobbyContent() {
   }, [refresh]);
 
   const { health } = useLiveSocket({ runId, getToken, onReconcile: refresh });
+
+  const handlePublish = async () => {
+    if (!run) return;
+    setPublishing(true);
+    try {
+      const token = await getToken();
+      await examEndpoints.runCommand(token, runId, "publish", run.version, `publish-${runId}-${run.version}`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not publish the run.");
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const handleAssignQuestions = async () => {
+    if (!run || !blueprints) return;
+    setAssigning(true);
+    try {
+      const token = await getToken();
+      let total = 0;
+      for (const bp of blueprints) {
+        for (const slot of bp.slots) {
+          const result = await examEndpoints.reserveVariantsForSlot(token, bp.id, slot.slot_index, {
+            run_id: runId,
+            uids: run.enrolled_uids,
+          });
+          total += Object.keys(result.assignments).length;
+        }
+      }
+      setAssignedCount(total);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not assign questions to students.");
+    } finally {
+      setAssigning(false);
+    }
+  };
 
   const handleRelease = async () => {
     if (!run) return;
@@ -68,6 +113,23 @@ function LobbyContent() {
           Releasing opens this exam to every enrolled student immediately. This is a distinct, separate action from
           previewing the run — preview never changes anything.
         </p>
+
+        <p className="mt-3 text-xs text-[var(--text-muted)]">
+          Before releasing, assign each enrolled student their own copy of the approved questions. This can be
+          re-run safely — existing assignments are kept and only missing ones are filled in.
+        </p>
+        <button className="btn-secondary mt-2" onClick={handleAssignQuestions} disabled={assigning || !blueprints || blueprints.length === 0}>
+          {assigning ? "Assigning…" : "Assign questions to students"}
+        </button>
+        {assignedCount !== null && (
+          <p className="mt-1 text-xs text-[var(--text-muted)]">{assignedCount} assignment(s) confirmed.</p>
+        )}
+
+        {run.status === "draft" && (
+          <button className="btn-secondary mt-4" onClick={handlePublish} disabled={publishing}>
+            {publishing ? "Publishing…" : "Publish run"}
+          </button>
+        )}
 
         {run.status !== "released" && (
           <button className="btn-primary mt-4" onClick={() => setShowReleaseConfirm(true)} disabled={run.status !== "published" && run.status !== "paused"}>
