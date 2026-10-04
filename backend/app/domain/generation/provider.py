@@ -237,7 +237,16 @@ class DeterministicFakeProvider:
                         if request.item_type == "coding"
                         else {}
                     ),
-                    "public_tests": [] if request.item_type == "coding" else [],
+                    # Previously `[] if ... else []` (always empty, regardless of
+                    # item_type) — coding candidates had no public tests at all, so
+                    # the student-facing "Run public tests" action had nothing to
+                    # run against (validation.py only flags this as a non-blocking
+                    # "major" issue, so it silently reached faculty review anyway).
+                    "public_tests": (
+                        [{"group_name": "basic", "weight": 1.0, "is_hidden": False, "tests": [{"stdin": "", "expected_output": ""}]}]
+                        if request.item_type == "coding"
+                        else []
+                    ),
                     "validation_concerns": [],
                     "status": "draft",
                 }

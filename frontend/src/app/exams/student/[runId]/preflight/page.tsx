@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
 import { ErrorState } from "@/components/States";
@@ -14,8 +14,32 @@ function PreflightContent() {
   const { getToken } = useExamAuth();
   const [acknowledged, setAcknowledged] = useState(false);
   const [rehearsed, setRehearsed] = useState(false);
+  const [closedOtherApps, setClosedOtherApps] = useState(false);
+  const [disabledExtensions, setDisabledExtensions] = useState(false);
+  const [fullscreenSupported, setFullscreenSupported] = useState(false);
+  const [fullscreenActive, setFullscreenActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Capability-aware, same pattern as proctoringObservations.ts — fullscreen
+  // may be unsupported (some embedded/kiosk browsers), so this step is
+  // skipped rather than permanently blocking "Begin exam" on those.
+  useEffect(() => {
+    setFullscreenSupported(typeof document.fullscreenEnabled === "boolean" && document.fullscreenEnabled);
+    const onChange = () => setFullscreenActive(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const handleEnterFullscreen = useCallback(async () => {
+    try {
+      await document.documentElement.requestFullscreen();
+    } catch {
+      // Denied/unsupported at call time — fullscreenActive stays false and
+      // the button remains available to retry; never silently pretend it
+      // worked.
+    }
+  }, []);
 
   const handleBegin = useCallback(async () => {
     setSubmitting(true);
@@ -30,6 +54,9 @@ function PreflightContent() {
       setSubmitting(false);
     }
   }, [getToken, router, runId]);
+
+  const canBegin =
+    acknowledged && rehearsed && closedOtherApps && disabledExtensions && (!fullscreenSupported || fullscreenActive) && !submitting;
 
   return (
     <div className="page-container max-w-2xl py-10">
@@ -51,6 +78,40 @@ function PreflightContent() {
       </section>
 
       <section className="card mt-4 p-5">
+        <h2 className="text-lg font-semibold">Lockdown checklist</h2>
+        <p className="mt-2 text-sm text-[var(--text-secondary)]">
+          A browser tab cannot actually verify other applications, browser extensions, or background processes on
+          your device — these are self-declared. Switching tabs or windows during the exam is still detected and
+          logged automatically, regardless of what you confirm here.
+        </p>
+        <label className="mt-4 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={closedOtherApps} onChange={(e) => setClosedOtherApps(e.target.checked)} />
+          I have closed all other applications and browser tabs.
+        </label>
+        <label className="mt-2 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={disabledExtensions} onChange={(e) => setDisabledExtensions(e.target.checked)} />
+          I have disabled browser extensions that could interfere with this exam.
+        </label>
+
+        {fullscreenSupported ? (
+          <div className="mt-4 flex items-center gap-3">
+            {fullscreenActive ? (
+              <span className="badge-success badge">Fullscreen active</span>
+            ) : (
+              <button type="button" className="btn-secondary" onClick={handleEnterFullscreen}>
+                Enter fullscreen
+              </button>
+            )}
+            <span className="text-sm text-[var(--text-muted)]">Required before you can begin.</span>
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-[var(--text-muted)]">
+            Your browser does not support fullscreen mode — this step is skipped.
+          </p>
+        )}
+      </section>
+
+      <section className="card mt-4 p-5">
         <h2 className="text-lg font-semibold">Rehearsal</h2>
         <p className="mt-2 text-sm text-[var(--text-secondary)]">
           Confirm your device and browser can run the exam interface (this page itself).
@@ -61,11 +122,7 @@ function PreflightContent() {
         </label>
       </section>
 
-      <button
-        className="btn-primary mt-6"
-        disabled={!acknowledged || !rehearsed || submitting}
-        onClick={handleBegin}
-      >
+      <button className="btn-primary mt-6" disabled={!canBegin} onClick={handleBegin}>
         {submitting ? "Starting…" : "Begin exam"}
       </button>
     </div>
@@ -79,3 +136,4 @@ export default function PreflightPage() {
     </ExamProtectedRoute>
   );
 }
+

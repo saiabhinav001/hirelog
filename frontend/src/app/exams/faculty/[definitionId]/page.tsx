@@ -29,6 +29,8 @@ function DefinitionDetail() {
 
   const [sourceUrl, setSourceUrl] = useState("");
   const [blueprintTitle, setBlueprintTitle] = useState("");
+  const [blueprintItemType, setBlueprintItemType] = useState<"single_choice" | "multiple_select" | "short_answer" | "coding">("single_choice");
+  const [blueprintLanguage, setBlueprintLanguage] = useState("python3.11");
   const [slotCount, setSlotCount] = useState(1);
   const [enrolledUidsText, setEnrolledUidsText] = useState("");
   const [generatingBlueprintId, setGeneratingBlueprintId] = useState<string | null>(null);
@@ -87,12 +89,12 @@ function DefinitionDetail() {
           slots: [
             {
               slot_index: 0,
-              item_type: "single_choice",
+              item_type: blueprintItemType,
               objective_ids: ["core"],
               difficulty: "medium",
               marks: 5,
               target_minutes: 5,
-              permitted_languages: [],
+              permitted_languages: blueprintItemType === "coding" ? [blueprintLanguage] : [],
               requested_variant_count: 4,
             },
           ],
@@ -214,8 +216,26 @@ function DefinitionDetail() {
           Sets how many questions this exam needs. Create a blueprint, generate AI-drafted questions from your
           approved reference materials, then approve the ones you want to keep.
         </p>
-        <form onSubmit={handleCreateBlueprint} className="mt-3 flex gap-3">
+        <form onSubmit={handleCreateBlueprint} className="mt-3 flex flex-wrap gap-3">
           <input className="input-field flex-1" placeholder="Blueprint title" value={blueprintTitle} onChange={(e) => setBlueprintTitle(e.target.value)} />
+          <select
+            className="input-field"
+            aria-label="Question type"
+            value={blueprintItemType}
+            onChange={(e) => setBlueprintItemType(e.target.value as typeof blueprintItemType)}
+          >
+            <option value="single_choice">Single choice (MCQ)</option>
+            <option value="multiple_select">Multiple select</option>
+            <option value="short_answer">Short answer</option>
+            <option value="coding">Coding</option>
+          </select>
+          {blueprintItemType === "coding" && (
+            <select className="input-field" aria-label="Programming language" value={blueprintLanguage} onChange={(e) => setBlueprintLanguage(e.target.value)}>
+              <option value="python3.11">Python 3.11</option>
+              <option value="java17">Java 17</option>
+              <option value="cpp17">C++ (GCC 17)</option>
+            </select>
+          )}
           <button className="btn-secondary" type="submit">Create blueprint (1 slot)</button>
         </form>
         <div className="mt-4 space-y-4">

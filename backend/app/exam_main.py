@@ -61,18 +61,39 @@ def _firestore_health_check() -> dict:
         return {"status": "error", "detail": str(exc)}
 
 
+_judge_fake_provider_singleton = None
+
+
 def _judge_provider():
     """Real provider only if BOTH base_url and api_key are configured (same
     pattern as the generation provider) — an institutional decision, never a
     code change. See docs/adr/0011 for the hardened-compute requirements a
-    real provider must satisfy before this is safe to point at it."""
+    real provider must satisfy before this is safe to point at it.
+
+    Unlike the other fake dev providers (generation/review/feedback — pure
+    functions of their input, fine to reconstruct per call), the fake judge
+    is STATEFUL: `submit()` stores a pending result keyed by token, and a
+    LATER poll request must find that same token via `get_result()`. A real
+    Judge0 instance keeps that state on its own server regardless of how
+    many client instances call it; reconstructing a fresh
+    `DeterministicFakeJudgeProvider()` on every request (its `_pending` dict
+    always starts empty) permanently breaks that contract — every poll
+    after the first would find nothing and report "still processing"
+    forever (found live: a real public-test run that never resolved, not
+    even after far more polls than a genuine async judge would ever need).
+    Process-wide singleton keeps `_pending` alive across requests, matching
+    what a real external judge naturally provides for free.
+    """
     from app.domain.judge.provider import DeterministicFakeJudgeProvider, Judge0HttpAdapter
 
     if settings.EXAM_JUDGE_PROVIDER_BASE_URL and settings.EXAM_JUDGE_PROVIDER_API_KEY:
         return Judge0HttpAdapter(
             base_url=settings.EXAM_JUDGE_PROVIDER_BASE_URL, api_key=settings.EXAM_JUDGE_PROVIDER_API_KEY
         )
-    return DeterministicFakeJudgeProvider()
+    global _judge_fake_provider_singleton
+    if _judge_fake_provider_singleton is None:
+        _judge_fake_provider_singleton = DeterministicFakeJudgeProvider()
+    return _judge_fake_provider_singleton
 
 
 def _similarity_provider():

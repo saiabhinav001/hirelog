@@ -40,6 +40,7 @@ class ObservationKind(str, Enum):
     PERMISSION_DENIED = "permission_denied"
     CAMERA_ERROR = "camera_error"
     CONNECTION_DEGRADED = "connection_degraded"
+    CLIPBOARD_BLOCKED = "clipboard_blocked"
 
 
 DEPARTURE_START_KINDS = frozenset({ObservationKind.PAGE_HIDDEN, ObservationKind.FULLSCREEN_EXIT})
@@ -51,6 +52,7 @@ INFORMATIONAL_KINDS = frozenset(
         ObservationKind.PERMISSION_DENIED,
         ObservationKind.CAMERA_ERROR,
         ObservationKind.CONNECTION_DEGRADED,
+        ObservationKind.CLIPBOARD_BLOCKED,
     }
 )
 
