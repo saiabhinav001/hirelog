@@ -74,8 +74,28 @@ class ExamDefinition(BaseModel):
     instructor_uids: list[str] = Field(default_factory=list, max_length=20)
 
 
+class RevisionSlot(BaseModel):
+    """One slot of a published revision - a frozen copy of the blueprint slot
+    plus the exact approved candidate ids that were eligible at publish time.
+    Later approvals/rejections on the blueprint never change a published
+    revision ("active attempts remain pinned")."""
+
+    slot_index: int = Field(ge=0)
+    item_type: str
+    difficulty: str
+    marks: float = Field(gt=0)
+    negative_marks: float = Field(default=0, ge=0)
+    target_minutes: int = Field(gt=0)
+    objective_ids: list[str] = Field(default_factory=list)
+    permitted_languages: list[str] = Field(default_factory=list)
+    requested_variant_count: int = Field(ge=1)
+    approved_candidate_ids: list[str] = Field(default_factory=list)
+    # "source_id:source_version:anchor_id" keys of the approved candidates' supporting anchors.
+    source_refs: list[str] = Field(default_factory=list)
+
+
 class ExamRevision(BaseModel):
-    """Immutable once created — publishing a definition creates exactly one
+    """Immutable once created - publishing a definition creates exactly one
     of these; it is never edited afterward."""
 
     id: str
@@ -88,6 +108,12 @@ class ExamRevision(BaseModel):
     # bank); this phase only needs slot *count* and per-slot marks/duration to
     # drive the state machine and deadlines.
     slot_count: int = Field(ge=1)
+    # Prompt 3 (ADR 0019) - present only when published from a blueprint;
+    # legacy `slot_count`-only revisions leave all of these unset.
+    blueprint_id: Optional[str] = None
+    total_marks: Optional[float] = None
+    slots: Optional[list[RevisionSlot]] = None
+    publish_reason: Optional[str] = None
 
 
 class ExamRun(BaseModel):
@@ -138,6 +164,11 @@ class Attempt(BaseModel):
     current_slot_index: int = 0
     submit_receipt: Optional[SubmitReceipt] = None
     updated_at: Optional[datetime] = None
+    # Prompt 3 (ADR 0019): why/who sealed an attempt that the student did not
+    # submit themselves. None for a student submit and for legacy documents.
+    # finalization_reason: "deadline_expired" | "faculty_terminated"
+    finalization_reason: Optional[str] = None
+    finalized_by: Optional[str] = None  # actor uid, or "system:finalization-sweeper"
 
 
 class Draft(BaseModel):
@@ -156,6 +187,10 @@ class CommandReceipt(BaseModel):
     applied_at: datetime
     resulting_status: RunStatus
     resulting_version: int
+    # Prompt 3 (ADR 0019): who issued the command and why. Optional so legacy
+    # receipts and callers that send neither keep working.
+    actor_uid: Optional[str] = None
+    reason: Optional[str] = None
 
 
 class OutboxEntry(BaseModel):

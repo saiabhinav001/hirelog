@@ -45,6 +45,29 @@ class UnresolvedAttemptsError(ExamDomainError):
         self.count = count
 
 
+class CommandRejectedError(ExamDomainError):
+    """A faculty attempt/access command that is well-formed but not allowed in
+    the current state (e.g. extending an attempt that already expired).
+    `reason` is a stable machine-readable code; the API maps it to 409."""
+
+    code = "command_rejected"
+
+    def __init__(self, command: str, reason: str) -> None:
+        super().__init__(f"{command} rejected: {reason}")
+        self.command = command
+        self.reason = reason
+
+
+class PublicationBlockedError(ExamDomainError):
+    """Publishing from a blueprint failed validation (see `publication.py`)."""
+
+    code = "publication_blocked"
+
+    def __init__(self, blockers: list[str]) -> None:
+        super().__init__("; ".join(blockers) or "publication blocked")
+        self.blockers = blockers
+
+
 class NotEnrolledError(ExamDomainError):
     code = "not_enrolled"
 

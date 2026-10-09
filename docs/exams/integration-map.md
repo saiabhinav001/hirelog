@@ -68,7 +68,7 @@ the issuing identity. The route-table tripwires are in `backend/tests/test_exam_
 - OTP sign-in goes through an `OtpDelivery` adapter chosen by `EXAM_OTP_DELIVERY_PROVIDER` (none in production until D-6); the audit log
   (`exam_authz_audit`) now also records identity and roster administration.
 
-## 3. Route inventory (88 routes + 3 root/health = 91 at the audit; **96 + 3 after Prompt 2**, see §2.2 and compat §7.3)
+## 3. Route inventory (88 routes + 3 root/health = 91 at the audit; **96 + 3 after Prompt 2**, see §2.2 and compat §7.3; Prompt 3 adds six faculty routes, see compat §8.3)
 
 All routers carry router-level `dependencies=[Depends(require_exams_enabled)]` (regression-tested by `test_exams_routes_smoke.py`).
 
@@ -91,7 +91,7 @@ All routers carry router-level `dependencies=[Depends(require_exams_enabled)]` (
 
 | Package | Pure / decision modules | Imperative shell (Firestore) | Key callers |
 |---|---|---|---|
-| `exams` | `state_machine`, `decisions`, `policy`, `clock`, `models`, `errors` | `repository`, `commands` (`ExamCommandService`), `student_service`, `finalization` (`ExamFinalizationSweeper` — **never instantiated**), `outbox`, `institution_enrollment` (tests only) | `exams_faculty`, `exams_student`, `exams_live`, `exams_proctoring`, `exams_gradebook`, `exam_main` |
+| `exams` | `state_machine`, `decisions`, `policy`, `clock`, `models`, `errors` | `repository`, `commands` (`ExamCommandService`), `student_service`, `finalization` (`ExamFinalizationSweeper` — started from `exam_main.lifespan` since Prompt 3), `publication` (Prompt 3, pure preview/snapshot), `outbox`, `institution_enrollment` (tests only) | `exams_faculty`, `exams_student`, `exams_live`, `exams_proctoring`, `exams_gradebook`, `exam_main` |
 | `institution` | `normalization`, `roster_import`, `roster_csv` (Prompt 2), `otp`, `models`, `errors` | `repository`, `roster_service`, `auth_service`, `identity_provider` (`DevSinkOtpDelivery`, `UnconfiguredOtpDelivery`, `build_otp_delivery`, `UnconfiguredSsoProvider`) | `exams_institution_*`, `exams_me`, `exams_dependencies` |
 | `kt` | `file_validation`, `limits`, `source_registry`, `url_resolver`, `parsers` | `repository`, `malware_scan` (`NullMalwareScanner` default) | `exams_kt` |
 | `generation` | `validation`, `variants`, `review`, `independent_review`, `public_content` | `repository`, `commands`, `jobs`, `provider` (fake default), `independent_review_provider` | `exams_generation`, `exams_student`, `exams_judge` |
@@ -109,7 +109,7 @@ All routers carry router-level `dependencies=[Depends(require_exams_enabled)]` (
 | `_judge_sweep_loop` → `JudgeService.sweep_pending_once` | 2 s | yes | completes FINAL_GRADE / abandoned public runs |
 | `_proctoring_stale_incident_sweep_loop` | 15 s | yes | closes departures with no end event |
 | `_evidence_retention_sweep_loop` → `RetentionSweeper` | 3600 s | yes | deletes bytes + record together |
-| **(absent)** `ExamFinalizationSweeper.sweep_once` | — | designed idempotent | **not started anywhere** → deadline auto-finalization never runs (TMR-02) |
+| `_finalization_sweep_loop` → `ExamFinalizationSweeper.sweep_active_runs_once` (+ `run_schedule_automation_once` when `EXAM_SCHEDULE_AUTOMATION_ENABLED`) | `EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS` (15 s) | yes (each seal re-decides in its own transaction) | seals attempts past their own deadline with receipt + `attempt_finalized` outbox row + audit (Prompt 3, ADR 0019); was absent at the audit (TMR-02) |
 
 Realtime: WebSocket with single-use TTL ticket (`live_tickets`), per-run monotonically increasing `seq`, 15 s heartbeat; the socket never accepts
 commands. Frontend `useLiveSocket` reconciles via REST on every event and falls back to 10 s polling after 5 failed reconnects. The connection
@@ -153,7 +153,7 @@ There is **no** faculty UI for institutions/roster/memberships (API-only today) 
 ## 8. Configuration and feature flags (`backend/app/core/config.py`, `backend/.env.example`)
 
 `EXAMS_ENABLED` (false), `EXAM_NEW_ADMISSIONS_PAUSED` (false), `EXAM_FACULTY_EMAILS`, `EXAM_SUPER_ADMIN_EMAILS` (Prompt 1; empty), `EXAM_ALLOW_UNVERIFIED_STAFF_EMAIL` (Prompt 1; dev only, false), `EXAM_DEFAULT_WARNING_THRESHOLD` (3),
-`EXAM_DEFAULT_LATE_ADMISSION_GRACE_SECONDS` (120), `EXAM_FINALIZATION_BATCH_SIZE` (50), `EXAM_OUTBOX_LEASE_SECONDS` (60), `EXAM_OUTBOX_MAX_ATTEMPTS` (5),
+`EXAM_DEFAULT_LATE_ADMISSION_GRACE_SECONDS` (120), `EXAM_FINALIZATION_BATCH_SIZE` (50), `EXAM_FINALIZATION_SWEEP_ENABLED` (Prompt 3; **true**), `EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS` (15), `EXAM_FINALIZATION_ENDED_RUN_WINDOW_HOURS` (24), `EXAM_SCHEDULE_AUTOMATION_ENABLED` (Prompt 3; false), `EXAM_NEGATIVE_MARKING_ENABLED` (Prompt 3; false), `EXAM_OUTBOX_LEASE_SECONDS` (60), `EXAM_OUTBOX_MAX_ATTEMPTS` (5),
 `EXAM_OTP_HMAC_SECRET` / `_TTL_SECONDS` (300) / `_MAX_ATTEMPTS` (5) / `EXAM_OTP_DELIVERY_PROVIDER` (Prompt 2; empty), `EXAM_STAFF_REAUTH_MAX_AGE_SECONDS` (900),
 `EXAM_MALWARE_SCANNER_ENDPOINT` (ignored), `EXAM_GENERATION_PROVIDER_*`, `EXAM_REVIEW_PROVIDER_*`, `EXAM_FEEDBACK_PROVIDER_*`, `EXAM_JUDGE_PROVIDER_*`,
 `EXAM_LIVE_TICKET_TTL_SECONDS` (60), `EXAM_PROCTORING_GRACE_SECONDS` (2.0) / `_COOLDOWN_SECONDS` (5.0) / `_STALE_INCIDENT_SECONDS` (120),

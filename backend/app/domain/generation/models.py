@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ItemType(str, Enum):
@@ -47,8 +47,19 @@ class BlueprintSlot(BaseModel):
     target_minutes: int = Field(gt=0, le=180)
     permitted_languages: list[str] = Field(default_factory=list)
     requested_variant_count: int = Field(ge=1, le=50)
+    # Prompt 3 (ADR 0019, decision D-8): marks deducted for a wrong answer.
+    # Default 0 reproduces today's scoring. Non-zero values are rejected unless
+    # EXAM_NEGATIVE_MARKING_ENABLED is set, because grading does not apply them
+    # until the scoring semantics are decided.
+    negative_marks: float = Field(default=0, ge=0)
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _negative_marks_within_marks(self):
+        if self.negative_marks > self.marks:
+            raise ValueError("negative_marks cannot exceed marks")
+        return self
 
 
 class ExamBlueprint(BaseModel):

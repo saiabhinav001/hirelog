@@ -17,7 +17,7 @@ planned. The only brand-new persisted concepts (Prompt 1) have no existing home:
 |---|---|---|---|---|
 | **1 — authorization & roles** | AUTH-01/02/04/05/06/09, LIV-02, GRD-07, JDG-12, ATT-02 (membership), tests for AUTH-03/07/08/10/11 | Pure role policy + verified-email staff bootstrap with UID binding/audit; membership freshness in `get_current_exam_user`; owner/institution scope dependencies on every faculty route; student run scope on every student route; optional `institution_id` on definition/run | `EXAM_SUPER_ADMIN_EMAILS`, `EXAM_ALLOW_UNVERIFIED_STAFF_EMAIL` (dev only) | Behavior tightening for pilots (see migration notes) |
 | 2 — roster / linking / super-admin management **(implemented — see §5; the real OTP provider still waits on D-6)** | ID-03 (CSV upload), ID-05/06/08 (delivery, audit, recovery), ID-07, ID-09, AUTH-13 | `multipart` CSV onto existing dry-run/apply; real OTP delivery adapter behind `OtpDelivery`; persisted link-conflict audit; teacher assignment API after D-2 | provider env vars | Decisions D-2, D-6 |
-| 3 — domain, policy, state machines | **DOM-12/TMR-02 (finalization sweeper never started — High)**, DOM-03/04/07/09/11, TMR-03, SCH-01, MRK-01 | Start `ExamFinalizationSweeper` from the existing `lifespan` loop pattern; actor/reason on commands and extensions; optional policy/blueprint fields; preview summary; publish validation; per-attempt commands | `EXAM_FINALIZATION_SWEEP_ENABLED` (default **on** — the missing sweep is a defect), policy fields optional | `extra="forbid"` on `ExamPolicy` affects rollback (compat §4) |
+| 3 — domain, policy, state machines **(implemented — see §6)** | **DOM-12/TMR-02 (finalization sweeper never started — High)**, DOM-03/04/07/09/11, TMR-03, SCH-01, MRK-01 | Start `ExamFinalizationSweeper` from the existing `lifespan` loop pattern; actor/reason on commands and extensions; optional policy/blueprint fields; preview summary; publish validation; per-attempt commands | `EXAM_FINALIZATION_SWEEP_ENABLED` (default **on** — the missing sweep is a defect), policy fields optional | `extra="forbid"` on `ExamPolicy` affects rollback (compat §4) |
 | 4 — ingestion | ING-01/02/04/05/06/07 | Private object storage via the existing `evidence_storage` adapter pattern; scanner adapter honouring `EXAM_MALWARE_SCANNER_ENDPOINT`; parse as an outbox job; extracted-text hash; retry/replace/delete routes | storage / scanner env vars | Decision D-4 |
 | 5 — blueprint, generation, review | GEN-01/02/03/05/07/08/09/11, DOM-05, RND-01 | Resolve **real** anchor text and reject unknown anchors (today placeholder excerpts); capacity summary + publish gate; answer-key / near-duplicate / option-shuffle validation; candidate edit → new version + approval reset; injection fixtures | optional blueprint fields | Highest correctness gap in the pipeline |
 | 6 — attempts, drafts, immutable submit | ATT-02 (slot validation, previous access), ATT-06, ATT-08, UI-03/05 backend | Validate `question_id` against released slot; read access to released slots; mark-for-review flag on drafts; emulator interleaving tests | none | Decision D-3 |
@@ -114,3 +114,37 @@ changing an institution's identity policy after creation, emulator-backed transa
 - [x] Revoked membership, expired/replayed codes, rate limits and legacy accounts without exam membership are tested.
 - [x] Full backend suite (`EXAMS_ENABLED=false`: 774 passed) and ruff pass; frontend not changed.
 - [x] Migration notes and ADR 0018 written; no production data touched; no secrets or addresses added. *(Emulator, concurrent-writer and real-provider behavior not verified.)*
+
+## 6. Phase 3 — domain, policy, commands, finalization (implemented, ADR 0019)
+
+Phase 3 was gated on decision D-8 only for scoring: the schema, validation and a default-off flag shipped, grading semantics did not. Per-student pause/resume
+needed a new decision (D-12) and was not guessed.
+
+| Area | Change |
+|---|---|
+| `backend/app/domain/exams/finalization.py`, `backend/app/exam_main.py` | The finalization sweeper is started from `lifespan` (flag `EXAM_FINALIZATION_SWEEP_ENABLED`, default **on**); a seal writes `submit_receipt`, `finalization_reason`, `finalized_by`, an `attempt_finalized` outbox row (grading trigger) and an audit event; `sweep_active_runs_once` covers released/paused/closed and recently ended runs; `run_schedule_automation_once` (flag `EXAM_SCHEDULE_AUTOMATION_ENABLED`, default **off**) releases/closes through the ordinary command path |
+| `backend/app/domain/exams/commands.py`, `decisions.py`, `errors.py` | `actor_uid`/`reason` on commands and receipts; `grant_time_extension` is one transaction with `decide_time_extension`; new `terminate_attempt`, `recover_attempt`, `change_access`; blueprint-derived `publish_revision` with idempotency key; `preview_publication`; run creation audited; `CommandRejectedError`, `PublicationBlockedError` |
+| `backend/app/domain/exams/publication.py` (new) | Pure preview/validation (counts, total marks, distributions, blockers, warnings) and the revision snapshot |
+| `backend/app/domain/exams/policy.py`, `models.py`, `generation/models.py` | Additive optional fields: policy `timezone`, `scheduled_start/end`, `variant_policy`; `ExamRevision.blueprint_id/total_marks/slots/publish_reason` + `RevisionSlot`; `Attempt.finalization_reason/finalized_by`; `CommandReceipt.actor_uid/reason`; blueprint `negative_marks` |
+| `backend/app/domain/exams/repository.py` | Create-only revision writes; receipts written without unset optional fields; `list_by_statuses`, `list_ended_since`, `set_enrolled_in_transaction`, `create_in_transaction` (single-field queries, no new composite index) |
+| `backend/app/api/routes/exams_faculty.py`, `exams_generation.py`, `exams_errors.py` | New routes: `GET …/publish-preview`, `POST …/attempts/{uid}/terminate`, `…/recover`, `…/access/grant`, `…/access/revoke`, `…/finalize-expired`; extended bodies (`reason`, `idempotency_key`, `blueprint_id`); blueprint negative-marks gate; reserve-variants honours `variant_policy` |
+| Config / deps | `EXAM_FINALIZATION_SWEEP_ENABLED`, `…_INTERVAL_SECONDS`, `…_ENDED_RUN_WINDOW_HOURS`, `EXAM_SCHEDULE_AUTOMATION_ENABLED`, `EXAM_NEGATIVE_MARKING_ENABLED`; `tzdata` pinned |
+| Tests | New: `exam_inmemory.py` (optimistic in-memory Firestore), `test_exams_policy_validation.py`, `test_exams_run_commands.py`, `test_exams_attempt_commands.py`, `test_exams_faculty_routes_p3.py` |
+| Docs | ADR 0019 (+ index), compat §8, traceability §3.1, integration map |
+
+Out of Phase 3 on purpose: any frontend/UI, per-student pause/resume (D-12), applying negative marks in grading (D-8/P10), source-derived topic suggestions (DOM-05,
+P5), randomization/option shuffle (P5), time-remaining thresholds (P7), real-Firestore/emulator interleaving evidence (P11).
+
+### Phase 3 acceptance checklist
+
+- [x] Invalid policies are rejected (duration/threshold/grace bounds, unknown or malformed timezone, naive or reversed schedule, unknown variant policy, unknown fields, accommodation cap, negative marks above marks).
+- [x] Preview shows total marks, per-type counts, difficulty distribution, languages and blockers before publication; blockers refuse publication and write nothing.
+- [x] Revisions are immutable and create-only; a published edit is a new revision; a run stays pinned; later candidate changes do not alter a published revision.
+- [x] Illegal run transitions and stale versions are rejected without side effects; duplicate retries (sequential and concurrent) apply exactly once; concurrent commands at one version apply exactly one.
+- [x] Extension/expiry race: an extension granted before the deadline protects the attempt, one after it (or after sealing) is rejected; threaded interleavings never produce "extended and sealed" or "neither".
+- [x] Finalized/terminated attempts are never reopened; terminate and recover require a reason; grant/revoke never strands an attempt.
+- [x] Closing a cohort preserves accommodated/extended deadlines (manual and scheduled).
+- [x] Sweeper started, bounded, idempotent across concurrent sweepers; a seal produces a receipt and the grading trigger.
+- [x] Every new route is bound to run/definition scope; every state change has actor, reason (where applicable) and an audit event written in the same transaction.
+- [x] Full backend suite (`EXAMS_ENABLED=false`: 947 passed) and ruff pass; frontend not changed.
+- [x] Migration notes and ADR 0019 written; no production data touched; no secrets or addresses added. *(Real Firestore/emulator transaction behavior, index needs at scale and live websocket fan-out from the sweeper were not verified.)*

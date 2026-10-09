@@ -212,3 +212,72 @@ restores the defects listed in ADR 0018 (roster overwrites, silent reactivation,
 
 The Firestore emulator and concurrent writers (transactions are tested with in-memory stand-ins), a real OTP delivery provider, and any browser flow. The
 frontend was not changed and has no UI for these routes yet.
+
+## 8. Prompt 3 migration notes
+
+Implemented as [ADR 0019](../adr/0019-exam-domain-commands-and-finalization.md). **No data migration, backfill or production-document edit is needed or
+performed**; no secrets or addresses were added.
+
+### 8.1 Configuration
+
+| Setting (exam API environment) | Default | Action |
+|---|---|---|
+| `EXAM_FINALIZATION_SWEEP_ENABLED` | `true` | **New and on by default** — the exam API now starts the finalization loop. Set `false` only as a rollback lever (a warning is logged); with it off, expired attempts are never sealed or graded |
+| `EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS` | `15` | Seconds between sweeps. Each tick reads the IN_PROGRESS/BLOCKED attempts of every active run |
+| `EXAM_FINALIZATION_ENDED_RUN_WINDOW_HOURS` | `24` | How long after `ended_at` a run is still swept |
+| `EXAM_FINALIZATION_BATCH_SIZE` | `50` | Existing, previously unused; now the per-run seal cap per tick |
+| `EXAM_SCHEDULE_AUTOMATION_ENABLED` | `false` | Opt-in: the sweeper releases a PUBLISHED run at `scheduled_start` and closes it at `scheduled_end`. Runs in the same loop, so it also needs the sweep flag |
+| `EXAM_NEGATIVE_MARKING_ENABLED` | `false` | While false, blueprint slots with `negative_marks > 0` are rejected. Turning it on does **not** make grading apply them (decision D-8) |
+| `tzdata` | pinned in both requirements files | Needed to validate IANA timezone names on slim images and Windows |
+
+### 8.2 Behavior changes operators and teachers will see
+
+| Area | Before | Now |
+|---|---|---|
+| Expired attempts | Stayed IN_PROGRESS forever; never graded | Sealed within about one sweep interval after their **own** deadline (accommodated and extended deadlines respected), with a receipt, audit event and the grading trigger |
+| `POST …/attempts/{uid}/extend` | Plain update; no actor; a retry added minutes again; could touch a sealed attempt | Transactional; actor audited; optional `idempotency_key`/`reason`; `409 command_rejected` (`deadline_passed`, `attempt_resolved`, `run_ended`, `extension_limit_exceeded`); response adds `deadline`, `manual_extension_minutes`, `reused_existing_receipt`. Clients that send only `extra_minutes` keep working |
+| `close` | Any IN_PROGRESS attempt (even past its deadline) counted as unresolved | Only attempts still inside their own deadline are counted; `force` acknowledges them. Closing never cuts them off |
+| Run commands | `expected_version`, key, `force` | Same, plus optional `reason`; receipts and audit carry the actor |
+| `POST …/definitions/{id}/publish` | `{slot_count}` | Same body still works and returns the same shape; new optional `blueprint_id`, `reason`, `idempotency_key`. With a blueprint the count and marks are derived and blockers return `422 publication_blocked` |
+| Revision documents | `set` (overwritable) | Create-only; blueprint publishes also carry `blueprint_id`, `total_marks`, `slots` |
+| Blueprint slots | No negative marks | Optional `negative_marks` (default 0) |
+| Run policy | duration, warnings, grace, pause flag, accommodations | Optional `timezone`, `scheduled_start`, `scheduled_end`, `variant_policy`; invalid values are `422` |
+| Reserve variants | `allow_balanced_reuse` request flag only | Also pre-authorised by `policy.variant_policy == "balanced_reuse"` |
+
+### 8.3 New routes (all under `/api/exams/v1/faculty`, behind the exam flag, run/definition scope required)
+
+| Route | Purpose |
+|---|---|
+| `GET /definitions/{id}/publish-preview?blueprint_id=&duration_minutes=` | Resolved counts, total marks, distributions, blockers, warnings; writes nothing |
+| `POST /runs/{id}/attempts/{uid}/terminate` | Seal one live attempt now; `reason` (≥ 3 chars) and `idempotency_key` required |
+| `POST /runs/{id}/attempts/{uid}/recover` | Re-drive grading for a sealed attempt; `reason` and key required |
+| `POST /runs/{id}/access/grant`, `…/access/revoke` | Add / remove one student (`uid`, `idempotency_key`, optional `reason`); revoke refused once an attempt exists |
+| `POST /runs/{id}/finalize-expired` | One bounded sweep for a run (same code as the background loop) |
+
+### 8.4 Data and schema
+
+- **Additive optional fields, omitted when unset:** `ExamRevision.blueprint_id/total_marks/slots/publish_reason`, `Attempt.finalization_reason/finalized_by`,
+  `CommandReceipt.actor_uid/reason`, policy `timezone/scheduled_start/scheduled_end/variant_policy`, blueprint slot `negative_marks`. Legacy documents read with
+  neutral defaults.
+- **No new collection.** Audit events (`exam_*` kinds) reuse `exam_authz_audit`; the new commands reuse `exam_command_receipts` with keys
+  `{run_id}__{command}:{uid}__{key}`. New queries (`status in [...]`, `ended_at >=`) are single-field: no composite index.
+- **Rollback hazard (compat §4):** `ExamPolicy` is `extra="forbid"`. A run created with the new policy fields cannot be read by the previous build. Do not roll the
+  API back while such runs exist; the sweeper flag and schedule flag can be turned off without a rollback.
+
+### 8.5 Operator procedures
+
+- **Sweeper stuck or disabled:** `POST …/runs/{id}/finalize-expired` seals what is past its own deadline; `…/attempts/{uid}/recover` re-drives grading for an attempt
+  that was sealed but not graded.
+- **Student lost time (outage):** `extend` **before** their deadline passes (with a reason and a key). After it passes the attempt is sealed and cannot be reopened.
+- **Add a late student:** `access/grant` (institution runs: must be an active student of that institution), then they can be admitted while the run is RELEASED.
+- **Remove a student:** `access/revoke` if they never started; otherwise `terminate` with a reason (the work is preserved and graded).
+
+### 8.6 Rollback
+
+Turn off `EXAM_FINALIZATION_SWEEP_ENABLED` / `EXAM_SCHEDULE_AUTOMATION_ENABLED` for a behavior rollback without a deploy. Reverting the Prompt 3 commit restores the
+defects in ADR 0019 and fails to read runs that carry the new policy fields (see §8.4).
+
+### 8.7 Not verified in this phase
+
+Real Firestore transaction contention and the emulator (tests use an in-memory Firestore with optimistic transactions and thread jitter), read cost of the sweep at
+scale, live websocket fan-out from the sweeper, and any browser flow. The frontend was not changed and has no UI for these routes yet.

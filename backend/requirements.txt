@@ -14,3 +14,5 @@ pydantic-settings==2.2.1
 python-dotenv==1.0.1
 typesense==0.21.0
 redis==5.2.1
+# IANA zone names for per-exam display timezone validation (Prompt 3).
+tzdata==2026.4

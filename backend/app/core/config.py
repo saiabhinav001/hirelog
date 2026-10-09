@@ -100,6 +100,21 @@ class Settings(BaseSettings):
     EXAM_DEFAULT_WARNING_THRESHOLD: int = 3
     EXAM_DEFAULT_LATE_ADMISSION_GRACE_SECONDS: int = 120
     EXAM_FINALIZATION_BATCH_SIZE: int = 50
+    # Prompt 3 (docs/adr/0019). The sweeper is the server-side auto-finalizer the
+    # contract requires (expired attempts are sealed, receipted and graded); it
+    # is ON by default because without it expired attempts are never resolved.
+    # Setting this false is the rollback lever, not a supported steady state.
+    EXAM_FINALIZATION_SWEEP_ENABLED: bool = True
+    EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS: float = 15.0
+    # Ended runs are still swept for this long after `ended_at` so a hard stop
+    # never strands an unsealed attempt; older runs are not re-read every tick.
+    EXAM_FINALIZATION_ENDED_RUN_WINDOW_HOURS: int = 24
+    # Off by default: lets the sweeper release a PUBLISHED run at
+    # policy.scheduled_start and stop admissions at policy.scheduled_end.
+    EXAM_SCHEDULE_AUTOMATION_ENABLED: bool = False
+    # Off by default (decision D-8): per-slot negative_marks are rejected while
+    # false because grading does not apply them yet.
+    EXAM_NEGATIVE_MARKING_ENABLED: bool = False
     EXAM_OUTBOX_LEASE_SECONDS: int = 60
     EXAM_OUTBOX_MAX_ATTEMPTS: int = 5
 

@@ -1,35 +1,66 @@
-"""Bounded finalization sweep — seals expired attempts in small batches, never
-in one enormous transaction. Safe to call repeatedly (e.g. from a scheduled
-worker tick); each call processes at most `batch_size` attempts and each
-attempt is sealed in its OWN transaction, so a crash mid-sweep loses at most
-one partially-applied batch item, not the whole run.
+"""Server-side auto-finalization (Prompt 3, ADR 0019).
+
+`ExamFinalizationSweeper` seals expired attempts in small batches - each
+attempt in its OWN transaction, never one enormous one - and is safe to run
+from several processes at once: every seal re-reads and re-decides inside its
+transaction, so a duplicate or delayed sweep finds the attempt already sealed
+(or still inside its accommodated/extended deadline) and does nothing.
+
+Sealing is the same observable outcome as a student submit: the attempt gets a
+`submit_receipt` over the last acknowledged drafts and an `attempt_finalized`
+outbox row, which is what the grading handler consumes. (Before Prompt 3 the
+sweeper was never started, set no receipt and emitted an `attempt_expired` row
+nothing consumed, so expired attempts were never resolved or graded.)
+
+With EXAM_SCHEDULE_AUTOMATION_ENABLED the same loop also performs scheduled
+release/close through the ordinary `ExamCommandService.execute` path, so the
+receipts, version checks and audit trail are identical to a faculty command.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
+from typing import Optional
 
 from firebase_admin import firestore
 
+from app.core.config import settings
+from app.domain.authz.staff_binding import AuthzAuditRepository, build_audit_event
 from app.domain.exams.clock import Clock, system_clock
-from app.domain.exams.decisions import decide_finalization_batch
-from app.domain.exams.repository import AttemptRepository, DraftRepository, OutboxRepository, new_outbox_entry
+from app.domain.exams.commands import SYSTEM_SCHEDULER_ACTOR, ExamCommandService
+from app.domain.exams.decisions import decide_finalization_batch, decide_scheduled_command, decide_seal_on_expiry
+from app.domain.exams.errors import ExamDomainError
+from app.domain.exams.models import RunStatus
+from app.domain.exams.repository import (
+    AttemptRepository,
+    DraftRepository,
+    ExamRunRepository,
+    OutboxRepository,
+    new_outbox_entry,
+)
 from app.domain.exams.state_machine import require_attempt_transition
 
 logger = logging.getLogger("hirelog.exams.finalization")
+
+SWEEPER_ACTOR = "system:finalization-sweeper"
 
 
 class ExamFinalizationSweeper:
     def __init__(self, db, clock: Clock = system_clock) -> None:
         self._db = db
         self._clock = clock
+        self._runs = ExamRunRepository(db)
         self._attempts = AttemptRepository(db)
         self._drafts = DraftRepository(db)
         self._outbox = OutboxRepository(db)
+        self._audit = AuthzAuditRepository(db)
+
+    # -- sealing ---------------------------------------------------------------
 
     def sweep_once(self, run_id: str, *, batch_size: int) -> int:
-        """One bounded pass. Returns the number of attempts sealed this call
-        — callers loop until this returns 0."""
+        """One bounded pass over one run. Returns the number of attempts sealed
+        this call - callers loop until this returns 0."""
         now = self._clock.now()
         candidates = self._attempts.list_in_progress(run_id) + self._attempts.list_blocked(run_id)
         draft_versions_by_uid = {
@@ -48,8 +79,29 @@ class ExamFinalizationSweeper:
                 sealed += 1
         return sealed
 
+    def sweep_active_runs_once(self, *, batch_size: int) -> int:
+        """One tick over every run that can still hold unsealed attempts:
+        released/paused/closed runs plus recently ended ones (a hard stop must
+        not strand anyone). Bounded: at most `batch_size` seals per run."""
+        now = self._clock.now()
+        runs = {
+            run.id: run
+            for run in self._runs.list_by_statuses([RunStatus.RELEASED, RunStatus.PAUSED, RunStatus.CLOSED])
+        }
+        window = timedelta(hours=settings.EXAM_FINALIZATION_ENDED_RUN_WINDOW_HOURS)
+        for run in self._runs.list_ended_since(now - window):
+            runs.setdefault(run.id, run)
+
+        total = 0
+        for run_id in runs:
+            try:
+                total += self.sweep_once(run_id, batch_size=batch_size)
+            except Exception:  # noqa: BLE001 - one bad run must not stop the sweep
+                logger.exception("finalization sweep failed for run %s", run_id)
+        return total
+
     def _seal_one(self, run_id: str, uid: str) -> bool:
-        """Re-decides fresh inside its own transaction — the batch-level
+        """Re-decides fresh inside its own transaction - the batch-level
         decision above only selects CANDIDATES; the actual seal independently
         re-checks deadline/state so a delayed sweep never seals early or
         double-seals (every write independently checks deadlines/state)."""
@@ -61,7 +113,6 @@ class ExamFinalizationSweeper:
             attempt = self._attempts.get_in_transaction(transaction, run_id, uid)
             if attempt is None:
                 return False
-            from app.domain.exams.decisions import decide_seal_on_expiry
 
             versions = self._drafts.all_versions(run_id, uid)
             decision = decide_seal_on_expiry(attempt=attempt, now=now, current_draft_versions=versions)
@@ -76,16 +127,98 @@ class ExamFinalizationSweeper:
                 {
                     "status": decision.new_status.value,
                     "version": attempt.version + 1,
+                    "submit_receipt": decision.receipt.model_dump(mode="json"),
+                    "finalization_reason": "deadline_expired",
+                    "finalized_by": SWEEPER_ACTOR,
                     "updated_at": now.isoformat(),
                 },
             )
-            entry = new_outbox_entry(
-                kind="attempt_expired",
-                run_id=run_id,
-                payload={"uid": uid},
-                now=now,
+            # The grading handler consumes `attempt_finalized`; `attempt_expired`
+            # stays for any observer that distinguishes the cause.
+            self._outbox.add_in_transaction(
+                transaction,
+                new_outbox_entry(
+                    kind="attempt_finalized",
+                    run_id=run_id,
+                    payload={"uid": uid, "receipt_id": decision.receipt.receipt_id, "reason": "deadline_expired"},
+                    now=now,
+                ),
             )
-            self._outbox.add_in_transaction(transaction, entry)
+            self._outbox.add_in_transaction(
+                transaction, new_outbox_entry(kind="attempt_expired", run_id=run_id, payload={"uid": uid}, now=now)
+            )
+            self._audit.append_in_transaction(
+                transaction,
+                build_audit_event(
+                    "exam_attempt_expired", uid=uid, actor_uid=SWEEPER_ACTOR,
+                    detail={
+                        "run_id": run_id, "from_status": attempt.status.value,
+                        "deadline": attempt.deadline.isoformat() if attempt.deadline else None,
+                        "receipt_id": decision.receipt.receipt_id,
+                    },
+                    now=now,
+                ),
+            )
             return True
 
-        return _txn(transaction)
+        sealed = _txn(transaction)
+        if sealed:
+            self._publish_attempt(run_id, uid)
+        return sealed
+
+    def _publish_attempt(self, run_id: str, uid: str) -> None:
+        try:
+            from app.domain.live.publisher import publish_attempt_status_changed
+
+            attempt = self._attempts.get(run_id, uid)
+            if attempt is not None:
+                publish_attempt_status_changed(attempt, now=self._clock.now())
+        except Exception:  # noqa: BLE001 - live fan-out is best effort, the seal already committed
+            logger.warning("live publish after seal failed for run=%s uid=%s", run_id, uid, exc_info=True)
+
+    # -- schedule automation -----------------------------------------------------
+
+    def run_schedule_automation_once(self) -> int:
+        """Release PUBLISHED runs whose window has opened and close
+        RELEASED/PAUSED runs whose window has ended. Returns commands applied.
+
+        Uses deterministic idempotency keys and the run's CURRENT version, so
+        two processes (or a faculty member acting at the same moment) cannot
+        double-apply: the loser sees a version conflict / illegal transition
+        and simply skips until the next tick. `close` is forced because it
+        only stops NEW admissions - admitted students keep their own
+        (accommodated) deadlines."""
+        now = self._clock.now()
+        service = ExamCommandService(self._db, clock=self._clock)
+        runs = self._runs.list_by_statuses([RunStatus.PUBLISHED, RunStatus.RELEASED, RunStatus.PAUSED])
+        applied = 0
+        for run in runs:
+            command: Optional[str] = decide_scheduled_command(run=run, now=now)
+            if command is None:
+                continue
+            try:
+                outcome = service.execute(
+                    run_id=run.id, command=command, expected_version=run.version,
+                    idempotency_key=f"schedule-{command}", force=True,
+                    actor_uid=SYSTEM_SCHEDULER_ACTOR, reason="scheduled window",
+                )
+            except ExamDomainError as exc:
+                logger.info("scheduled %s skipped for run %s: %s", command, run.id, exc)
+                continue
+            except Exception:  # noqa: BLE001
+                logger.exception("scheduled %s failed for run %s", command, run.id)
+                continue
+            if outcome.applied:
+                applied += 1
+                self._publish_run(run.id)
+        return applied
+
+    def _publish_run(self, run_id: str) -> None:
+        try:
+            from app.domain.live.publisher import publish_run_state_changed
+
+            run = self._runs.get(run_id)
+            if run is not None:
+                publish_run_state_changed(run, now=self._clock.now())
+        except Exception:  # noqa: BLE001
+            logger.warning("live publish after scheduled command failed for run=%s", run_id, exc_info=True)

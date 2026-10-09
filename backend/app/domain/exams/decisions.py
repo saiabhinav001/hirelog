@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from uuid import uuid4
 
-from app.domain.exams.errors import UnresolvedAttemptsError
+from app.domain.exams.errors import CommandRejectedError, UnresolvedAttemptsError
 from app.domain.exams.models import (
     Attempt,
     AttemptStatus,
@@ -52,6 +52,8 @@ def decide_run_command(
     existing_receipt: Optional[CommandReceipt],
     unresolved_attempt_count: int = 0,
     force: bool = False,
+    actor_uid: Optional[str] = None,
+    reason: Optional[str] = None,
 ) -> CommandOutcome:
     """Decide the outcome of one faculty command. Raises on illegal state;
     returns a `CommandOutcome` when it can be (or already was) applied."""
@@ -82,6 +84,8 @@ def decide_run_command(
         applied_at=now,
         resulting_status=target,
         resulting_version=run.version + 1,
+        actor_uid=actor_uid,
+        reason=reason,
     )
     return CommandOutcome(applied=True, receipt=receipt)
 
@@ -323,3 +327,130 @@ def decide_finalization_batch(
         if decision is not None:
             sealed.append(decision)
     return FinalizationBatchResult(sealed=sealed, skipped=skipped)
+
+
+# ── Prompt 3 (ADR 0019): per-attempt / per-run faculty commands ───────────────
+
+MAX_MANUAL_EXTENSION_MINUTES = 24 * 60
+ACTIVE_ATTEMPT_STATUSES = frozenset({AttemptStatus.IN_PROGRESS, AttemptStatus.BLOCKED})
+
+
+@dataclass(frozen=True)
+class ExtensionDecision:
+    new_deadline: datetime
+    new_manual_extension_minutes: int
+
+
+def decide_time_extension(*, attempt: Attempt, run: ExamRun, now: datetime, extra_minutes: int) -> ExtensionDecision:
+    """An extension moves the CURRENT deadline of a live attempt. It is
+    deliberately refused once the deadline has passed - even before the
+    sweeper has sealed the attempt - because that would make the outcome of an
+    extension/expiry race depend on which writer happened to run first. Any
+    extension granted before the deadline wins; any attempted after it is
+    rejected; both are decided against fresh state inside a transaction."""
+    if extra_minutes < 1:
+        raise ValueError("extra_minutes must be positive")
+    if run.status == RunStatus.ENDED:
+        raise CommandRejectedError("extend", "run_ended")
+    if attempt.status in RESOLVED_ATTEMPT_STATUSES:
+        raise CommandRejectedError("extend", "attempt_resolved")
+    if attempt.status not in ACTIVE_ATTEMPT_STATUSES:
+        raise CommandRejectedError("extend", "attempt_not_active")
+    if attempt.deadline is None:
+        raise CommandRejectedError("extend", "attempt_has_no_deadline")
+    if now > attempt.deadline:
+        raise CommandRejectedError("extend", "deadline_passed")
+    total = attempt.manual_extension_minutes + extra_minutes
+    if total > MAX_MANUAL_EXTENSION_MINUTES:
+        raise CommandRejectedError("extend", "extension_limit_exceeded")
+    return ExtensionDecision(
+        new_deadline=attempt.deadline + timedelta(minutes=extra_minutes),
+        new_manual_extension_minutes=total,
+    )
+
+
+@dataclass(frozen=True)
+class TerminationDecision:
+    new_status: AttemptStatus
+    receipt: SubmitReceipt
+
+
+def decide_terminate_attempt(
+    *, attempt: Attempt, now: datetime, idempotency_key: str, current_draft_versions: dict[str, int]
+) -> TerminationDecision:
+    """Faculty seals ONE student's attempt now. Same sealed outcome as an
+    expiry (EXPIRED + receipt over the last acknowledged drafts); never a
+    reopening, never a deletion."""
+    if attempt.status in RESOLVED_ATTEMPT_STATUSES:
+        raise CommandRejectedError("terminate", "attempt_resolved")
+    if attempt.status not in ACTIVE_ATTEMPT_STATUSES:
+        raise CommandRejectedError("terminate", "attempt_not_active")
+    if not can_transition_attempt(attempt.status, AttemptStatus.EXPIRED):
+        raise CommandRejectedError("terminate", "illegal_transition")
+    receipt = SubmitReceipt(
+        idempotency_key=f"terminate:{idempotency_key}",
+        finalized_at=now,
+        sealed_draft_versions=dict(current_draft_versions),
+        receipt_id=uuid4().hex,
+    )
+    return TerminationDecision(new_status=AttemptStatus.EXPIRED, receipt=receipt)
+
+
+@dataclass(frozen=True)
+class AccessDecision:
+    changed: bool
+    enrolled_uids: list[str]
+
+
+def decide_access_change(
+    *, run: ExamRun, action: str, uid: str, attempt: Optional[Attempt]
+) -> AccessDecision:
+    """Grant or revoke ONE student's access to a run.
+
+    Grant is idempotent by value (already enrolled = no change). Revoke is
+    refused once the student has any attempt, so a revocation can never
+    strand or erase work - terminate the attempt instead."""
+    if action not in ("grant", "revoke"):
+        raise ValueError(f"unknown access action {action!r}")
+    if not uid or not uid.strip():
+        raise CommandRejectedError(action, "uid_required")
+    if run.status == RunStatus.ENDED:
+        raise CommandRejectedError(action, "run_ended")
+    enrolled = list(run.enrolled_uids)
+    if action == "grant":
+        if uid in enrolled:
+            return AccessDecision(False, enrolled)
+        return AccessDecision(True, enrolled + [uid])
+    if uid not in enrolled:
+        return AccessDecision(False, enrolled)
+    if attempt is not None and attempt.status != AttemptStatus.NOT_STARTED:
+        raise CommandRejectedError("revoke", "attempt_exists")
+    return AccessDecision(True, [u for u in enrolled if u != uid])
+
+
+def decide_recovery(*, attempt: Optional[Attempt]) -> None:
+    """Recovery re-drives work for an attempt that is ALREADY sealed (grading
+    trigger lost/failed). It never reopens an attempt and never edits drafts."""
+    if attempt is None:
+        raise CommandRejectedError("recover", "attempt_not_found")
+    if attempt.status not in RESOLVED_ATTEMPT_STATUSES:
+        raise CommandRejectedError("recover", "attempt_not_sealed")
+
+
+def decide_scheduled_command(*, run: ExamRun, now: datetime) -> Optional[str]:
+    """Which lifecycle command (if any) the run's schedule calls for right now.
+
+    - PUBLISHED + window open  -> "release"
+    - RELEASED/PAUSED + window ended -> "close" (stops NEW admissions only; an
+      already-admitted student keeps their own server-computed, possibly
+      accommodated, deadline)
+    A window that already ended before the run was released is never opened."""
+    start = run.policy.scheduled_start
+    end = run.policy.scheduled_end
+    if run.status == RunStatus.PUBLISHED and start is not None and now >= start:
+        if end is not None and now >= end:
+            return None
+        return "release"
+    if run.status in (RunStatus.RELEASED, RunStatus.PAUSED) and end is not None and now >= end:
+        return "close"
+    return None

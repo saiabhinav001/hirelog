@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.api.exams_dependencies import require_exam_faculty, require_exams_enabled, require_recent_staff_reauth
 from app.api.exams_errors import raise_for_domain_error
@@ -21,8 +21,10 @@ from app.api.exams_scope import (
     resolve_new_definition_institution,
     validate_enrollment_scope,
 )
+from app.core.config import settings
 from app.core.firebase import db
 from app.domain.exams.commands import ExamCommandService
+from app.domain.exams.finalization import ExamFinalizationSweeper
 from app.domain.exams.institution_enrollment import InstructorAssignmentError, assign_instructors
 from app.domain.exams.policy import ExamPolicy
 from app.domain.exams.repository import AttemptRepository
@@ -48,7 +50,19 @@ class CreateDefinitionRequest(BaseModel):
 
 
 class PublishRevisionRequest(BaseModel):
-    slot_count: int = Field(ge=1, le=500)
+    # Legacy path: the client states the slot count. Blueprint path (Prompt 3):
+    # the count, total marks and approved candidates are derived server-side
+    # and frozen into the revision; blockers refuse the publish.
+    slot_count: int | None = Field(default=None, ge=1, le=500)
+    blueprint_id: str | None = Field(default=None, min_length=1, max_length=128)
+    reason: str | None = Field(default=None, max_length=500)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _needs_a_source_of_slots(self):
+        if self.slot_count is None and not self.blueprint_id:
+            raise ValueError("slot_count or blueprint_id is required")
+        return self
 
 
 class CreateRunRequest(BaseModel):
@@ -62,10 +76,28 @@ class RunCommandRequest(BaseModel):
     expected_version: int = Field(ge=1)
     idempotency_key: str = Field(min_length=1, max_length=200)
     force: bool = False
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class TimeExtensionRequest(BaseModel):
     extra_minutes: int = Field(ge=1, le=24 * 60)
+    reason: str | None = Field(default=None, max_length=500)
+    # Optional for backward compatibility; without it a retried request adds the
+    # minutes again. Clients should always send one.
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class AttemptCommandRequest(BaseModel):
+    """Terminate / recover: destructive-or-recovery actions require a reason and an idempotency key."""
+
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class AccessChangeRequest(BaseModel):
+    uid: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class SetInstructorsRequest(BaseModel):
@@ -84,18 +116,42 @@ def create_definition(payload: CreateDefinitionRequest, user: dict = Depends(req
     return definition.model_dump(mode="json")
 
 
+@router.get("/definitions/{definition_id}/publish-preview")
+def preview_publication(
+    definition_id: str,
+    blueprint_id: str,
+    duration_minutes: int | None = None,
+    user: dict = Depends(require_definition_scope),
+) -> dict:
+    """Read-only: resolved counts, total marks, blockers and warnings for
+    publishing `blueprint_id` - shown to the teacher BEFORE publishing."""
+    try:
+        _, _, preview = _service().preview_publication(
+            definition_id=definition_id, blueprint_id=blueprint_id, duration_minutes=duration_minutes
+        )
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
+    return preview.to_dict()
+
+
 @router.post("/definitions/{definition_id}/publish")
 def publish_revision(
     definition_id: str, payload: PublishRevisionRequest, user: dict = Depends(require_definition_scope)
 ) -> dict:
     try:
         revision = _service().publish_revision(
-            definition_id=definition_id, slot_count=payload.slot_count, published_by=user["uid"]
+            definition_id=definition_id,
+            slot_count=payload.slot_count,
+            published_by=user["uid"],
+            blueprint_id=payload.blueprint_id,
+            reason=payload.reason,
+            idempotency_key=payload.idempotency_key,
         )
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
-    return revision.model_dump(mode="json")
+    return revision.model_dump(mode="json", exclude_none=True)
 
 
 @router.post("/runs")
@@ -112,6 +168,7 @@ def create_run(payload: CreateRunRequest, user: dict = Depends(require_exam_facu
         policy=payload.policy,
         enrolled_uids=payload.enrolled_uids,
         institution_id=definition.institution_id,
+        actor_uid=user["uid"],
     )
     return run.model_dump(mode="json")
 
@@ -141,6 +198,8 @@ def run_command(
             expected_version=payload.expected_version,
             idempotency_key=payload.idempotency_key,
             force=payload.force,
+            actor_uid=user["uid"],
+            reason=payload.reason,
         )
     except Exception as exc:
         raise_for_domain_error(exc)
@@ -161,14 +220,103 @@ def extend_time(
     run_id: str, uid: str, payload: TimeExtensionRequest, user: dict = Depends(require_run_scope)
 ) -> dict:
     try:
-        _service().grant_time_extension(run_id=run_id, uid=uid, extra_minutes=payload.extra_minutes)
+        result = _service().grant_time_extension(
+            run_id=run_id, uid=uid, extra_minutes=payload.extra_minutes, actor_uid=user["uid"],
+            reason=payload.reason, idempotency_key=payload.idempotency_key,
+        )
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
+    if not result.reused_existing_receipt:
+        _publish_attempt(run_id, uid)
+    return {
+        "status": "extended", "run_id": run_id, "uid": uid, "extra_minutes": payload.extra_minutes,
+        "deadline": result.deadline, "manual_extension_minutes": result.manual_extension_minutes,
+        "reused_existing_receipt": result.reused_existing_receipt,
+    }
+
+
+def _publish_attempt(run_id: str, uid: str) -> None:
     updated_attempt = AttemptRepository(db).get(run_id, uid)
     if updated_attempt is not None:
         publish_attempt_status_changed(updated_attempt, now=datetime.now(timezone.utc))
-    return {"status": "extended", "run_id": run_id, "uid": uid, "extra_minutes": payload.extra_minutes}
+
+
+@router.post("/runs/{run_id}/attempts/{uid}/terminate")
+def terminate_attempt(
+    run_id: str, uid: str, payload: AttemptCommandRequest, user: dict = Depends(require_run_scope)
+) -> dict:
+    """Seal one student's attempt now (EXPIRED + receipt + grading trigger).
+    Requires a reason; never reopens anything."""
+    try:
+        result = _service().terminate_attempt(
+            run_id=run_id, uid=uid, idempotency_key=payload.idempotency_key, actor_uid=user["uid"],
+            reason=payload.reason,
+        )
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
+    if not result.reused_existing_receipt:
+        _publish_attempt(run_id, uid)
+    return {"command": "terminate", "run_id": run_id, "uid": uid, "status": result.status,
+            "reused_existing_receipt": result.reused_existing_receipt}
+
+
+@router.post("/runs/{run_id}/attempts/{uid}/recover")
+def recover_attempt(
+    run_id: str, uid: str, payload: AttemptCommandRequest, user: dict = Depends(require_run_scope)
+) -> dict:
+    """Re-drive grading for an already-sealed attempt whose trigger was lost
+    or failed. Idempotent downstream; never reopens an attempt."""
+    try:
+        result = _service().recover_attempt(
+            run_id=run_id, uid=uid, idempotency_key=payload.idempotency_key, actor_uid=user["uid"],
+            reason=payload.reason,
+        )
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
+    return {"command": "recover", "run_id": run_id, "uid": uid, "status": result.status,
+            "reused_existing_receipt": result.reused_existing_receipt}
+
+
+def _change_access(run_id: str, action: str, payload: AccessChangeRequest, user: dict) -> dict:
+    service = _service()
+    run = service.runs.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
+    if action == "grant":
+        validate_enrollment_scope(run.institution_id, [payload.uid])
+    try:
+        result = service.change_access(
+            run_id=run_id, action=action, uid=payload.uid, idempotency_key=payload.idempotency_key,
+            actor_uid=user["uid"], reason=payload.reason,
+        )
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
+    return {"command": action, "run_id": run_id, "uid": payload.uid, "changed": result.changed,
+            "reused_existing_receipt": result.reused_existing_receipt}
+
+
+@router.post("/runs/{run_id}/access/grant")
+def grant_access(run_id: str, payload: AccessChangeRequest, user: dict = Depends(require_run_scope)) -> dict:
+    """Add one student to the run (institution-scoped runs: active students of that institution only)."""
+    return _change_access(run_id, "grant", payload, user)
+
+
+@router.post("/runs/{run_id}/access/revoke")
+def revoke_access(run_id: str, payload: AccessChangeRequest, user: dict = Depends(require_run_scope)) -> dict:
+    """Remove one student who has no attempt yet; terminate an attempt instead of revoking."""
+    return _change_access(run_id, "revoke", payload, user)
+
+
+@router.post("/runs/{run_id}/finalize-expired")
+def finalize_expired(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
+    """One bounded finalization pass for this run - same code the background
+    sweeper runs. Only attempts past their OWN deadline are sealed."""
+    sealed = ExamFinalizationSweeper(db).sweep_once(run_id, batch_size=settings.EXAM_FINALIZATION_BATCH_SIZE)
+    return {"run_id": run_id, "sealed": sealed, "batch_size": settings.EXAM_FINALIZATION_BATCH_SIZE}
 
 
 @router.get("/definitions")

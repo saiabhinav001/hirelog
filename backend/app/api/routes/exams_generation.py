@@ -98,6 +98,14 @@ class ReserveVariantsRequest(BaseModel):
 @router.post("/blueprints")
 def create_blueprint(payload: CreateBlueprintRequest, user: dict = Depends(require_exam_faculty)) -> dict:
     authorize_definition(user, payload.exam_definition_id)
+    if not settings.EXAM_NEGATIVE_MARKING_ENABLED and any(slot.negative_marks > 0 for slot in payload.slots):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "negative_marking_not_enabled",
+                "message": "Negative marking is not enabled on this deployment (grading does not apply it yet).",
+            },
+        )
     now = datetime.now(timezone.utc)
     blueprint = ExamBlueprint(
         id=uuid4().hex, exam_definition_id=payload.exam_definition_id, title=payload.title,
@@ -247,7 +255,7 @@ def reserve_variants_for_slot(
     service = GenerationCommandService(db)
     result = service.reserve_variants_for_slot(
         run_id=payload.run_id, blueprint_id=blueprint_id, slot_index=slot_index,
-        uids=payload.uids, allow_balanced_reuse=payload.allow_balanced_reuse,
+        uids=payload.uids, allow_balanced_reuse=payload.allow_balanced_reuse or run.policy.variant_policy == "balanced_reuse",
     )
     if result.blocked:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.reason)

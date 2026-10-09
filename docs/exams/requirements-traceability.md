@@ -137,6 +137,40 @@ Roster authority change (a deliberate behavior change, ADR 0018 §5): only a sup
 | MRK-01 | Marks and negative marking | Per-slot `marks`; weighted aggregation; MCQ exact-match only; **no negative marking, no multi-select partial credit** | `test_judge_grading.py`, `test_gradebook_aggregation_service.py` | PARTIALLY_EXISTS (D-8) | Additive `negative_marks` per slot; scoring semantics doc | P3/P10 |
 | RND-01 | Randomization, variants, option shuffle | Per-student variant assignment (`reserve_variants`, deterministic); **no option shuffle, no randomization policy** | `test_generation_review_and_variants.py` (10) | PARTIALLY_EXISTS | Seeded option-shuffle with stored mapping | P5 |
 
+### 3.1 Status after the Prompt 3 implementation
+
+Implemented as [ADR 0019](../adr/0019-exam-domain-commands-and-finalization.md); migration notes in
+[compatibility-and-migration.md §8](compatibility-and-migration.md). Evidence is unit- and HTTP-level against an **in-memory Firestore with optimistic
+transactions and thread jitter** (`backend/tests/exam_inmemory.py`) — real interleavings and retries, but no real Firestore emulator, no network
+latency and no index behavior. Backend suite: 947 tests passing with `EXAMS_ENABLED=false` (774 before + 173 new); `ruff check` clean.
+
+| ID | Status after P3 | What changed | Evidence |
+|---|---|---|---|
+| DOM-01 | PARTIALLY_EXISTS | Command, extension, terminate, access, recovery, publish, run-create and sweeper seals now write `exam_*` events (actor, subject, reason) to the shared `exam_authz_audit` collection **in the same transaction** as the change. `AttemptSlot` stays a derived id (`{revision_id}:slot:{index}`) — the revision now carries the frozen slot list | `test_exams_run_commands.py`, `test_exams_attempt_commands.py` |
+| DOM-03 | PARTIALLY_EXISTS | Additive, validated: `timezone` (IANA, display only), `scheduled_start/end` (UTC-normalised, naive rejected, end > start), `variant_policy` (`unique`/`balanced_reuse`, honoured by reserve-variants), accommodation cap, blueprint `negative_marks` (≤ marks; rejected unless `EXAM_NEGATIVE_MARKING_ENABLED`). Counts, per-type counts, total marks and difficulty distribution are **computed** in the preview, not stored as editable policy. Still open: exam-level topics (P5), randomization/option shuffle (P5), time-remaining thresholds (P7) | `test_exams_policy_validation.py` (34) |
+| DOM-04 | EXISTS_AND_VERIFIED (unit/HTTP) | `GET …/definitions/{id}/publish-preview` returns resolved counts, total marks, distributions, blockers and warnings; `publish` accepts `blueprint_id` and refuses on blockers (422 `publication_blocked`) | `test_exams_policy_validation.py`, `test_exams_run_commands.py`, `test_exams_faculty_routes_p3.py` |
+| DOM-07 | EXISTS_AND_VERIFIED (unit) | A blueprint publish freezes slot specs and the approved-candidate ids (and source references) into the revision; revisions are written with create-only semantics; a run stays pinned to its `revision_id`; later candidate approvals/rejections do not change a published revision; publish is idempotent by key | `test_exams_run_commands.py::test_*revision*`, `::test_later_candidate_changes_*` |
+| DOM-09 | PARTIALLY_EXISTS | Added, all scoped + idempotent + receipted + audited: `extend` (now transactional), `terminate` (reason required), `recover` (re-drives grading for a sealed attempt; never reopens), `access/grant`, `access/revoke` (refused once an attempt exists), `finalize-expired`. **Not added:** per-student pause/resume — it needs a deadline-freeze rule and collides with the proctoring `BLOCKED` state (new decision D-12); run-level pause/resume is unchanged | `test_exams_attempt_commands.py`, `test_exams_faculty_routes_p3.py` |
+| DOM-10 | EXISTS_AND_VERIFIED | Regression-tested end to end: closing a cohort (manual or scheduled) stops admissions only; an accommodated or extended attempt keeps its own deadline and is sealed by the sweeper only after it | `test_exams_run_commands.py::test_close_needs_force_*`, `test_exams_attempt_commands.py::test_the_scheduler_closes_*` |
+| DOM-11 | EXISTS_AND_VERIFIED (unit/HTTP) | `actor_uid` + optional `reason` on receipts; the extend route now passes the actor; extension audited with previous/new deadline | `test_exams_attempt_commands.py::test_extension_*`, `test_exams_faculty_routes_p3.py` |
+| DOM-12 | EXISTS_AND_VERIFIED (unit) | The finalization loop is started in `exam_main.lifespan` (flag `EXAM_FINALIZATION_SWEEP_ENABLED`, default **on**); each seal is its own transaction; two sweepers racing seal each attempt once | `test_exams_attempt_commands.py::test_two_sweepers_*`, `::test_the_exam_api_starts_*` |
+| TMR-02 | EXISTS_AND_VERIFIED (unit) | Expired attempts are sealed with a receipt over the last acknowledged drafts and an `attempt_finalized` outbox row (the grading trigger); blocked attempts are sealed too | `test_exams_attempt_commands.py::test_the_sweeper_*` |
+| TMR-03 | EXISTS_AND_VERIFIED (unit) | IANA timezone stored on the policy for display; enforcement stays UTC | `test_exams_policy_validation.py` |
+| SCH-01 | PARTIALLY_EXISTS | `scheduled_start/end` + sweeper-driven release/close behind `EXAM_SCHEDULE_AUTOMATION_ENABLED` (default **off**); never opens a window that already ended; duplicate schedulers apply once. No scheduling UI | `test_exams_attempt_commands.py::test_the_scheduler_*`, `::test_two_schedulers_*` |
+| MRK-01 | PARTIALLY_EXISTS (D-8) | Per-slot `negative_marks` is validated, previewed and frozen into the revision, but **grading does not apply it**; it is rejected at blueprint creation and blocks publication unless `EXAM_NEGATIVE_MARKING_ENABLED` is on, so it can never be silently ignored. Scoring semantics remain decision D-8 | `test_exams_faculty_routes_p3.py::test_negative_marks_*` |
+| RND-01 | PARTIALLY_EXISTS | Only the variant policy was added; option shuffle / randomization policy stays P5 | — |
+
+Defects found in the existing code while implementing (all fixed, none was in the audit baseline except P3-1/P3-2, which refine DOM-12):
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| P3-1 | High | The finalization sweeper was never started | Loop in `exam_main.lifespan` |
+| P3-2 | High | Even when run, a seal set no `submit_receipt` and emitted `attempt_expired`, which nothing consumes — an expired attempt would never be graded | Receipt + `attempt_finalized` outbox row + audit; `attempt_expired` kept for observers |
+| P3-3 | Medium | `grant_time_extension` was a plain read-then-write: concurrent extensions lost updates, a late extension could change an attempt the sweeper had just sealed or resurrect an expired one, and a client retry added the minutes twice; no actor recorded | One transaction + `decide_time_extension` (rejects resolved / past-deadline / ended-run / over-cap), optional idempotency key, audit |
+| P3-4 | Low | `close` counted attempts already past their own deadline as "unresolved", forcing `force` for a finished exam | Only attempts still inside their own deadline are counted |
+| P3-5 | Low | `create_revision` used `set`, so a revision document could be overwritten | `create` (fails if it exists) |
+| P3-6 | Medium | Publishing trusted a client-supplied `slot_count` unrelated to the blueprint or its approved candidates | Blueprint-derived path with blockers; legacy path unchanged |
+
 ## 4. Source ingestion — Prompt 4
 
 | ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
@@ -268,7 +302,7 @@ Roster authority change (a deliberate behavior change, ADR 0018 §5): only a sup
 |---|---|---|---|
 | 1 | Server authorizes every protected read/write | PARTIALLY_EXISTS (baseline) → HTTP routes closed in Prompt 1, see §1.1; WebSocket stream and `check_revoked` remain | AUTH-05, AUTH-06, AUTH-09 |
 | 2 | College ID is an identifier; no public role escalation | EXISTS_AND_VERIFIED | AUTH-03, AUTH-07, ID-02 |
-| 3 | Server time controls admission/deadline/extension/close/finalization | PARTIALLY_EXISTS | TMR-01, TMR-02 |
+| 3 | Server time controls admission/deadline/extension/close/finalization | EXISTS_AND_VERIFIED (unit; sweeper on by default, see ADR 0019) | TMR-01, TMR-02 |
 | 4 | Published revisions and final submissions immutable; draft ≠ submit | EXISTS_AND_VERIFIED (DOM-07 partial) | DOM-07, DOM-08, ATT-03/04 |
 | 5 | Locked content never reaches the student early | EXISTS_AND_VERIFIED | ATT-01, ATT-08 |
 | 6 | AI items stay drafts until checks + teacher approval | PARTIALLY_EXISTS | GEN-05, GEN-08 |
@@ -301,7 +335,8 @@ Roster authority change (a deliberate behavior change, ADR 0018 §5): only a sup
 | D-5 | Judge architecture/provider approval, language set (C, JS/TS), SQL runner qualification | P8 |
 | D-6 | Institution SSO vs verified-email OTP; OTP delivery provider. Prompt 2 delivered the adapter contract, the selection setting and the fail-closed production behavior; **no real provider exists until this is decided** | P2 (provider) |
 | D-7 | Institution proctoring profile contents (thresholds, evidence policy, retention) | P9 |
-| D-8 | Negative marking and multi-select partial-credit semantics; official grade-count definitions | P3/P10 |
+| D-8 | Negative marking and multi-select partial-credit semantics; official grade-count definitions. **Prompt 3 delivered the schema, validation, preview and a default-off flag only; grading still does not apply negative marks** | P3 (schema, done) / P10 (scoring) |
 | D-9 | Short-link domain, code format, expiry and rate-limit policy | P7 |
 | D-10 | History strategy for CI (rebase exam branch onto `origin/main` or add a branch trigger) | P11 |
 | D-11 | Legacy `PLACEMENT_CELL_EMAILS` promotion: verified-email/Google-only policy | outside exams |
+| D-12 | Per-student pause/resume: does the student's clock freeze (deadline shifts by the paused time), who may do it, and how it composes with the proctoring `BLOCKED` state. Not implemented in Prompt 3 | P7/P9 |

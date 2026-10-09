@@ -9,3 +9,5 @@ pypdf==6.19.0
 python-docx==1.2.0
 httpx==0.28.1
 python-multipart==0.0.32
+# IANA zone names for per-exam display timezone validation (Prompt 3); slim images/Windows ship no zoneinfo.
+tzdata==2026.4

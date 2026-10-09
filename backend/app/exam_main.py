@@ -167,6 +167,26 @@ def _proctoring_stale_incident_sweep_loop() -> None:
         _stop_event.wait(15.0)
 
 
+def _finalization_sweep_loop() -> None:
+    """Server-side auto-finalization (Prompt 3, docs/adr/0019): seals attempts
+    whose own (accommodated/extended) deadline has passed, with a receipt and a
+    grading trigger, and - only when EXAM_SCHEDULE_AUTOMATION_ENABLED - performs
+    scheduled release/close. Each seal is its own transaction and every write
+    re-checks state, so running this in several instances is safe."""
+    from app.domain.exams.finalization import ExamFinalizationSweeper
+
+    sweeper = ExamFinalizationSweeper(db)
+    interval = max(1.0, float(settings.EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS))
+    while not _stop_event.is_set():
+        try:
+            if settings.EXAM_SCHEDULE_AUTOMATION_ENABLED:
+                sweeper.run_schedule_automation_once()
+            sweeper.sweep_active_runs_once(batch_size=settings.EXAM_FINALIZATION_BATCH_SIZE)
+        except Exception:
+            logger.exception("exam finalization sweep tick failed")
+        _stop_event.wait(interval)
+
+
 def _evidence_retention_sweep_loop() -> None:
     """Deletes evidence (storage bytes + Firestore record together) once
     past the configured retention window — bounded, idempotent."""
@@ -201,7 +221,10 @@ async def lifespan(app: FastAPI):
         threading.Thread(target=_judge_sweep_loop, daemon=True).start()
         threading.Thread(target=_proctoring_stale_incident_sweep_loop, daemon=True).start()
         threading.Thread(target=_evidence_retention_sweep_loop, daemon=True).start()
-
+        if settings.EXAM_FINALIZATION_SWEEP_ENABLED:
+            threading.Thread(target=_finalization_sweep_loop, daemon=True).start()
+        else:
+            logger.warning("EXAM_FINALIZATION_SWEEP_ENABLED is false - expired attempts will NOT be auto-finalized")
     logger.info("Exam API startup complete — ENV=%s EXAMS_ENABLED=%s", settings.ENV, settings.EXAMS_ENABLED)
     yield
     _stop_event.set()

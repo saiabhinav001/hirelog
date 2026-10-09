@@ -26,6 +26,7 @@ from app.domain.exams.models import (
     ExamRevision,
     ExamRun,
     OutboxEntry,
+    RunStatus,
 )
 
 logger = logging.getLogger("hirelog.exams")
@@ -84,7 +85,13 @@ class ExamDefinitionRepository:
         return ExamDefinition.model_validate({**(snap.to_dict() or {}), "id": snap.id})
 
     def create_revision_in_transaction(self, transaction, revision: ExamRevision) -> None:
-        transaction.set(self._revisions(revision.definition_id).document(revision.id), _model_dict(revision))
+        # `create` (not `set`): a revision id can only ever be written once, so
+        # no code path can overwrite a published revision. Optional Prompt 3
+        # fields are omitted when unset so legacy-shaped revisions stay identical.
+        transaction.create(
+            self._revisions(revision.definition_id).document(revision.id),
+            revision.model_dump(mode="json", exclude_none=True),
+        )
 
     def set_latest_revision_in_transaction(self, transaction, definition_id: str, revision_id: str, now: datetime) -> None:
         transaction.update(
@@ -132,6 +139,9 @@ class ExamRunRepository:
     def create(self, run: ExamRun) -> None:
         self._ref(run.id).set(_model_dict(run))
 
+    def create_in_transaction(self, transaction, run: ExamRun) -> None:
+        transaction.create(self._ref(run.id), _model_dict(run))
+
     def apply_command_in_transaction(
         self, transaction, run_id: str, *, new_status, new_version: int, now: datetime, extra: dict
     ) -> None:
@@ -143,6 +153,28 @@ class ExamRunRepository:
             **extra,
         }
         transaction.update(ref, update)
+
+    def set_enrolled_in_transaction(self, transaction, run_id: str, enrolled_uids: list[str], now: datetime) -> None:
+        """Access grant/revoke. Deliberately does NOT bump `version`: version
+        guards lifecycle commands, and enrollment edits must not invalidate a
+        faculty member's in-flight pause/close."""
+        transaction.update(self._ref(run_id), {"enrolled_uids": enrolled_uids, "updated_at": now.isoformat()})
+
+    def list_by_statuses(self, statuses: list[RunStatus]) -> list[ExamRun]:
+        """Single-field `in` query (no composite index) - the sweeper's view of
+        runs that may still hold unsealed attempts or a due schedule action."""
+        query = self._db.collection(RUNS_COLLECTION).where(
+            filter=firestore.FieldFilter("status", "in", [s.value for s in statuses])
+        )
+        return [ExamRun.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]
+
+    def list_ended_since(self, cutoff: datetime) -> list[ExamRun]:
+        """Runs hard-ended at/after `cutoff` (single-field range query on the ISO
+        UTC `ended_at` string the commands write)."""
+        query = self._db.collection(RUNS_COLLECTION).where(
+            filter=firestore.FieldFilter("ended_at", ">=", cutoff.isoformat())
+        )
+        return [ExamRun.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]
 
     def list_by_definition(self, definition_id: str) -> list[ExamRun]:
         query = self._db.collection(RUNS_COLLECTION).where(
@@ -287,7 +319,7 @@ class CommandReceiptRepository:
         ref = self._db.collection(COMMAND_RECEIPTS_COLLECTION).document(
             self._doc_id(receipt.run_id, receipt.command, receipt.idempotency_key)
         )
-        transaction.set(ref, _model_dict(receipt))
+        transaction.set(ref, receipt.model_dump(mode="json", exclude_none=True))
 
 
 class OutboxRepository:
