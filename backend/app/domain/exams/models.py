@@ -64,6 +64,14 @@ class ExamDefinition(BaseModel):
     created_at: datetime
     updated_at: datetime
     latest_published_revision_id: Optional[str] = None
+    # Institution this exam belongs to (Prompt 1, ADR 0017). None = unscoped
+    # pilot/legacy resource: only its owner and super-admins can manage it.
+    institution_id: Optional[str] = None
+    # Co-instructors ("definition = course", Prompt 2, ADR 0018): linked, ACTIVE
+    # FACULTY/ADMIN members of `institution_id` assigned by a super-admin or an
+    # ADMIN of that institution. They may manage this definition's runs,
+    # blueprints and gradebook but not the instructor list itself.
+    instructor_uids: list[str] = Field(default_factory=list, max_length=20)
 
 
 class ExamRevision(BaseModel):
@@ -96,6 +104,9 @@ class ExamRun(BaseModel):
     # membership repository. Swap the *source* of this snapshot later without
     # changing anything below this point.
     enrolled_uids: list[str] = Field(default_factory=list)
+    # Copied from the definition at run creation (never client-supplied).
+    # When set, students also need an ACTIVE membership in this institution.
+    institution_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     released_at: Optional[datetime] = None

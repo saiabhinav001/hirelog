@@ -89,6 +89,14 @@ class Settings(BaseSettings):
     # a client-editable user record (contract #2).
     EXAMS_ENABLED: bool = False
     EXAM_FACULTY_EMAILS: str = ""
+    # Platform-level exam administrators (role `super_admin`, docs/adr/0017).
+    # Server-side allowlist only: comma-separated e-mails matched against the
+    # VERIFIED token e-mail and bound to the first UID that proves it. No
+    # address is hard-coded in source; empty means nobody is a super_admin.
+    EXAM_SUPER_ADMIN_EMAILS: str = ""
+    # Dev-only escape hatch: honour an allowlisted e-mail even when the token
+    # says `email_verified=false`. Ignored when ENV=production.
+    EXAM_ALLOW_UNVERIFIED_STAFF_EMAIL: bool = False
     EXAM_DEFAULT_WARNING_THRESHOLD: int = 3
     EXAM_DEFAULT_LATE_ADMISSION_GRACE_SECONDS: int = 120
     EXAM_FINALIZATION_BATCH_SIZE: int = 50
@@ -114,6 +122,11 @@ class Settings(BaseSettings):
     EXAM_OTP_HMAC_SECRET: Optional[str] = None
     EXAM_OTP_TTL_SECONDS: int = 300
     EXAM_OTP_MAX_ATTEMPTS: int = 5
+    # Which OTP delivery adapter to use (Prompt 2, docs/adr/0018). Empty = not
+    # chosen: the synthetic dev sink outside production, no delivery (OTP sign-in
+    # unavailable) in production. No real provider adapter exists yet — that is
+    # an institutional decision (SSO vs verified-e-mail OTP, D-6).
+    EXAM_OTP_DELIVERY_PROVIDER: str = ""
     EXAM_STAFF_REAUTH_MAX_AGE_SECONDS: int = 900
 
     # ── KT ingestion / generation providers (Prompt 5, docs/adr/0009) ────────
@@ -220,6 +233,16 @@ class Settings(BaseSettings):
             for email in self.EXAM_FACULTY_EMAILS.split(",")
             if email.strip()
         }
+
+    def exam_super_admin_emails_set(self) -> set[str]:
+        return {
+            email.strip().lower()
+            for email in self.EXAM_SUPER_ADMIN_EMAILS.split(",")
+            if email.strip()
+        }
+
+    def unverified_staff_email_allowed(self) -> bool:
+        return bool(self.EXAM_ALLOW_UNVERIFIED_STAFF_EMAIL) and self.ENV.strip().lower() != "production"
 
     def search_warmup_queries_list(self) -> list[str]:
         return [

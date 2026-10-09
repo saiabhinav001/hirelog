@@ -6,24 +6,28 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.api.exams_dependencies import get_current_exam_user, require_exams_enabled
-from app.core.config import settings
-from app.core.firebase import db
-from app.domain.institution.repository import MembershipRepository
+from app.api.exams_dependencies import get_current_exam_user, require_exams_enabled, resolve_principal
 
 router = APIRouter(prefix="/api/exams/v1", tags=["exams-me"], dependencies=[Depends(require_exams_enabled)])
 
 
 @router.get("/me")
 def get_me(user: dict = Depends(get_current_exam_user)) -> dict:
-    email = str(user.get("email") or "").strip().lower()
-    is_bootstrap_faculty = bool(email) and email in settings.exam_faculty_emails_set()
-    memberships = MembershipRepository(db).find_by_uid(user["uid"])
+    # Roles are computed by the server policy (ADR 0017) from the VERIFIED
+    # token e-mail + memberships — never from stored profile fields. The
+    # frontend uses this for routing only; every route re-checks on the server.
+    principal = resolve_principal(user)
+    memberships = principal.memberships
 
     return {
         "uid": user["uid"],
         "email": user.get("email"),
-        "is_bootstrap_faculty": is_bootstrap_faculty,
+        "email_verified": principal.email_verified,
+        # Verified bootstrap staff authority (teacher or super_admin allowlist,
+        # UID-bound). Name kept for frontend compatibility (`examAuth.tsx`).
+        "is_bootstrap_faculty": principal.bootstrap_teacher or principal.bootstrap_super_admin,
+        "is_super_admin": principal.is_super_admin,
+        "exam_roles": [role.value for role in principal.roles()],
         "memberships": [
             {
                 "institution_id": m.institution_id,

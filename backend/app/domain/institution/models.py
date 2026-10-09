@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 MEMBERSHIP_SCHEMA_VERSION = 1
 ROSTER_IMPORT_SCHEMA_VERSION = 1
@@ -34,11 +34,33 @@ class MembershipStatus(str, Enum):
     REVOKED = "revoked"
 
 
+class IdentityKeyPolicy(BaseModel):
+    """Per-institution college-ID rules (Prompt 2, docs/adr/0018). Applied on top
+    of the universal trim/collapse/UPPERCASE step. Set when the institution is
+    created and never edited: membership document ids embed the normalized key,
+    so changing the policy later would orphan existing memberships."""
+
+    remove_characters: str = Field(default="", max_length=16)  # e.g. "-/. " so 21-BCE-0001 == 21BCE0001
+    min_length: int = Field(default=1, ge=1, le=64)
+    max_length: int = Field(default=64, ge=1, le=64)
+    charset: Literal["any", "alphanumeric"] = "any"
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _bounds_are_ordered(self) -> "IdentityKeyPolicy":
+        if self.min_length > self.max_length:
+            raise ValueError("min_length must not exceed max_length")
+        return self
+
+
 class Institution(BaseModel):
     id: str
     name: str = Field(min_length=1, max_length=200)
     created_at: datetime
     updated_at: datetime
+    # None = the universal normalization only (every pre-Prompt-2 institution).
+    identity_policy: Optional[IdentityKeyPolicy] = None
 
 
 class Membership(BaseModel):
@@ -75,6 +97,8 @@ class RosterRowResult(BaseModel):
     ok: bool
     action: str = ""  # "create" | "update" | "skip_unchanged"
     error: Optional[str] = None
+    first_seen_row: Optional[int] = None  # set on duplicate_identity_key_in_file
+    line_number: Optional[int] = None  # CSV line, set when the row could not be parsed
 
 
 class RosterImportStatus(str, Enum):
@@ -90,6 +114,9 @@ class RosterImportJob(BaseModel):
     institution_id: str
     uploaded_by: str
     requester_max_role_scope: str  # the highest role_scope the uploader may grant
+    # SHA-256 of the normalized rows seen at dry-run; apply must present the same
+    # rows (None only on jobs created before Prompt 2).
+    rows_digest: Optional[str] = None
     status: RosterImportStatus = RosterImportStatus.DRY_RUN
     total_rows: int = 0
     applied_cursor: int = 0  # resumable — index of the next unprocessed row

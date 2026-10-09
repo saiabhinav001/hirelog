@@ -14,8 +14,9 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
-from app.api.exams_dependencies import get_current_exam_user, require_exam_faculty, require_exams_enabled
+from app.api.exams_dependencies import require_exam_faculty, require_exams_enabled, require_student_run_scope
 from app.api.exams_errors import raise_for_domain_error
+from app.api.exams_scope import require_export_job_scope, require_grade_appeal_scope, require_run_scope
 from app.api.routes.exams_proctoring import _storage
 from app.core.config import settings
 from app.core.firebase import db
@@ -93,7 +94,7 @@ class ExportRequest(BaseModel):
 # ── Student ──────────────────────────────────────────────────────────────────
 
 @student_router.get("/runs/{run_id}/results")
-def get_my_results(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_my_results(run_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     _set_no_store(response)
     try:
         _require_released(run_id)
@@ -110,7 +111,7 @@ def get_my_results(run_id: str, response: Response, user: dict = Depends(get_cur
 
 
 @student_router.get("/runs/{run_id}/feedback")
-def get_my_feedback(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_my_feedback(run_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     _set_no_store(response)
     try:
         feedback = FeedbackService(db, _feedback_provider()).build_feedback_for_student(run_id, user["uid"])
@@ -121,7 +122,7 @@ def get_my_feedback(run_id: str, response: Response, user: dict = Depends(get_cu
 
 
 @student_router.post("/runs/{run_id}/questions/{question_id}/appeals")
-def submit_grade_appeal(run_id: str, question_id: str, payload: GradeAppealRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def submit_grade_appeal(run_id: str, question_id: str, payload: GradeAppealRequest, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     _set_no_store(response)
     appeal = GradebookReleaseService(db).submit_grade_appeal(
         run_id=run_id, uid=user["uid"], question_id=question_id, student_statement=payload.student_statement
@@ -130,7 +131,7 @@ def submit_grade_appeal(run_id: str, question_id: str, payload: GradeAppealReque
 
 
 @student_router.get("/runs/{run_id}/appeals")
-def list_my_grade_appeals(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def list_my_grade_appeals(run_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     _set_no_store(response)
     appeals = GradebookReleaseService(db).list_grade_appeals_for_student(run_id, user["uid"])
     return {"results": [a.model_dump(mode="json") for a in appeals]}
@@ -139,7 +140,7 @@ def list_my_grade_appeals(run_id: str, response: Response, user: dict = Depends(
 # ── Faculty: gradebook rows / counts ────────────────────────────────────────
 
 @faculty_router.get("/runs/{run_id}/rows")
-def list_gradebook_rows(run_id: str, user: dict = Depends(require_exam_faculty), limit: int = 50, cursor_uid: str | None = None) -> dict:
+def list_gradebook_rows(run_id: str, user: dict = Depends(require_run_scope), limit: int = 50, cursor_uid: str | None = None) -> dict:
     bounded_limit = max(1, min(limit, 200))
     try:
         rows, next_cursor = GradebookAggregationService(db).list_gradebook_page(run_id, limit=bounded_limit, cursor_uid=cursor_uid)
@@ -150,7 +151,7 @@ def list_gradebook_rows(run_id: str, user: dict = Depends(require_exam_faculty),
 
 
 @faculty_router.get("/runs/{run_id}/counts")
-def get_gradebook_counts(run_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def get_gradebook_counts(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
     try:
         counts = GradebookAggregationService(db).compute_all_counts(run_id)
     except Exception as exc:
@@ -162,13 +163,13 @@ def get_gradebook_counts(run_id: str, user: dict = Depends(require_exam_faculty)
 # ── Faculty: release versioning ─────────────────────────────────────────────
 
 @faculty_router.post("/runs/{run_id}/release")
-def release_results(run_id: str, payload: ReleaseRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def release_results(run_id: str, payload: ReleaseRequest, user: dict = Depends(require_run_scope)) -> dict:
     release = GradebookReleaseService(db).release_results(run_id=run_id, released_by=user["uid"], note=payload.note)
     return release.model_dump(mode="json")
 
 
 @faculty_router.get("/runs/{run_id}/releases")
-def list_releases(run_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def list_releases(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
     releases = GradebookReleaseService(db).releases.list_for_run(run_id)
     return {"results": [r.model_dump(mode="json") for r in sorted(releases, key=lambda r: r.version)]}
 
@@ -176,7 +177,7 @@ def list_releases(run_id: str, user: dict = Depends(require_exam_faculty)) -> di
 # ── Faculty: defective-question resolution ──────────────────────────────────
 
 @faculty_router.post("/runs/{run_id}/questions/{question_id}/defective")
-def resolve_defective_question(run_id: str, question_id: str, payload: DefectiveQuestionRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def resolve_defective_question(run_id: str, question_id: str, payload: DefectiveQuestionRequest, user: dict = Depends(require_run_scope)) -> dict:
     record = GradebookReleaseService(db).resolve_defective_question(
         run_id=run_id, question_id=question_id, resolution=payload.resolution, reason=payload.reason, resolved_by=user["uid"],
     )
@@ -184,7 +185,7 @@ def resolve_defective_question(run_id: str, question_id: str, payload: Defective
 
 
 @faculty_router.get("/runs/{run_id}/defective")
-def list_defective_resolutions(run_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def list_defective_resolutions(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
     records = GradebookReleaseService(db).list_defective_resolutions(run_id)
     return {"results": [r.model_dump(mode="json") for r in records]}
 
@@ -192,13 +193,13 @@ def list_defective_resolutions(run_id: str, user: dict = Depends(require_exam_fa
 # ── Faculty: grade appeals ───────────────────────────────────────────────────
 
 @faculty_router.get("/runs/{run_id}/appeals")
-def list_grade_appeals(run_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def list_grade_appeals(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
     appeals = GradebookReleaseService(db).list_grade_appeals_for_run(run_id)
     return {"results": [a.model_dump(mode="json") for a in appeals]}
 
 
 @faculty_router.post("/appeals/{appeal_id}/resolve")
-def resolve_grade_appeal(appeal_id: str, payload: ResolveGradeAppealRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def resolve_grade_appeal(appeal_id: str, payload: ResolveGradeAppealRequest, user: dict = Depends(require_grade_appeal_scope)) -> dict:
     try:
         appeal = GradebookReleaseService(db).resolve_grade_appeal(
             appeal_id=appeal_id, uphold=payload.uphold, resolved_by=user["uid"], resolution_notes=payload.resolution_notes,
@@ -212,7 +213,7 @@ def resolve_grade_appeal(appeal_id: str, payload: ResolveGradeAppealRequest, use
 # ── Faculty: similarity review ───────────────────────────────────────────────
 
 @faculty_router.post("/runs/{run_id}/questions/{question_id}/similarity")
-def run_similarity_check(run_id: str, question_id: str, payload: SimilarityRunRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def run_similarity_check(run_id: str, question_id: str, payload: SimilarityRunRequest, user: dict = Depends(require_run_scope)) -> dict:
     uids = payload.uids
     if uids is None:
         run = ExamRunRepository(db).get(run_id)
@@ -228,13 +229,13 @@ def run_similarity_check(run_id: str, question_id: str, payload: SimilarityRunRe
 
 
 @faculty_router.get("/runs/{run_id}/questions/{question_id}/similarity")
-def list_similarity_matches(run_id: str, question_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def list_similarity_matches(run_id: str, question_id: str, user: dict = Depends(require_run_scope)) -> dict:
     matches = SimilarityService(db, _similarity_provider()).list_matches(run_id, question_id)
     return {"results": [m.model_dump(mode="json") for m in matches]}
 
 
 @faculty_router.get("/runs/{run_id}/similarity")
-def list_similarity_matches_for_run(run_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def list_similarity_matches_for_run(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
     matches = SimilarityService(db, _similarity_provider()).list_matches_for_run(run_id)
     return {"results": [m.model_dump(mode="json") for m in matches]}
 
@@ -242,7 +243,7 @@ def list_similarity_matches_for_run(run_id: str, user: dict = Depends(require_ex
 # ── Faculty: export ──────────────────────────────────────────────────────────
 
 @faculty_router.post("/runs/{run_id}/export")
-def create_export(run_id: str, payload: ExportRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def create_export(run_id: str, payload: ExportRequest, user: dict = Depends(require_run_scope)) -> dict:
     service = GradebookExportService(db, _storage())
     export_format = ExportFormat.CSV if payload.format == "csv" else ExportFormat.JSON
     job = service.create_job(run_id=run_id, requested_by=user["uid"], export_format=export_format)
@@ -257,7 +258,7 @@ def create_export(run_id: str, payload: ExportRequest, user: dict = Depends(requ
 
 
 @faculty_router.get("/export/{job_id}")
-def get_export_job(job_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def get_export_job(job_id: str, user: dict = Depends(require_export_job_scope)) -> dict:
     job = GradebookExportService(db, _storage()).jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export job not found.")
@@ -265,7 +266,7 @@ def get_export_job(job_id: str, user: dict = Depends(require_exam_faculty)) -> d
 
 
 @faculty_router.post("/export/{job_id}/download-ticket")
-def issue_export_download_ticket(job_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def issue_export_download_ticket(job_id: str, user: dict = Depends(require_export_job_scope)) -> dict:
     service = GradebookExportService(db, _storage())
     try:
         ticket = service.issue_download_ticket(

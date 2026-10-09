@@ -93,5 +93,8 @@ class ApprovedSource(BaseModel):
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
     rejection_reason: Optional[str] = None
+    # Registering teacher (Prompt 1, ADR 0017). Legacy rows have None; their
+    # owner is then resolved through the linked upload's `uploaded_by`.
+    created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime

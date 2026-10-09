@@ -28,6 +28,29 @@ class IdentityAlreadyLinkedError(InstitutionDomainError):
     code = "identity_already_linked"
 
 
+class AccountAlreadyLinkedError(InstitutionDomainError):
+    """The signed-in account already holds a DIFFERENT identity in this
+    institution; two identities on one uid would make its membership ambiguous."""
+
+    code = "account_already_linked_in_institution"
+
+
+class RosterRowsChangedError(InstitutionDomainError):
+    """Apply was given rows other than the ones the dry-run validated."""
+
+    code = "roster_rows_changed"
+
+
+class RosterRowRejectedError(InstitutionDomainError):
+    """A single-row roster operation (teacher assignment) failed validation."""
+
+    code = "roster_row_rejected"
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class OtpInvalidError(InstitutionDomainError):
     code = "otp_invalid"
 

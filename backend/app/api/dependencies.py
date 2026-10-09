@@ -158,6 +158,13 @@ def get_current_user_uncached(
     user_data.setdefault("email", email or "")
     user_data.setdefault("name", name or "")
     user_data["auth_time"] = decoded.get("auth_time")
+    # Identity facts for AUTHORIZATION come from the verified token only. The
+    # `email` above may be the stored `users/{uid}.email`, which a client can
+    # set when it creates its own profile document (firestore.rules allow the
+    # key), so it must never decide authority — `token_email` must (ADR 0017).
+    user_data["token_email"] = str(email or "").strip().lower()
+    user_data["email_verified"] = bool(decoded.get("email_verified"))
+    user_data["sign_in_provider"] = (decoded.get("firebase") or {}).get("sign_in_provider")
     user_data["exam_authz_version"] = decoded.get("exam_authz_version")
     user_data["exam_institution_id"] = decoded.get("exam_institution_id")
     return user_data

@@ -98,6 +98,17 @@ class ExamDefinitionRepository:
         )
         return [ExamDefinition.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]
 
+    def list_by_instructor(self, uid: str) -> list[ExamDefinition]:
+        query = self._db.collection(DEFINITIONS_COLLECTION).where(
+            filter=firestore.FieldFilter("instructor_uids", "array_contains", uid)
+        )
+        return [ExamDefinition.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]
+
+    def set_instructors_in_transaction(
+        self, transaction, definition_id: str, instructor_uids: list[str], now: datetime
+    ) -> None:
+        transaction.update(self._ref(definition_id), {"instructor_uids": instructor_uids, "updated_at": now.isoformat()})
+
 
 class ExamRunRepository:
     def __init__(self, db) -> None:

@@ -25,9 +25,11 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from firebase_admin import firestore
 from pydantic import BaseModel
 
-from app.api.exams_dependencies import _has_institution_faculty_membership, get_current_exam_user, require_exams_enabled
+from app.api.exams_dependencies import get_current_exam_user, require_exams_enabled, resolve_principal
+from app.api.exams_scope import user_can_manage_run
 from app.core.config import settings
 from app.core.firebase import db
+from app.domain.authz.policy import can_participate_as_student
 from app.domain.exams.commands import ExamCommandService
 from app.domain.live.connection_manager import Connection, live_connection_manager
 from app.domain.live.errors import LiveDomainError, TicketNotFoundError
@@ -47,11 +49,11 @@ class TicketRequest(BaseModel):
     run_id: str
 
 
-def _resolve_role(run, uid: str, email: str) -> LiveRole:
-    is_faculty = (email and email in settings.exam_faculty_emails_set()) or _has_institution_faculty_membership(uid)
-    if is_faculty:
+def _resolve_role(run, user: dict) -> LiveRole:
+    principal = resolve_principal(user)
+    if principal.is_teacher and user_can_manage_run(user, run):
         return LiveRole.FACULTY
-    if uid in run.enrolled_uids:
+    if user["uid"] in run.enrolled_uids and can_participate_as_student(principal, run_institution_id=run.institution_id):
         return LiveRole.STUDENT
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enrolled or faculty on this run.")
 
@@ -61,7 +63,7 @@ def issue_ticket(payload: TicketRequest, user: dict = Depends(get_current_exam_u
     run = ExamCommandService(db).runs.get(payload.run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
-    role = _resolve_role(run, user["uid"], str(user.get("email") or "").strip().lower())
+    role = _resolve_role(run, user)
 
     now = datetime.now(timezone.utc)
     ticket = mint_ticket(run_id=payload.run_id, uid=user["uid"], role=role, now=now, ttl_seconds=settings.EXAM_LIVE_TICKET_TTL_SECONDS)

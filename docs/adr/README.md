@@ -22,5 +22,7 @@ including decisions to deliberately **not** build something yet.
 | [0014](0014-gradebook-similarity-and-feedback.md) | Gradebook, similarity review, and learning feedback | Accepted |
 | [0015](0015-pwa-accessibility-and-managed-lockdown.md) | PWA shell, accessibility, and managed-lockdown admission | Accepted |
 | [0016](0016-production-qualification-and-release.md) | Production qualification and release package | Accepted |
+| [0017](0017-exam-role-policy-and-resource-scope.md) | Server-owned exam role policy, verified staff bootstrap, and resource scope | Accepted |
+| [0018](0018-roster-linking-otp-and-teacher-assignment.md) | Roster import, account linking, OTP delivery and teacher assignment | Accepted |
 
 See [../architecture.md](../architecture.md) for the system diagram and request flow.

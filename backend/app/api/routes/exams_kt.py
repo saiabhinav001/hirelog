@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from app.api.exams_dependencies import require_exam_faculty, require_exams_enabled
+from app.api.exams_scope import authorize_upload, filter_accessible_sources, require_source_scope
 from app.core.config import settings
 from app.core.firebase import db
 from app.domain.kt.file_validation import validate_upload_bytes
@@ -146,9 +147,7 @@ def _scanner_reports_infection(scan) -> bool:
 def register_source_from_upload(
     payload: RegisterUploadSourceRequest, user: dict = Depends(require_exam_faculty)
 ) -> dict:
-    upload = _uploads_repo().get(payload.upload_id)
-    if upload is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload not found")
+    upload = authorize_upload(user, payload.upload_id)
     if upload.status != UploadStatus.PARSED:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -157,7 +156,7 @@ def register_source_from_upload(
     now = datetime.now(timezone.utc)
     source = ApprovedSource(
         id=uuid4().hex, kind="upload", upload_id=upload.id, review_status=SourceReviewStatus.PENDING,
-        created_at=now, updated_at=now,
+        created_by=user["uid"], created_at=now, updated_at=now,
     )
     _sources_repo().create(source)
     return source.model_dump(mode="json")
@@ -187,7 +186,7 @@ def register_source_from_url(payload: RegisterUrlSourceRequest, user: dict = Dep
     now2 = datetime.now(timezone.utc)
     source = ApprovedSource(
         id=uuid4().hex, kind="url", upload_id=upload_id, url=fetched.final_url,
-        review_status=SourceReviewStatus.PENDING, created_at=now2, updated_at=now2,
+        review_status=SourceReviewStatus.PENDING, created_by=user["uid"], created_at=now2, updated_at=now2,
     )
     _sources_repo().create(source)
     return {"source": source.model_dump(mode="json"), "upload_id": upload_id}
@@ -195,12 +194,12 @@ def register_source_from_url(payload: RegisterUrlSourceRequest, user: dict = Dep
 
 @router.get("/sources")
 def list_sources(user: dict = Depends(require_exam_faculty)) -> dict:
-    sources = _sources_repo().list_all()
+    sources = filter_accessible_sources(user, _sources_repo().list_all())
     return {"results": [s.model_dump(mode="json") for s in sources]}
 
 
 @router.get("/sources/{source_id}")
-def get_source(source_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def get_source(source_id: str, user: dict = Depends(require_source_scope)) -> dict:
     source = _sources_repo().get(source_id)
     if source is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source not found")
@@ -208,7 +207,7 @@ def get_source(source_id: str, user: dict = Depends(require_exam_faculty)) -> di
 
 
 @router.post("/sources/{source_id}/review")
-def review_source(source_id: str, payload: ReviewSourceRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def review_source(source_id: str, payload: ReviewSourceRequest, user: dict = Depends(require_source_scope)) -> dict:
     repo = _sources_repo()
     source = repo.get(source_id)
     if source is None:

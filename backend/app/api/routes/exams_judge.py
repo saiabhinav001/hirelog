@@ -7,8 +7,20 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
-from app.api.exams_dependencies import get_current_exam_user, require_exam_faculty, require_exams_enabled
+from app.api.exams_dependencies import (
+    authorize_student_for_run,
+    get_current_exam_user,
+    require_exam_faculty,
+    require_exams_enabled,
+    require_student_run_scope,
+)
 from app.api.exams_errors import raise_for_domain_error
+from app.api.exams_scope import (
+    filter_reviews_for_user,
+    require_run_scope,
+    require_short_answer_review_scope,
+    require_submission_scope,
+)
 from app.core.firebase import db
 from app.domain.generation.repository import GenerationRepository, VariantAssignmentRepository
 from app.domain.judge.converters import to_test_groups
@@ -67,6 +79,7 @@ def _candidate_for_question(run_id: str, uid: str, question_id: str):
 @student_router.post("/public-run")
 def public_run(payload: PublicRunRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
     response.headers["Cache-Control"] = "no-store"
+    authorize_student_for_run(user, payload.run_id)
     candidate = _candidate_for_question(payload.run_id, user["uid"], payload.question_id)
     service = JudgeService(db, _judge_provider_for_request())
     # Quota (HTTP 429) is enforced inside `run_public_test` by `SlidingWindowLimiter.check`,
@@ -85,7 +98,7 @@ def public_run(payload: PublicRunRequest, response: Response, user: dict = Depen
 
 
 @student_router.get("/public-run/{submission_id}")
-def get_public_run(submission_id: str, run_id: str, question_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_public_run(submission_id: str, run_id: str, question_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     response.headers["Cache-Control"] = "no-store"
     candidate = _candidate_for_question(run_id, user["uid"], question_id)
     service = JudgeService(db, _judge_provider_for_request())
@@ -99,7 +112,7 @@ def get_public_run(submission_id: str, run_id: str, question_id: str, response: 
 
 
 @faculty_router.get("/grading-results/{submission_id}")
-def get_grading_result(submission_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def get_grading_result(submission_id: str, user: dict = Depends(require_submission_scope)) -> dict:
     result = GradingResultRepository(db).latest_for_submission(submission_id)
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No grading result yet.")
@@ -107,7 +120,7 @@ def get_grading_result(submission_id: str, user: dict = Depends(require_exam_fac
 
 
 @faculty_router.post("/grading-results/{submission_id}/regrade")
-def regrade(submission_id: str, payload: RegradeRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def regrade(submission_id: str, payload: RegradeRequest, user: dict = Depends(require_submission_scope)) -> dict:
     result = GradingResultRepository(db).latest_for_submission(submission_id)
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No grading result yet.")
@@ -126,7 +139,7 @@ def regrade(submission_id: str, payload: RegradeRequest, user: dict = Depends(re
 
 
 @faculty_router.post("/mcq-results/{run_id}/{uid}/{question_id}/regrade")
-def regrade_mcq(run_id: str, uid: str, question_id: str, payload: McqRegradeRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def regrade_mcq(run_id: str, uid: str, question_id: str, payload: McqRegradeRequest, user: dict = Depends(require_run_scope)) -> dict:
     """Explicit override — e.g. a defective-question resolution or an
     upheld grade appeal. Always a new version; the original automatic
     exact-match result is never edited (Prompt 9)."""
@@ -144,12 +157,12 @@ def regrade_mcq(run_id: str, uid: str, question_id: str, payload: McqRegradeRequ
 
 @faculty_router.get("/short-answer-reviews/pending")
 def list_pending_short_answer_reviews(user: dict = Depends(require_exam_faculty)) -> dict:
-    reviews = ShortAnswerReviewRepository(db).list_pending()
+    reviews = filter_reviews_for_user(user, ShortAnswerReviewRepository(db).list_pending())
     return {"results": [r.model_dump(mode="json") for r in reviews]}
 
 
 @faculty_router.post("/short-answer-reviews/{review_id}")
-def review_short_answer(review_id: str, payload: ReviewShortAnswerRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def review_short_answer(review_id: str, payload: ReviewShortAnswerRequest, user: dict = Depends(require_short_answer_review_scope)) -> dict:
     service = JudgeService(db, _judge_provider_for_request())
     try:
         review = service.submit_short_answer_review(

@@ -15,8 +15,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel, Field
 
-from app.api.exams_dependencies import get_current_exam_user, require_exam_faculty, require_exams_enabled
+from app.api.exams_dependencies import (
+    get_current_exam_user,
+    require_exam_faculty,
+    require_exams_enabled,
+    require_student_run_scope,
+)
 from app.api.exams_errors import raise_for_domain_error
+from app.api.exams_scope import require_proctoring_appeal_scope, require_run_scope, require_snapshot_scope
 from app.core.config import settings
 from app.core.firebase import db
 from app.core.rate_limit import SlidingWindowLimiter
@@ -99,7 +105,7 @@ def _set_no_store(response: Response) -> None:
 
 
 @student_router.post("/runs/{run_id}/observations")
-def record_observation(run_id: str, payload: ObservationRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def record_observation(run_id: str, payload: ObservationRequest, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     _set_no_store(response)
     _observation_limiter.check(f"{run_id}:{user['uid']}", detail="Too many observations reported. Please slow down.")
 
@@ -122,7 +128,7 @@ def record_observation(run_id: str, payload: ObservationRequest, response: Respo
 
 
 @student_router.get("/runs/{run_id}/incidents")
-def list_my_incidents(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def list_my_incidents(run_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     """Visible count explanations — a student can always see why their own
     warning count is what it is (contract: 'visible count explanations')."""
     _set_no_store(response)
@@ -131,7 +137,7 @@ def list_my_incidents(run_id: str, response: Response, user: dict = Depends(get_
 
 
 @student_router.post("/runs/{run_id}/snapshots")
-def request_snapshot(run_id: str, payload: SnapshotRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def request_snapshot(run_id: str, payload: SnapshotRequest, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     _set_no_store(response)
     service = EvidenceService(db, _storage())
     snapshot, ticket = service.request_snapshot(
@@ -161,7 +167,7 @@ async def upload_snapshot(ticket_id: str, response: Response, file: UploadFile =
 
 
 @student_router.post("/runs/{run_id}/snapshots/missing")
-def record_missing_snapshot(run_id: str, payload: MissingSnapshotRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def record_missing_snapshot(run_id: str, payload: MissingSnapshotRequest, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     """The client calls this when permission was denied or capture failed —
     an honest, complete outcome, not an error (contract: submission
     acceptance never depends on this)."""
@@ -171,7 +177,7 @@ def record_missing_snapshot(run_id: str, payload: MissingSnapshotRequest, respon
 
 
 @student_router.post("/runs/{run_id}/appeals")
-def submit_appeal(run_id: str, payload: AppealRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def submit_appeal(run_id: str, payload: AppealRequest, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     _set_no_store(response)
     appeal = AppealsService(db).submit_appeal(run_id=run_id, uid=user["uid"], student_statement=payload.student_statement)
     return appeal.model_dump(mode="json")
@@ -180,13 +186,13 @@ def submit_appeal(run_id: str, payload: AppealRequest, response: Response, user:
 # ── Faculty ──────────────────────────────────────────────────────────────────
 
 @faculty_router.get("/runs/{run_id}/uids/{uid}/incidents")
-def list_incidents_for_student(run_id: str, uid: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def list_incidents_for_student(run_id: str, uid: str, user: dict = Depends(require_run_scope)) -> dict:
     entries = ProctoringLedgerService(db).log.list_for_attempt(run_id, uid)
     return {"results": [e.model_dump(mode="json") for e in entries], "client_reported_disclaimer": "Browser telemetry is client-reported, not cryptographic proof of misconduct."}
 
 
 @faculty_router.post("/runs/{run_id}/uids/{uid}/resolve")
-def resolve_block(run_id: str, uid: str, payload: ResolveBlockRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def resolve_block(run_id: str, uid: str, payload: ResolveBlockRequest, user: dict = Depends(require_run_scope)) -> dict:
     service = ProctoringLedgerService(db)
     try:
         service.resolve_block(run_id=run_id, uid=uid, resolved_by=user["uid"], allow_continue=payload.allow_continue, notes=payload.notes)
@@ -200,13 +206,13 @@ def resolve_block(run_id: str, uid: str, payload: ResolveBlockRequest, user: dic
 
 
 @faculty_router.get("/runs/{run_id}/uids/{uid}/snapshots")
-def list_snapshots_for_student(run_id: str, uid: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def list_snapshots_for_student(run_id: str, uid: str, user: dict = Depends(require_run_scope)) -> dict:
     snapshots = EvidenceService(db, _storage()).snapshots.list_for_attempt(run_id, uid)
     return {"results": [s.model_dump(mode="json") for s in snapshots]}
 
 
 @faculty_router.post("/snapshots/{snapshot_id}/view-ticket")
-def issue_view_ticket(snapshot_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def issue_view_ticket(snapshot_id: str, user: dict = Depends(require_snapshot_scope)) -> dict:
     ticket = EvidenceService(db, _storage()).issue_view_ticket(
         snapshot_id=snapshot_id, faculty_uid=user["uid"], ttl_seconds=settings.EXAM_EVIDENCE_VIEW_TICKET_TTL_SECONDS,
     )
@@ -228,13 +234,13 @@ def view_snapshot(ticket_id: str, response: Response, user: dict = Depends(requi
 
 
 @faculty_router.get("/runs/{run_id}/appeals")
-def list_appeals(run_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def list_appeals(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
     appeals = AppealsService(db).appeals.list_for_run(run_id)
     return {"results": [a.model_dump(mode="json") for a in appeals]}
 
 
 @faculty_router.post("/appeals/{appeal_id}/resolve")
-def resolve_appeal(appeal_id: str, payload: ResolveAppealRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def resolve_appeal(appeal_id: str, payload: ResolveAppealRequest, user: dict = Depends(require_proctoring_appeal_scope)) -> dict:
     try:
         appeal = AppealsService(db).resolve_appeal(
             appeal_id=appeal_id, resolved_by=user["uid"], status=payload.status, resolution_notes=payload.resolution_notes,

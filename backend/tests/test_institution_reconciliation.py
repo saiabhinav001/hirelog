@@ -50,10 +50,18 @@ def _membership(**overrides) -> Membership:
 # ── require_exam_faculty: institution membership as an additional grant path ──
 
 def test_require_exam_faculty_still_accepts_bootstrap_email_allowlist(monkeypatch) -> None:
+    """Prompt 1 (ADR 0017): the allowlist still grants teacher authority, but
+    only for a VERIFIED token e-mail (`token_email` + `email_verified`) that
+    binds to this uid — a stored/forged `email` field no longer counts."""
     from app.api import exams_dependencies as deps
 
+    class _Bound:
+        def ensure_bound(self, **_kwargs):
+            return "bound"
+
     monkeypatch.setattr(deps.settings, "EXAM_FACULTY_EMAILS", "prof@college.edu")
-    user = {"uid": "uid-x", "email": "prof@college.edu"}
+    monkeypatch.setattr(deps, "_staff_binding_service", lambda: _Bound())
+    user = {"uid": "uid-x", "token_email": "prof@college.edu", "email_verified": True}
     assert deps.require_exam_faculty(user) == user
 
 

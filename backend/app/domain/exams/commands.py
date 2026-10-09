@@ -35,10 +35,11 @@ class ExamCommandService:
         self._receipts = CommandReceiptRepository(db)
         self._outbox = OutboxRepository(db)
 
-    def create_definition(self, *, title: str, owner_uid: str) -> ExamDefinition:
+    def create_definition(self, *, title: str, owner_uid: str, institution_id: str | None = None) -> ExamDefinition:
         now = self._clock.now()
         definition = ExamDefinition(
-            id=uuid4().hex, title=title, owner_uid=owner_uid, created_at=now, updated_at=now
+            id=uuid4().hex, title=title, owner_uid=owner_uid, institution_id=institution_id,
+            created_at=now, updated_at=now,
         )
         self.definitions.create(definition)
         return definition
@@ -86,6 +87,7 @@ class ExamCommandService:
         revision: ExamRevision,
         policy: ExamPolicy,
         enrolled_uids: list[str],
+        institution_id: str | None = None,
     ) -> ExamRun:
         """Publishing/scheduling a run. Enrollment is captured as an immutable
         snapshot at this moment (see ADR 0008 — stand-in for Prompt 2's
@@ -99,6 +101,7 @@ class ExamCommandService:
             version=1,
             policy=policy,
             enrolled_uids=list(dict.fromkeys(enrolled_uids)),  # de-dupe, preserve order
+            institution_id=institution_id,
             created_at=now,
             updated_at=now,
         )

@@ -1,4 +1,124 @@
-# Hirelog Exams — repository baseline (Prompt 0 inspection)
+# Hirelog Exams — repository baseline (v1.1 re-baseline, Prompt 0)
+
+Date inspected: **2026-10-09**. Pack: `03-IMPLEMENTATION-PROMPTS (1).md` v1.1 ("incremental
+implementation update" — the Exams module already exists; this is **not** a greenfield build).
+This phase was **read-only for application code**. Findings are traced requirement-by-requirement in
+[requirements-traceability.md](requirements-traceability.md); callers/wiring are in
+[integration-map.md](integration-map.md); stable contracts in
+[compatibility-and-migration.md](compatibility-and-migration.md); the confirmed-gap plan in
+[delta-plan.md](delta-plan.md). Everything below describes the repository **before** Prompt 1 work.
+The 2026-09-29 v1.0 baseline is preserved unchanged in
+[Historical record](#historical-record--v10-prompt-01-inspection-2026-09-29) at the end of this file.
+
+## 1. Repository state
+
+| Item | Finding |
+|---|---|
+| Branch / HEAD | `exams/phase-11-production-qualification` @ `5b0ad3bbed19947e9c97b403d9594be920b8b0ee` (2026-10-04, "Coding questions: real IDE, judge singleton fix, and exam-integrity enforcement"); 18 commits; every commit is pushed to `origin/exams/phase-11-production-qualification` |
+| Remote | `origin` = `https://github.com/saiabhinav001/hirelog.git` |
+| Provenance (resolves the v1.0 open item) | Local `main` (`801696e`, "baseline snapshot") and `origin/main` (`0be13f6`, the commit named in the design pack) have the **identical tree** (`5eba7737c645bfcdb93d5c5e3e122ce426847437`), so the snapshot content equals the original GitHub commit. The **histories are unrelated** (`git merge-base` is empty): the exam branch cannot be opened as a PR into `origin/main` without `git rebase --onto origin/main main <branch>`. CI (`pull_request` / `push: main` only) has therefore most likely never run against exam work (not verifiable from this checkout). |
+| Working tree | 3 uncommitted items, **left untouched**: `frontend/next.config.ts` (modified: `turbopack.root` pin), `backend/scripts/seed_demo_student.py` (untracked), `docs/exams/user-guide.md` (untracked) |
+| Project instructions | No `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md` or `*.instructions.md`. De facto standard: [docs/engineering-standards.md](../engineering-standards.md) (snake_case payloads, token retrieval via `getClientAuthToken`, env-var rules, "lint/type-check/tests/build pass" PR checklist) |
+| Design pack inputs | Only the prompt pack(s) exist on disk. `01-RESEARCH-REPORT.md` and `02-MASTER-TECHNICAL-DESIGN.md` were **not found anywhere** → design-section citations cannot be verified; requirements below are derived from the v1.1 prompt text itself |
+| Toolchain | Local: Python 3.12.0 (`backend/.venv`), Node 22.19.0 / npm 10.9.3. CI pins Python 3.11 and Node 20 (`Dockerfile.exams` also 3.11). Not a failure; a reproducibility note |
+| Local runtime config | A gitignored `backend/.env` exists (real Firebase project used for live testing since 2026-10-03; contents were **not** read). It sets `EXAMS_ENABLED=true`, which is the cause of the 11 test failures in §2 |
+| Secrets | None in tracked files (qualification report §4 grep re-confirmed by this audit: no key material in `backend/app/**` or `frontend/src/**`). `.env.example` documents every exam variable with safe defaults |
+
+## 2. Baseline checks (run 2026-10-09, read-only, nothing modified)
+
+| Check | Command | Result |
+|---|---|---|
+| Backend lint | `ruff check .` (backend venv) | clean |
+| Backend compile | `python -m compileall -q app` | clean |
+| Backend tests | `pytest -q -p no:warnings` (JUnit XML in `%TEMP%`, deleted) | **490 tests: 479 pass, 11 fail** |
+| …the 11 failures | all in `tests/test_exams_routes_smoke.py` (`*_is_503_when_exams_disabled`) | **Environmental, pre-existing**: they assert `settings.EXAMS_ENABLED is False` but the local gitignored `.env` sets it `true`. With `EXAMS_ENABLED=false` forced in the environment all 11 pass (490/490). Test-isolation defect, local-only; CI has no `.env` |
+| Frontend lint | `npm run lint` | 0 errors, 1 warning (unused `eslint-disable` directive, `faculty/[definitionId]/page.tsx:59`) |
+| Frontend types | `npm run type-check` | clean |
+| Frontend unit tests | `npm run test:ci` (Vitest) | 13 files / 49 tests pass |
+| Frontend audit | `npm audit --omit=dev` | **11 vulnerabilities: 2 critical (`next`, `websocket-driver`), 7 high, 2 moderate** (pre-existing; `next` still pinned `16.2.10`). CI's `npm audit --audit-level=high` step has no `|| true`, so it would fail today |
+| **Not run** | `next build`, Playwright e2e, `bandit`/`pip-audit` (not installed locally), Firestore-emulator/rules tests (none exist: no `firebase.json`/emulator config in repo) | evidence gap, not a pass |
+
+Test inventory: 46 backend test files / 453 test functions (490 collected cases), 13 Vitest files, 3 Playwright specs
+(`smoke`, `exams-pwa`, `exams-accessibility`). Backend tests are pure-unit/fake-based; **no test exercises a real or emulated
+Firestore transaction** (acknowledged in ADR 0008 §1).
+
+## 3. What exists (summary; details in the other Prompt 0 documents)
+
+- **Separate exam API** (`backend/app/exam_main.py`, `Dockerfile.exams`, `requirements-exams.txt`) with 12 route modules / ~91 routes under
+  `/api/exams/v1/**`, behind `EXAMS_ENABLED` (default `false`) + router-level `require_exams_enabled`. Intentional (ADR 0008 §9) — to be preserved.
+- **Domain packages** `exams` (definition/revision/run/attempt/draft state machine, decisions, outbox, finalization sweeper), `institution`
+  (membership, roster import, OTP login, account link), `kt` (upload validation, SSRF-safe URL fetch, parsers, source registry), `generation`
+  (blueprint, provider-neutral generation, validation, independent review, variants), `judge` (fake/stub provider, grading, regrade lineage),
+  `proctoring` (append-only ledger, evidence tickets, appeals, retention), `live` (ticketed WebSocket), `gradebook` (aggregation, release
+  versions, appeals, similarity, exports, feedback), `lockdown` (SEB admission gate).
+- **Frontend**: 17 `/exams/**` pages, `ExamShellHeader`, `CodeEditorPanel` (CodeMirror 6), exam-scoped PWA shell (`exams-sw.js`), global
+  light/dark `ThemeContext`.
+- **Verified live (2026-10-03/04, real Firebase project, fake generation/judge providers)**: faculty create → source → blueprint → generate →
+  approve → publish run → assign variants → release; student admit → answer → submit → receipt.
+- **Collections** (all Admin-SDK-only; `firestore.rules` default-deny covers them): see [integration-map.md §6](integration-map.md).
+
+## 4. Repository drift versus the v1.1 pack / earlier documents
+
+| Pack / document assumption | Actual state | Impact |
+|---|---|---|
+| v1.1 Prompt 0 deliverables exist | Only the v1.0 baseline (this file's appendix) existed; `integration-map`, `requirements-traceability`, `compatibility-and-migration`, `delta-plan` did not | Created in this phase |
+| Roles are `student`, `teacher`, `super_admin` | Code has `RoleScope` = `student/faculty/proctor/admin` (per institution) + legacy `viewer/contributor/placement_cell`; exam bootstrap is the `EXAM_FACULTY_EMAILS` env allowlist, which grants **admin-equivalent** authority; there is no `super_admin` anywhere | Mapping decided in ADR 0017 (reuse the existing role model; no second role store) |
+| "Bootstrap the **four** provided super-admin emails" (Prompt 1) | Master prompt lists **three**; v1.0 listed a fourth that v1.1 removed; Prompt 1's wording is stale. None of the addresses is hard-coded in the repo | Allowlist is env-driven (`EXAM_SUPER_ADMIN_EMAILS`); operator supplies the final list |
+| Courses / course-scoped capabilities | No course entity exists. The UI label "Assigned courses" is `GET /faculty/definitions` (definitions owned by `owner_uid`). `ExamRun`/`ExamDefinition` carry no institution | Course scope is `BLOCKED_BY_DECISION` (Prompt 2); Prompt 1 scopes by owner + institution |
+| Prior reports (`production-qualification-report.md` §6) say no real Firebase project / `.env` exists | A real project and `.env` now exist locally (2026-10-03+) | Report §6 is historical |
+| `adversarial-review-report.md` §1 High finding (revoked membership has no effect) "described, not implemented" | **Still open at HEAD**: `require_active_institution_membership` is defined but wired into **zero** routes | Fixed in Prompt 1 (see delta-plan) |
+| Durable queue / "no in-process thread is the sole owner of a critical task" (v1.0 invariant 9) | Outbox drain, judge sweep, proctoring-stale and evidence-retention loops run as daemon threads inside the API process; the **finalization sweeper is never started** | v1.1 invariant 9 only requires reuse of the existing reliable queue; the missing sweeper is a defect (TMR-02) |
+| CI covers exam work | `ci.yml` runs on PR/push-to-`main` only; branch history is unrelated to `origin/main` | Needs history rebase or a branch trigger before CI evidence exists |
+| Firestore rules verified by emulator | No `firebase.json`/emulator/rules tests | Rules remain statically reviewed; Prompt 1 adds a static rules regression test only |
+
+## 5. Pre-existing defects found by this audit (not fixed in Prompt 0)
+
+Severity is the auditor's judgement; IDs point into [requirements-traceability.md](requirements-traceability.md).
+
+| # | Severity | Defect | IDs |
+|---|---|---|---|
+| 1 | High | Revoked/stale institutional membership has no effect on an active session (open since the 2026-10-02 adversarial review) | AUTH-06 |
+| 2 | High | Any faculty can read/modify **any** definition, run, blueprint, candidate (incl. answer keys), gradebook, appeal, export, proctoring incident and camera-evidence view ticket, issue live tickets for any run, create institutions, apply rosters to any institution and revoke any membership (no ownership/institution scoping) | AUTH-05, AUTH-09, LIV-02, GRD-07, ID-07 |
+| 3 | High | Allowlisted-email authority (`EXAM_FACULTY_EMAILS`, admin-equivalent) trusts the token `email` claim with no `email_verified` check and no UID binding; `verify_id_token` has no `check_revoked` | AUTH-02, AUTH-04 |
+| 4 | High (functional) | `ExamFinalizationSweeper` is never started → expired/abandoned attempts are never auto-sealed or graded | TMR-02, DOM-12 |
+| 5 | Medium | Student timer uses the browser wall clock and has no ticking interval (display refreshes only on re-render); no time-remaining warnings | UI-01, UI-02 |
+| 6 | Medium | Generation sends **placeholder** excerpts (`"[excerpt for anchor …]"`) and does not verify anchor ids against the extracted version | GEN-03, GEN-05 |
+| 7 | Medium | KT uploads are parsed in the API thread pool and the original bytes are discarded (`storage_ref` is a dangling label); default `NullMalwareScanner` leaves every upload `SCAN_UNAVAILABLE` (never parsed); `EXAM_MALWARE_SCANNER_ENDPOINT` is ignored; URL sources get no extracted version | ING-02..ING-06 |
+| 8 | Medium | Judge: `Judge0HttpAdapter.submit` raises `NotImplementedError`; only fake provider works; allowlist is python3.11/java17/cpp17 (unvalidated); retries-exhausted state undefined | JDG-01..JDG-07 |
+| 9 | Low | 11 route-smoke tests depend on the developer's local `.env` | OPS-01 |
+| 10 | Low | 11 npm advisories (2 critical in `next`/`websocket-driver`) — release blocker per qualification report | OPS-07 |
+
+## 6. Known limits of this audit
+
+- No Firestore emulator or real Firestore concurrency test was run (none exists in the repo); transactional behavior is evidenced only by pure
+  decision tests plus ADR-recorded limitations.
+- No real generation, judge, malware-scan, SSO/OTP-delivery or storage provider is configured; all provider findings are about adapter contracts
+  and fakes, **not** real-provider behavior. Mocks do not prove sandbox security, production load or strict lockdown.
+- Frontend behavior was audited statically (plus unit-test inventory); no browser session was driven in this phase.
+- Statuses in the traceability matrix marked `UNVERIFIED` could not be confirmed from code or tests.
+
+## 7. Addendum — outcome of the Prompt 1 implementation
+
+Sections 1-6 describe the repository **before** Prompt 1 and are kept as the audit record. Defects #1-#3 above were addressed by Prompt 1
+([ADR 0017](../adr/0017-exam-role-policy-and-resource-scope.md); status per requirement in
+[requirements-traceability.md §1.1](requirements-traceability.md#11-status-after-the-prompt-1-implementation)). Defects #4-#10 are unchanged.
+
+| # | Before | After Prompt 1 | Residual |
+|---|---|---|---|
+| 1 | Revoked/stale membership ignored on an active session | Enforced on every exam route (`get_current_exam_user`); student routes also require an ACTIVE student membership in the run's institution | A Firebase session revoked at the provider stays valid until expiry (`check_revoked` not enabled); an already-open live socket keeps streaming read-only events |
+| 2 | Any faculty could act on any resource | Owner / ADMIN of the resource's institution / super-admin only, resolved through the ownership chain; institution creation super-admin only; roster and revoke scoped | Course-level scope waits on decision D-2; pending-review list is filtered after the global query |
+| 3 | Allowlisted token e-mail trusted unverified and unbound | Verified e-mail only, bound to the first UID, conflicts denied and audited, fail closed | `check_revoked` (see #1); final super-admin list is operator configuration (D-1) |
+| 3b (found during Prompt 1) | The allowlist was matched against `users/{uid}.email`, which a client may write when creating its own profile — a forged stored e-mail could have granted authority | Authority reads only the verified token e-mail; the stored value is display-only | `firestore.rules` still permits the `email` key on create (tightening needs emulator-backed rules tests, P11) |
+
+Verification of the Prompt 1 work: backend suite 627 passed / 0 failed with `EXAMS_ENABLED=false` (490 before + 137 new), `ruff check .` clean, app
+imports. Frontend was not changed and was not re-run. Not verified: Firestore emulator behavior, concurrent binding writers, a live browser session.
+
+---
+
+# Historical record — v1.0 Prompt 0/1 inspection (2026-09-29)
+
+> Preserved verbatim for audit history. Superseded by the sections above wherever they differ (notably: the repository now *is* a git
+> clone with history, and the v1.0 "new modules expected in later phases" list has since been built).
 
 Date inspected: 2026-09-29. This workspace is a **plain file extraction, not a git
 clone** — there was no `.git` directory and no way to confirm it matches commit

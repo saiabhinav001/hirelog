@@ -1,0 +1,307 @@
+# Hirelog Exams — requirements traceability (Prompt 0, v1.1)
+
+Audited 2026-10-09 at `5b0ad3b` (pre-Prompt-1 baseline). Companion documents: [baseline.md](baseline.md),
+[integration-map.md](integration-map.md), [compatibility-and-migration.md](compatibility-and-migration.md), [delta-plan.md](delta-plan.md).
+
+**Requirement source.** `01-RESEARCH-REPORT.md` / `02-MASTER-TECHNICAL-DESIGN.md` were not available, so "every user requirement" is derived
+from the v1.1 prompt pack: the master prompt (roles, 15 hard invariants), Prompts 1-11, Backend prompts A/B/C and the Prompt 0 inspection list.
+IDs are stable handles used by the delta plan and by tests.
+
+**Status vocabulary** (master prompt): `EXISTS_AND_VERIFIED` (implemented **and** exercised by a named test or verified by direct code reading where
+stated) · `EXISTS_BUT_DEFECTIVE` (implemented, concrete defect) · `PARTIALLY_EXISTS` · `MISSING` · `BLOCKED_BY_DECISION` (needs a product /
+institution decision, see §14). `UNVERIFIED` marks anything that could not be confirmed from code or tests. A UI control alone is never counted as
+evidence. Test names are `backend/tests/*` unless prefixed `fe:` (Vitest) or `e2e:` (Playwright).
+
+**Evidence honesty.** Backend tests are pure-unit/fake-based; none runs a real or emulated Firestore transaction. No real generation, judge,
+malware-scan, OTP-delivery or storage provider is configured. Nothing here claims production load, sandbox security or strict lockdown.
+
+---
+
+## 1. Authorization and roles — Prompt 1
+
+> The **Status**, **Current behavior** and **Evidence** columns below record the audit baseline (before Prompt 1). The outcome after the
+> Prompt 1 implementation is in [§1.1](#11-status-after-the-prompt-1-implementation).
+| ID | Requirement | Current file / route / schema | Current behavior | Evidence / tests | Status | Smallest safe delta | Regression tests | Phase |
+|---|---|---|---|---|---|---|---|---|
+| AUTH-01 | Server-owned role policy for `student`, `teacher`, `super_admin` | `RoleScope` (student/faculty/proctor/admin) `domain/institution/models.py:21`; `EXAM_FACULTY_EMAILS` `core/config.py:91`; `api/exams_dependencies.py::require_exam_faculty` | Teacher = bootstrap email **or** ACTIVE FACULTY/ADMIN membership; bootstrap email is also ADMIN on institution routes; student = enrollment only; no `super_admin`, no central policy | `test_institution_reconciliation.py` (3 faculty-gate tests) | PARTIALLY_EXISTS | Pure policy module `domain/authz/policy.py` mapping onto existing `RoleScope` + new `EXAM_SUPER_ADMIN_EMAILS`; **no second role store**; `/me` adds server-computed `exam_roles` (additive) | policy matrix; `/me` shape | P1 |
+| AUTH-02 | Bootstrap super-admins only via verified authentication + server allowlist; bind to stable UID; log | `EXAM_FACULTY_EMAILS` string match on the token `email` claim in `exams_dependencies.py:49-52`, `exams_me.py:20`, `exams_live.py:51`, `exams_institution_admin.py:35` | Recomputed from the raw email each request; no `email_verified`; no UID binding; no audit | none | MISSING (final address list `BLOCKED_BY_DECISION` D-1) | Env allowlist `EXAM_SUPER_ADMIN_EMAILS` (no addresses in source); require `email_verified`; first verified sign-in writes an immutable email↔uid binding + audit event; other uid for a bound email = denied + audited | binding service tests | P1 |
+| AUTH-03 | Public profile create/update cannot grant privileged roles, institution scope or arbitrary authority fields | `UserCreate` (no `role`) `models/schemas.py`; `api/routes/users.py::create_or_update_user`; `firestore.rules` `users/{uid}` (create `role=='viewer'` + key allowlist; update `affectedKeys ⊆ {name,display_name,name_last_updated_at}`, `role` unchanged); exam authority never stored on `users/{uid}` (ADR 0007, 0008 §3) | Verified by reading; client cannot set role/authority | `test_role_escalation.py` (5) | EXISTS_AND_VERIFIED (rules not emulator-tested) | None to behavior. Add forged-email/uid body tests + static `firestore.rules` regression test; emulator suite deferred to P11 | `test_exam_authz_profile_and_rules.py` | P1 (+P11) |
+| AUTH-04 | Verify identity from the token, bind to UID; never trust client-supplied email or stale claims alone | `api/dependencies.py::get_current_user_uncached` (email from verified token ✔; `email_verified` ignored; `verify_id_token(token)` without `check_revoked`, line 83) | An unverified email/password account can present an allowlisted address | `test_auth_dependency.py` (7; none cover verification) | EXISTS_BUT_DEFECTIVE (High) | Surface `email_verified`/`sign_in_provider`; allowlist authority requires it (dev-only opt-out hard-disabled when `ENV=production`); `check_revoked` stays a documented residual risk (extra network hop per request) | dependency tests | P1 |
+| AUTH-05 | Every exam endpoint validates identity, active membership, institution/course scope, resource ownership, current role version and exam state | Identity ✔ on all 88 routes (`get_current_exam_user`); exam state ✔ (services/decisions); membership, scope, ownership ✘ on faculty routes (`require_exam_faculty` only) and student routes (enrollment only) | See baseline §5 #1-#2 | adversarial review §1 (route-graph: 0 of 91 use membership); `test_exams_routes_smoke.py` (flag only) | PARTIALLY_EXISTS | New `api/exams_scope.py` dependencies per resource family + student run scope; route-graph guard test | `test_exam_authz_scope.py`, `test_exam_authz_route_guards.py` | P1 |
+| AUTH-06 | Revoked role / membership with a stale token cannot read questions or change answers | `InstitutionAuthService.check_active_membership`, `revoke()` (bumps `authorization_version`), `require_active_institution_membership` `exams_dependencies.py:61` | **Wired into zero routes**; revocation only takes effect at Firebase token expiry (open since adversarial review §1) | function-level only: `test_institution_reconciliation.py`, `test_institution_auth_service.py::test_check_active_membership_*` | EXISTS_BUT_DEFECTIVE (High, open) | Enforce in `get_current_exam_user` whenever the token carries `exam_institution_id`; student routes also check the run's `institution_id` membership | `test_exam_authz_dependencies.py` | P1 |
+| AUTH-07 | Forged college ID / email cannot impersonate a roster identity | `auth_service.py` OTP flow: generic ack, `contact_email` must equal roster email, HMAC-SHA256 + salt, TTL, attempt cap, single-use, sliding-window limiters; membership `uid` only set by OTP provisioning or verified `link` | A token whose email equals a roster email gets no membership (resolved by uid) — true by construction, not asserted | `test_institution_auth_service.py` (16), `test_institution_otp.py` (9) | EXISTS_AND_VERIFIED | Add explicit same-email-no-membership and wrong-institution regression tests | in `test_exam_authz_dependencies.py` | P1 (tests) |
+| AUTH-08 | Direct profile / database mutation blocked | Default-deny catch-all in `firestore.rules`; every exam collection Admin-SDK-only | Reviewed statically; no `firebase.json`, no emulator, no rules tests | qualification report §4 (static) | EXISTS_AND_VERIFIED (static) / UNVERIFIED (runtime) | Static rules regression test in P1; `@firebase/rules-unit-testing` emulator suite in P11 | static test | P1 / P11 |
+| AUTH-09 | Cross-course / cross-institution / cross-owner access denied | No course entity; `ExamDefinition`/`ExamRun` have no `institution_id`; any faculty can act on any definition, run, blueprint, candidate (answer keys), gradebook, appeal, export, incident, **camera-evidence view ticket**, live ticket | Confirmed by reading all 12 route modules | none | MISSING (course part `BLOCKED_BY_DECISION` D-2) | Additive optional `institution_id`; rule = owner, or super-admin, or ADMIN of the resource's institution; unscoped pilot resources = owner/super-admin only | scope matrix | P1 (+P2) |
+| AUTH-10 | Preserve legacy login / profile / workflows | Legacy routers untouched by exam work (documented ADR 0007 fix only); legacy `get_current_user` cache unchanged | `/me` for a legacy user returns empty memberships | `test_auth_dependency.py` (7), `test_role_escalation.py` (5), adversarial review §13 | EXISTS_AND_VERIFIED | Keep; add `/me` legacy-user regression | in `test_exam_authz_dependencies.py` | P1 (tests) |
+| AUTH-11 | Feature flag default off; router-level `require_exams_enabled` on every exam router | `EXAMS_ENABLED=false`; 12/12 routers declare it | 503 even for unauthenticated callers | `test_exams_routes_smoke.py` (11; env-sensitive, OPS-01) | EXISTS_AND_VERIFIED | Route-graph test also asserts the flag dependency | route-guard test | P1 |
+| AUTH-12 | UI guards are UX only | `lib/examAuth.tsx`, `components/exams/ExamProtectedRoute.tsx` read `/api/exams/v1/me` | Server must enforce; see AUTH-05/09 for places it does not yet | none isolated | EXISTS_AND_VERIFIED (client side) | No frontend change in P1 (`/me` change is additive) | — | P1 |
+| AUTH-13 | Recent re-auth for sensitive staff actions (not labelled MFA) | `require_recent_staff_reauth` (auth_time recency) on `revoke_membership` only | Works; not applied elsewhere | `test_institution_reconciliation.py` (3) | PARTIALLY_EXISTS | Out of P1 (extending it is a behavior change for operators) — note for P2 | — | P2 |
+| AUTH-14 | Legacy `PLACEMENT_CELL_EMAILS` promotion should also require verified identity | `api/dependencies.py::_resolve_role` promotes **and persists** `placement_cell` from the raw token email; legacy signup (`AuthContext.tsx`) uses `createUserWithEmailAndPassword` and never sends a verification email | Same defect class as AUTH-04 but in a **legacy production workflow** | `test_auth_dependency.py::test_resolve_role_promotes_placement_email` | EXISTS_BUT_DEFECTIVE / `BLOCKED_BY_DECISION` D-11 | **Not changed** (preserve legacy workflows; enforcing would lock out unverified password users). Documented in ADR 0017 with a recommendation | — | — |
+
+### 1.1 Status after the Prompt 1 implementation
+
+Implemented as [ADR 0017](../adr/0017-exam-role-policy-and-resource-scope.md); migration notes in
+[compatibility-and-migration.md §6](compatibility-and-migration.md). Evidence is unit-level with in-memory doubles (no Firestore emulator, no browser
+session). Backend suite: 627 tests passing with `EXAMS_ENABLED=false` (490 before + 137 new); `ruff check .` clean.
+
+| ID | Status after P1 | What changed | Evidence |
+|---|---|---|---|
+| AUTH-01 | EXISTS_AND_VERIFIED | Pure policy `domain/authz/policy.py` maps `RoleScope` + verified allowlists onto `student` / `teacher` / `super_admin`; `/me` adds `exam_roles`, `is_super_admin`, `email_verified` (additive) | `test_exam_authz_policy.py` (34), `test_exam_authz_dependencies.py::test_me_*` |
+| AUTH-02 | EXISTS_AND_VERIFIED (logic) / UNVERIFIED (concurrent writers) / final list `BLOCKED_BY_DECISION` D-1 | `EXAM_SUPER_ADMIN_EMAILS` (no address in source); verified e-mail only; first UID bound atomically via `create()`; conflicts denied and audited; store failure fails closed (503) | `test_exam_staff_binding.py` (8), `test_exam_authz_dependencies.py` |
+| AUTH-03 | EXISTS_AND_VERIFIED (static rules) | No behavior change; profile payload pinned to `{name}`; forged role / e-mail / college id in a profile write creates no exam authority; rules checked statically | `test_exam_authz_profile_and_rules.py` (5), `test_role_escalation.py` |
+| AUTH-04 | EXISTS_AND_VERIFIED; `check_revoked` stays a documented residual | Authority reads the verified **token** e-mail (`token_email`, `email_verified`, `sign_in_provider`); the client-writable stored `users/{uid}.email` is never used (new finding, closed) | `test_exam_authz_dependencies.py::test_forged_stored_profile_email_*`, `::test_uncached_user_*` |
+| AUTH-05 | EXISTS_AND_VERIFIED for HTTP routes; WebSocket stream and question↔slot (P6) remain | Router-level flag, authenticated user, role gate and a resource-scope dependency on every scoped path id; body-id routes call the same helpers inline; route-table tripwires | `test_exam_authz_route_guards.py` (12), `test_exam_authz_scope.py` (42) |
+| AUTH-06 | EXISTS_AND_VERIFIED | `get_current_exam_user` enforces membership status + `exam_authz_version` on every exam route; student routes also require an ACTIVE student membership in the run's institution | `test_exam_authz_dependencies.py::test_revoked_*`, `::test_token_older_*`, `::test_scoped_run_rejects_*` |
+| AUTH-07 | EXISTS_AND_VERIFIED | Added explicit tests that a token e-mail equal to a roster contact e-mail yields no membership or run scope | `test_exam_authz_dependencies.py::test_matching_roster_email_*` |
+| AUTH-08 | EXISTS_AND_VERIFIED (static) / UNVERIFIED (runtime) | Static checks: default-deny catch-all is last; no rule block for any exam/institution/binding/audit collection; `users` create/update pins | `test_exam_authz_profile_and_rules.py`; emulator suite remains P11 |
+| AUTH-09 | EXISTS_AND_VERIFIED (owner / institution); course part `BLOCKED_BY_DECISION` D-2 | Owner, ADMIN of the resource's institution, or super-admin; additive optional `institution_id` / `created_by`; creation-time scope and enrollment validation | `test_exam_authz_scope.py` |
+| AUTH-10 | EXISTS_AND_VERIFIED | Legacy sessions (no exam claims) trigger no membership lookup; legacy `/me` is empty and error-free; legacy `users.role` can neither grant nor block exam authority | `test_exam_authz_dependencies.py::test_legacy_*`, `::test_me_for_a_legacy_user_*` |
+| AUTH-11 | EXISTS_AND_VERIFIED | Guard now asserts the flag is declared at **router level** on every exam route | `test_exam_authz_route_guards.py` |
+| AUTH-12 / AUTH-13 / AUTH-14 | unchanged | No frontend change; re-auth not extended; legacy placement-cell promotion untouched (D-11) | — |
+| ATT-02 | PARTIALLY_EXISTS | Membership/scope part closed (student scope per request); `question_id` ↔ released-slot validation remains P6 | scope + dependency tests |
+| JDG-12 | EXISTS_AND_VERIFIED | Faculty judge routes scoped through submission / review / run; student public-run now checks enrollment + membership | route-guard + scope tests |
+| LIV-02 | EXISTS_AND_VERIFIED (ticket issuance) | Live ticket role resolved through run scope; an already-open socket of a later-revoked student is a documented residual | `test_exam_authz_scope.py::test_live_*`, `test_exam_authz_route_guards.py::test_live_ticket_*` |
+| GRD-07 | EXISTS_AND_VERIFIED | Gradebook, proctoring and lockdown routes scoped to the run / appeal / export / snapshot; ticket redemption stays bound to the issuing identity | route-guard + scope tests |
+
+## 2. Identity, roster, account linking — Prompt 2
+
+> The **Status** and **Smallest safe delta** columns below record the audit baseline. The outcome after the Prompt 2 implementation is in
+> [§2.1](#21-status-after-the-prompt-2-implementation).
+
+| ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
+|---|---|---|---|---|---|---|
+| ID-01 | Institution / membership model | `domain/institution/*`; membership doc id `{institution_id}::{IDENTITY_KEY}` = uniqueness constraint; `authorization_version` | `test_institution_roster.py` (14), `test_institution_auth_service.py` (16) | EXISTS_AND_VERIFIED | — | — |
+| ID-02 | College ID is an identifier, never a password | Session only after OTP proof (`verify_and_sign_in`) or verified link; no password store | `test_institution_auth_service.py` | EXISTS_AND_VERIFIED | — | — |
+| ID-03 | CSV dry-run, bounded resumable import, leading zeros, per-institution normalization, duplicate/collision detection, row errors | `roster_import.py` (pure planner shared by dry-run/apply), `roster_service.py` (cursor `applied_cursor`); **JSON rows only — no CSV upload endpoint** (ADR 0010); normalization is global trim/collapse/UPPERCASE, not institution-specific | `test_institution_roster.py::test_leading_zeros_*`, `test_apply_batch_*`, `test_dry_run_*` | PARTIALLY_EXISTS | `multipart` CSV parser onto the same dry-run/apply endpoints; per-institution normalization hook only if an institution needs it (D-2) | P2 |
+| ID-04 | Removing a roster row never deletes an account | No delete path anywhere; `revoke` is the explicit deactivation | ADR 0010 §2 (by construction) | EXISTS_AND_VERIFIED | — | — |
+| ID-05 | OTP short-lived, single-use, rate-limited, HMAC-protected, delivered via a configured provider; never called MFA | `otp.py` (HMAC-SHA256+salt, TTL 300 s, 5 attempts), `SlidingWindowLimiter` 5/5 min challenge, 8/5 min verify; delivery = `DevSinkOtpDelivery` (logs the code); per-process fallback secret when `EXAM_OTP_HMAC_SECRET` unset | `test_institution_otp.py` (9), `test_institution_auth_service.py::test_verify_rejects_replayed_code/expired` | PARTIALLY_EXISTS (delivery `BLOCKED_BY_DECISION` D-6) | Real delivery adapter behind the existing `OtpDelivery` protocol once the institution chooses SSO / verified-email OTP | P2 |
+| ID-06 | Account linking proves control of both identities, preserves UID, conflict recovery + audit | `link_existing_account` (session + OTP); conflict → 409 `IdentityAlreadyLinkedError` + warning log; recovery is manual | `test_institution_auth_service.py::test_link_*` (3) | PARTIALLY_EXISTS | Persisted audit event + operator recovery runbook/endpoint | P2 |
+| ID-07 | Teacher assignment by an authorized super-admin; course-scoped capabilities | No assignment endpoint; faculty role only via roster rows (`role_scope=faculty`) uploaded by ADMIN/bootstrap; no course entity | none | MISSING (`BLOCKED_BY_DECISION` D-2) | After D-2: assignment API reusing `institution_memberships`; capability scoping per course | P2 |
+| ID-08 | SSO adapter contract | `SsoIdentityProvider` / `UnconfiguredSsoProvider` stub | none | PARTIALLY_EXISTS (D-6) | Implement only when the institution picks a provider | P2 |
+| ID-09 | Super-admin management surface | API-only: create institution, roster dry-run/apply, revoke; no UI; no super-admin concept | none | MISSING | After P1 role policy: super-admin-only institution management routes (already exist) + UI in P2/P7 | P2 |
+
+### 2.1 Status after the Prompt 2 implementation
+
+Implemented as [ADR 0018](../adr/0018-roster-linking-otp-and-teacher-assignment.md); migration notes in
+[compatibility-and-migration.md §7](compatibility-and-migration.md). Evidence is unit- and HTTP-level with in-memory stand-ins (no Firestore emulator, no real
+delivery provider, no browser session). Backend suite: 774 tests passing with `EXAMS_ENABLED=false` (627 before + 147 new); `ruff check .` clean.
+
+| ID | Status after P2 | What changed | Evidence |
+|---|---|---|---|
+| ID-01 | EXISTS_AND_VERIFIED | Unchanged model; `Institution.identity_policy` added (optional) | `test_institution_roster_planner.py` |
+| ID-02 | EXISTS_AND_VERIFIED | A CSV `password` column is rejected, not ignored; no password store added | `test_institution_roster_csv.py::test_a_password_column_*` |
+| ID-03 | EXISTS_AND_VERIFIED (unit/HTTP) | CSV on the **same** dry-run/apply routes (multipart `file`, ≤ 1 MiB / 5000 rows, strict columns, row errors with line numbers); per-institution `identity_policy`; duplicates and formatting collisions judged across the whole file; apply bound to the dry-run by digest; replay is `skip_unchanged` | `test_institution_roster_csv.py` (13), `test_institution_roster_planner.py` (29), `test_institution_roster_service.py` (24), `test_institution_admin_routes.py` (26) |
+| ID-04 | EXISTS_AND_VERIFIED | Added regression tests: rows absent from a later import are neither removed nor deactivated, and an import cannot reactivate a revoked member | `test_institution_roster_service.py::test_members_missing_*`, `::test_an_import_does_not_reactivate_*` |
+| ID-05 | PARTIALLY_EXISTS — real provider `BLOCKED_BY_DECISION` D-6 | Delivery is an adapter contract selected by `EXAM_OTP_DELIVERY_PROVIDER`; dev sink outside production only; production fails closed with a uniform `503`; delivery failures look like success; a code is checked and consumed in one transaction; replay, expiry, attempt cap, newer-challenge invalidation and per-identity rate limits are tested. E-mail OTP is documented as not MFA | `test_institution_auth_service.py` (51), `test_institution_otp.py` |
+| ID-06 | EXISTS_AND_VERIFIED (unit) | Link runs in a transaction; both conflicts (identity linked elsewhere, account already holds another identity) are refused and persisted to the audit log; link, provisioning, revoke, reinstate, unlink are audited with actor and reason; `unlink` / `reinstate` are the recovery path | `test_institution_auth_service.py::test_*link*`, `::test_unlink_*`, `::test_revoke_*` |
+| ID-07 | EXISTS_AND_VERIFIED (unit) | **D-2 resolved: definition = course.** `POST …/teachers` (super-admin only) grants FACULTY/ADMIN; `ExamDefinition.instructor_uids` + `PUT …/definitions/{id}/instructors` (super-admin or ADMIN of the institution) assigns co-instructors who manage that definition's runs, blueprints and gradebook; assigned courses are listed | `test_exam_co_instructors.py` (17), `test_institution_roster_service.py::test_assign*` |
+| ID-08 | PARTIALLY_EXISTS (D-6) | Unchanged: the SSO contract stays a stub until the institution chooses | — |
+| ID-09 | PARTIALLY_EXISTS | API surface complete: list institutions, list members (masked e-mails), roster job status, teacher assignment, revoke / reinstate / unlink. No UI yet (Prompt 7) | `test_institution_admin_routes.py`, `test_exam_authz_route_guards.py` |
+| AUTH-13 | EXISTS_AND_VERIFIED for the authority-changing routes | Recent sign-in (a recency check, not MFA) is now required to create an institution, apply a roster, revoke, reinstate, unlink, assign a teacher and change instructors | `test_exam_authz_route_guards.py::test_authority_changing_actions_require_recent_reauthentication` |
+
+Defects found in the existing code while implementing (all fixed, none was in the audit baseline):
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| P2-1 | High | A roster apply overwrote an existing member's contact e-mail and role regardless of the uploader's standing; the e-mail is the OTP destination, so a FACULTY uploader could take over a student's (or a linked legacy) account or demote an ADMIN | Stored-state rules in the planner, re-checked inside a transaction; e-mail changes need ADMIN-level authority; version bump + audit |
+| P2-2 | Medium | A roster apply silently reactivated revoked memberships | Revoked members are rejected; `reinstate` is the explicit path |
+| P2-3 | Medium | The whole-document write could erase a concurrent login (`uid` re-provisioned, attempts orphaned) | Atomic create for students; transactional field updates that never rewrite `uid`/`status` |
+| P2-4 | Medium | Apply was not bound to the dry-run and judged one batch at a time (a duplicate in a later batch overwrote the first row) | Digest binding (`409 roster_rows_changed`); whole-file structural pass |
+| P2-5 | High (when enabled) | The dev OTP sink was the default in production and logged one-time codes | Adapter selection; production fails closed; codes never logged there |
+| P2-6 | Low | A code could be consumed twice by concurrent requests | Check-and-consume in one transaction |
+| P2-7 | Medium | Linking used a plain overwrite, persisted no audit, allowed two identities on one uid, and had no recovery | Transactional link, audited conflicts, one identity per uid per institution, `unlink` |
+
+Roster authority change (a deliberate behavior change, ADR 0018 §5): only a super-admin grants FACULTY/ADMIN; institution ADMINs and FACULTY manage STUDENT rows.
+
+## 3. Exam domain, policy, timing — Prompt 3
+
+| ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
+|---|---|---|---|---|---|---|
+| DOM-01 | ExamDefinition, immutable ExamRevision, ExamRun, Attempt, AttemptSlot, source references, audit events, durable jobs/outbox | `domain/exams/models.py` (definition, revision, run, attempt, draft, receipts, outbox); slot = derived id `{revision_id}:slot:{index}` (no entity); no general audit-event collection (only command receipts, proctoring log, evidence/export access logs) | `test_exams_state_machine.py` (6), `test_exams_decisions.py` (35), `test_exams_policy_and_outbox.py` (8) | PARTIALLY_EXISTS | Command audit with actor/reason in P3; authz audit in P1 | P3 |
+| DOM-02 | Flags off by default; no legacy startup/seeding side effects | `exam_main.py` runs only a Firestore reachability check + loops when `EXAMS_ENABLED` | `test_exams_routes_smoke.py` | EXISTS_AND_VERIFIED | — | — |
+| DOM-03 | Validate title, optional topics, question count, per-type counts, marks, negative marking, difficulty distribution, duration, schedule/timezone, randomization, variant policy, languages, warning thresholds, access policy | `ExamPolicy` (duration 1-1440, `warning_threshold` = proctoring warnings, late-admission grace, `allow_pause`, accommodations; `extra=forbid`); blueprint slot (item_type, objectives≥1, difficulty free string, marks>0, minutes≤180, languages, `requested_variant_count` 1-50). **Absent:** topics/objectives at exam level, counts totals, total marks, negative marking, difficulty distribution, schedule+timezone, randomization/variant policy, time-remaining thresholds, access policy | `test_exams_policy_and_outbox.py::test_policy_*` | PARTIALLY_EXISTS | Additive optional policy/blueprint fields whose defaults reproduce today's behavior (see delta-plan P3/P5) | P3 |
+| DOM-04 | Preview total marks and resolved counts before publication | `publish_revision` takes a client-supplied `slot_count` unrelated to blueprint or approved candidates; no summary endpoint | none | MISSING | `GET` summary computed from blueprint + approved candidates; publish validates against it | P3 |
+| DOM-05 | Source-derived topic suggestions with teacher confirmation | none | none | MISSING | After P4 grounding is real (needs extracted text) | P5 |
+| DOM-06 | Legal state transitions + expected-version checks | `state_machine.py`, `decisions.py::decide_run_command` | `test_exams_state_machine.py`, `test_exams_decisions.py::test_command_rejects_stale_expected_version` | EXISTS_AND_VERIFIED | — | — |
+| DOM-07 | Published edits create a new revision; active attempts stay pinned | `publish_revision` creates revision N+1; run pins `revision_id`; **revision snapshots only `title` + `slot_count`**, question content is a separate mutable/published collection | `test_exams_decisions.py` | PARTIALLY_EXISTS | Snapshot the approved-candidate id list into the revision at publish (additive) | P3 |
+| DOM-08 | Finalized attempts cannot be reopened | `ATTEMPT_TRANSITIONS[FINALIZED] == ∅`; no reopen path | `test_exams_state_machine.py::test_finalized_attempt_has_no_legal_targets` | EXISTS_AND_VERIFIED | — | — |
+| DOM-09 | Commands: grant/revoke, pause/resume, extend, terminate, recovery — scoped, reasoned, idempotent, receipted | Run-level `publish/release/pause/resume/close/end` (expected_version + idempotency key + receipts); per-student **extend** (no receipt); recovery for BLOCKED = `proctoring resolve`. **Missing:** per-student grant/revoke, per-student pause/resume/terminate, reason fields | `test_exams_decisions.py` (commands) | PARTIALLY_EXISTS | Per-attempt commands through the same transactional/receipt pattern | P3 |
+| DOM-10 | Closing a cohort preserves accommodated / extended deadlines | `decide_finalization_batch`; deadline baked into attempt at admission | `test_exams_decisions.py::test_finalization_batch_preserves_accommodated_students_mixed_in` | EXISTS_AND_VERIFIED | — | — |
+| DOM-11 | Audit: who / when / why for commands and extensions | `extend_time` route never passes `user["uid"]` to `grant_time_extension`; `CommandReceipt` has no actor | none | EXISTS_BUT_DEFECTIVE | Add `actor_uid` (+ optional reason) to receipts and extension records | P3 |
+| DOM-12 | Durable jobs/outbox restart-safe and idempotent | Outbox claim/lease/attempt cap/handlers ✔ (`outbox.py`); **`ExamFinalizationSweeper` never started** | `test_exams_policy_and_outbox.py::test_drain_processes_unprocessed_entries_idempotently`; sweeper I/O shell untested (only pure `decide_finalization_batch`) | EXISTS_BUT_DEFECTIVE (High) | Start a finalization loop in `exam_main.lifespan` (existing loop pattern) | P3 |
+| TMR-01 | Server controls deadlines; client clock cannot extend | `clock.py` `Clock`; `compute_deadline` server-side; extension is faculty-only | `test_exams_decisions.py` | EXISTS_AND_VERIFIED | — | — |
+| TMR-02 | Server-side auto-finalization at deadline | see DOM-12: expired attempts are never auto-sealed/graded; `end` needs `force` while unresolved attempts exist | none for the I/O shell | EXISTS_BUT_DEFECTIVE (High) | as DOM-12 | P3 |
+| TMR-03 | Timezone handling | UTC datetimes only; no per-exam timezone | none | MISSING | Store IANA tz on the run for display; keep UTC for enforcement | P3 |
+| SCH-01 | Schedule window (start/end) and schedule/publish flow | Manual `release` only; no scheduled window | none | PARTIALLY_EXISTS | Optional `scheduled_start/end` on the run + sweeper-driven open/close | P3 |
+| SHR-01 | Short share link (random, collision-checked, non-sequential, revocable, rate-limited; locator only) | none | none | MISSING (`BLOCKED_BY_DECISION` D-9) | New code lookup collection + route; authorization stays on enrollment | P7 |
+| MRK-01 | Marks and negative marking | Per-slot `marks`; weighted aggregation; MCQ exact-match only; **no negative marking, no multi-select partial credit** | `test_judge_grading.py`, `test_gradebook_aggregation_service.py` | PARTIALLY_EXISTS (D-8) | Additive `negative_marks` per slot; scoring semantics doc | P3/P10 |
+| RND-01 | Randomization, variants, option shuffle | Per-student variant assignment (`reserve_variants`, deterministic); **no option shuffle, no randomization policy** | `test_generation_review_and_variants.py` (10) | PARTIALLY_EXISTS | Seeded option-shuffle with stored mapping | P5 |
+
+## 4. Source ingestion — Prompt 4
+
+| ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
+|---|---|---|---|---|---|---|
+| ING-01 | Private source registry: multiple PDF/DOCX (+TXT) and approved URLs | `kt_uploads`, `kt_approved_sources`, review lifecycle with faculty-attested `RightsEvidence`; PDF/DOCX/TXT parsers | `test_kt_source_registry.py` (5), `test_kt_ingestion.py` (14) | PARTIALLY_EXISTS | URL sources have no extracted content (ING-05) | P4 |
+| ING-02 | Private quarantine storage, generated object names | Bytes are **never persisted** (parsed in memory then discarded); `storage_ref="kt-uploads/{id}"` is a dangling label | none | MISSING (`BLOCKED_BY_DECISION` D-4) | Persist to a private bucket via the existing `evidence_storage` adapter pattern | P4 |
+| ING-03 | Real signature, extension, MIME, size, count, decompression, parser-timeout validation | `file_validation.py` (magic bytes, MIME mismatch, 25 MB, zip entry/ratio/uncompressed caps, macro DOCX reject), `limits.py`, 20 s parser timeout; no per-teacher/definition file-count cap | `test_kt_ingestion.py` (14) | EXISTS_AND_VERIFIED (count cap absent) | Add a count cap | P4 |
+| ING-04 | Malware scan integration; reject encrypted/unsupported with actionable errors | Default `NullMalwareScanner` is fail-closed → every upload ends `SCAN_UNAVAILABLE` and is **never parsed**; `EXAM_MALWARE_SCANNER_ENDPOINT` is read nowhere (warning only) | none | EXISTS_BUT_DEFECTIVE / `BLOCKED_BY_DECISION` D-4 | Scanner adapter (e.g. clamd) behind the existing protocol; honour the setting | P4 |
+| ING-05 | Bounded-worker parsing; immutable extracted versions with content hashes and page/section anchors | Parsed **inside the API request** (`parse_bounded`, thread pool + timeout); `ExtractedVersion` immutable with per-paragraph anchors; only the **file** sha256 is recorded (no extracted-text hash); URL sources get no extracted version | `test_kt_ingestion.py::test_accept_plain_text` | EXISTS_BUT_DEFECTIVE | Move parsing to an outbox job; hash extracted text; extract URL text | P4 |
+| ING-06 | OCR/table/image only via a qualified parser; surface low-confidence content | Text-only parsers; images/tables silently dropped | none | MISSING | Surface "unsupported content skipped" counts to the teacher first; OCR only after qualification | P4 |
+| ING-07 | Upload progress, status, failure reason, retry, replace, delete; history | `UploadStatus` + `GET /sources[/{id}]`; **no retry/replace/delete routes, no upload-management UI** | none | PARTIALLY_EXISTS | Routes + UI preserving history | P4 |
+| ING-08 | URL ingestion: SSRF/private/link-local/metadata blocked, redirects validated, size/time limits, canonical URL/hash/time | `url_resolver.py` (https only, IP-class denylist, metadata IPs, redirect re-validation ≤3, 25 MB, 10 s); documented TOCTOU/rebinding residual | `test_kt_url_resolver.py` (9) | EXISTS_AND_VERIFIED | Network-layer egress proxy remains an infra gate (P11) | P11 |
+| ING-09 | Source content treated as untrusted data | Provider system prompt tells the model to ignore embedded instructions; source text is data in the request; nothing executes it | no injection-specific tests | PARTIALLY_EXISTS | Prompt-injection fixtures (see GEN-11) | P5 |
+
+## 5. Blueprint, generation, review — Prompt 5 and Backend prompts A/B/C
+
+| ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
+|---|---|---|---|---|---|---|
+| GEN-01 | Blueprint: optional topics, question count, item types, marks, negative marking, difficulty distribution, duration, language allowlist, randomization, variant policy | `ExamBlueprint`/`BlueprintSlot` (see DOM-03); no negative marking, topics, distribution | `test_generation_provider_and_jobs.py` (15) | PARTIALLY_EXISTS | Additive optional fields | P5 |
+| GEN-02 | Backend computes requested/generated/valid/approved counts; block publication on insufficient approved capacity unless an accepted shortfall | Per-request `ready_count/needs_revision_count/shortfall` only; no publish gate | none | MISSING | Capacity summary + publish gate (with explicit accepted-shortfall flag) | P5 |
+| GEN-03 | Send only approved excerpts with exact source/version/anchor; no student PII | `GenerationRequest` has no PII field ✔; approved-only check ✔; **excerpt is the placeholder `"[excerpt for anchor …]"` and anchor ids are not verified against the extracted version** (`exams_generation.py::_resolve_source_bundle`) | `test_generation_validation.py::test_nonexistent_citation_is_blocked` (tautological against a client-built bundle) | EXISTS_BUT_DEFECTIVE | Resolve real anchor text from `ExtractedVersion`; reject unknown anchors | P5 |
+| GEN-04 | Store provider/model, prompt version, source versions, job id, retry/cost metadata, status | `GenerationRequest` (model_name, prompt_version, attempts, cost_estimate, last_error, status) | `test_generation_provider_and_jobs.py` | EXISTS_AND_VERIFIED | — | — |
+| GEN-05 | Structured output + deterministic validation (domains, anchors, objectives, mark totals, answer-key consistency, duplicate signatures, option-shuffle mappings) | `validation.py`: schema, anchors-in-bundle, objective alignment, marks; signature duplicates. **No answer-key consistency, near-duplicate, option-shuffle checks** | `test_generation_validation.py` (12) | PARTIALLY_EXISTS | Add the three missing checks | P5 |
+| GEN-06 | Independent review (cannot upgrade) | `independent_review.py` + `IndependentReviewJobRunner`; schema `Literal` forbids approve; errors are returned in `independent_review_results` | `test_generation_independent_review.py` (12) | EXISTS_AND_VERIFIED | — | — |
+| GEN-07 | Coding items: reference solutions + tests executed in the isolated judge; SQL items via disposable DB | Reference solutions/tests are **stored, not executed**; no SQL | `test_generation_validation.py` (structural only) | PARTIALLY_EXISTS (D-5) | Execute references in the judge once a real adapter exists | P8 |
+| GEN-08 | Lifecycle draft→validating→needs_review→approved→published; model cannot approve/publish; teacher edit/reject/regenerate; substantive edit = new version + reset approval | `CandidateStatus` (draft, insufficient_source, needs_revision, ready_for_human_review, approved, rejected, published); provider-claimed status ignored; **review = approve/reject only; no edit, no versioned regenerate** | `test_generation_review_and_variants.py` (10) | PARTIALLY_EXISTS | Edit endpoint creating a new version with approval reset | P5 |
+| GEN-09 | Variants generated in advance and assigned before the attempt; no LLM during the exam | `reserve_variants_for_slot` (deterministic, idempotent) before attempts; generation is on-demand per slot, never during an attempt | `test_generation_review_and_variants.py` | PARTIALLY_EXISTS | Batch pre-generation per run (optional) | P5 |
+| GEN-10 | Post-exam learning feedback (Backend prompt C) | `feedback_service.py` + `TemplateFeedbackProvider` default; `GET /student/gradebook/runs/{id}/feedback` released-only | `test_gradebook_feedback.py` (15) | EXISTS_AND_VERIFIED | — | — |
+| GEN-11 | Prompt-injection resilience | Structural: provider status ignored; envelope schema forbids approval; independent review only downgrades | no injection fixtures | PARTIALLY_EXISTS | Fixtures: instruction-bearing excerpts, forged JSON, fake anchors | P5 |
+
+## 6. Student attempts, drafts, immutable submit — Prompt 6
+
+| ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
+|---|---|---|---|---|---|---|
+| ATT-01 | Allowlisted student DTOs, physically separate from keys/hidden tests/rubrics | `PublicQuestionRef` + `build_public_content` (pure allowlist) | `test_generation_public_content.py` (marker planted in every private field) | EXISTS_AND_VERIFIED | — | — |
+| ATT-02 | Only currently released slots of the caller's own active attempt; enforce membership, ownership, run/window, epoch, deadline, slot release on every request | Service checks enrollment, run `RELEASED`, attempt status, deadline, `current_slot_index` only; **membership never checked**; **no previous-question access**; `question_id` on draft routes is not validated against the released slot | `test_exams_decisions.py::test_is_content_reachable_*` | PARTIALLY_EXISTS | Membership via AUTH-05/06 (P1); validate `question_id` ↔ released slot (P6) | P1 / P6 |
+| ATT-03 | Versioned, idempotent draft saves | `decide_save_draft`, `Draft.version` | `test_exams_decisions.py` | EXISTS_AND_VERIFIED | — | — |
+| ATT-04 | Submit separate/irreversible; expected versions; scoped idempotency keys; durable receipt; same key+different payload = conflict | `decide_submit`, `SubmitReceipt` | `test_exams_decisions.py` (9 submit tests) | EXISTS_AND_VERIFIED | — | — |
+| ATT-05 | Lost response recoverable via receipt lookup without late work | `GET /receipt` (read-only) | route + decisions tests | EXISTS_AND_VERIFIED | — | — |
+| ATT-06 | Concurrent submit/timeout/teacher-close = one serialized outcome; seal last acknowledged draft or blank once | Per-attempt transactions ✔; **non-transactional draft-version read** between decision and commit (`student_service.py:240`, ADR 0008 §1); timeout path depends on the unscheduled sweeper | pure decision tests only | EXISTS_BUT_DEFECTIVE | Real-Firestore/emulator interleaving test (P6/P11); fix with sweeper (P3) | P3 / P6 |
+| ATT-07 | Authenticated attempt/question/result APIs not cacheable; unsent answers in memory only; no offline final submit | `_set_no_store` on every student route + app-level `no-store` middleware; frontend never persists answers (no `localStorage/sessionStorage/IndexedDB` use for exam data) | grep audit; `fe:exam/page.test.tsx` | EXISTS_AND_VERIFIED | — | — |
+| ATT-08 | Hidden-content leakage inspection of API/socket/page/cache payloads | DTO-level tests only; no socket/page/cache payload inspection | `test_judge_grading.py` (DTO) | PARTIALLY_EXISTS | End-to-end payload inspection | P6 / P11 |
+
+## 7. UI: timer, navigator, themes, control room — Prompt 7
+
+| ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
+|---|---|---|---|---|---|---|
+| UI-01 | Continuously updating timer from the server deadline + server-time samples, not the browser wall clock | `ExamShellHeader.formatRemaining` = `deadline − Date.now()` at render; **no interval/tick found** in the header or student page (refreshes only on re-render); no server-time sample/skew correction | `fe:ExamShellHeader.test.tsx` (mm:ss format, placeholder) | EXISTS_BUT_DEFECTIVE (runtime behavior UNVERIFIED) | Ticking hook anchored to a server-time offset sampled from API responses | P7 |
+| UI-02 | Time-remaining warnings (10 min default + configured), accessible, not repetitive | none (only proctoring warnings, `aria-live="polite"`) | none | MISSING | Threshold list in policy + announce-once live region | P7 |
+| UI-03 | Previous/Next across released questions | Next only (`POST /next-question`, "forward-only" by design); no previous route/UI | none | MISSING (`BLOCKED_BY_DECISION` D-3) | Read access to already-released slots + view index separate from release index | P6/P7 |
+| UI-04 | Right-side numbered navigator with answered/unanswered/marked/locked counts | none (single-question flow) | none | MISSING | After D-3 | P7 |
+| UI-05 | Mark-for-review | none (no model field, route or UI) | none | MISSING | Per-slot flag on the draft (additive) | P6/P7 |
+| UI-06 | Draft-save status and connection status | `Saved (vN)` + connection badge (connecting/connected/reconnecting/polling/offline) | `fe:ExamShellHeader.test.tsx` | EXISTS_AND_VERIFIED | — | — |
+| UI-07 | Light/dark mode; contrast | Global `ThemeContext` + `ThemeToggle` (root layout) + CSS variables used on exam pages; contrast not verified | `fe:ThemeContext.test.tsx` | PARTIALLY_EXISTS | Contrast checks in axe on exam pages | P7/P10 |
+| UI-08 | Keyboard/screen-reader behavior; responsive layout | Timer `aria-live`, labelled inputs, `role` dialog/status; axe scan only on `/exams/login` | `e2e:exams-accessibility.spec.ts` (2) | PARTIALLY_EXISTS | Axe + keyboard coverage of exam pages | P10 |
+| UI-09 | Submit confirmation, final receipt, draft vs final distinction | Confirmation dialog + receipt page | `fe:exam/page.test.tsx` (4) | EXISTS_AND_VERIFIED | — | — |
+| UI-10 | Reconcile from the server on reconnect | `useLiveSocket` (`onReconcile` per event, jittered backoff, 10 s polling fallback after 5 failures) | `fe:liveSocket.test.ts` (7) | EXISTS_AND_VERIFIED | — | — |
+| UI-11 | Teacher views: builder, sources, topics, blueprint/scoring, question review, schedule/publish, short link, live status (freshness), per-student grant/revoke, pause/resume, extension, terminate/recovery, incidents, gradebook | Exist and are wired to real routes: builder, URL-source registration + review, blueprint (single-choice + coding), generate, candidate review, publish/release, variant assignment, control room (pause/resume/close/end, "Snapshot as of" = client fetch time), extension, incident resolve, gradebook/appeals/similarity/lockdown. **Missing:** topics, scoring config, short link, per-student grant/revoke, terminate, upload management, institution/roster UI | `fe:results/page.test.tsx` (2) only; live-verified 2026-10-04 | PARTIALLY_EXISTS | Per-feature, after the corresponding backend deltas | P7 |
+| UI-12 | Destructive actions confirm, audit, show conflict feedback | Release confirmation exists; 409 conflicts show raw errors; confirmation for close/end UNVERIFIED | none | PARTIALLY_EXISTS | Conflict-specific message + confirms | P7 |
+| UI-13 | Existing design tokens/routes only | CSS variables, `.card`, `.badge*`, `.btn-*` reused | — | EXISTS_AND_VERIFIED | — | — |
+| UI-14 | Exam API client: pinned origin, `getClientAuthToken`, `no-store` | `examsApi.ts` | — | EXISTS_AND_VERIFIED (login page calls `getIdToken` directly — acceptable pre-session) | — | — |
+
+## 8. Coding and SQL judge — Prompt 8
+
+| ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
+|---|---|---|---|---|---|---|
+| JDG-01 | Hardened judge adapter + durable worker; no user code on the app host | No subprocess/exec anywhere in `backend/app` (grep); durable outbox + sweep ✔; **`Judge0HttpAdapter.submit` raises `NotImplementedError`**; default provider = in-memory `DeterministicFakeJudgeProvider` singleton | `test_judge_provider.py` (8), `test_judge_worker.py` (11), `test_judge_service.py` (13) | PARTIALLY_EXISTS (`BLOCKED_BY_DECISION` D-5: architecture approval) | Real adapter only after approval; staging isolation evidence | P8 |
+| JDG-02 | Server-owned language registry (C, C++, Java, Python, JS/TS) | `default_allowlist()`: python3.11, java17, cpp17; none validated against a provider; no C, JS/TS | `test_judge_runtime_allowlist_and_submission.py` (11) | PARTIALLY_EXISTS | Extend after provider validation | P8 |
+| JDG-03 | SQL only with a qualified disposable runner | No SQL item type | none | MISSING (D-5) | Out until qualified | P8 |
+| JDG-04 | Pinned versions; result bound to submission hash, variant, suite version | `GradingResult` carries `submission_hash`, `candidate_id`, `runtime_image`, `test_suite_version` | `test_judge_service.py` | EXISTS_AND_VERIFIED | — | — |
+| JDG-05 | CPU/memory/wall/process/output/FS/concurrency limits; block network/metadata/host mounts | Constants (cpu 5 s, memory 256 MB) sent to the provider; everything else is provider infrastructure | `test_judge_worker.py` | UNVERIFIED (infra) | Staging evidence | P8 / P11 |
+| JDG-06 | Hidden tests/expected output never reach the student | DTOs by omission (`public_test_result_dto`, `sealed_grade_summary_dto`) | `test_judge_grading.py` (20) | EXISTS_AND_VERIFIED | — | — |
+| JDG-07 | Infra failures pending/retryable, not silent zero | `INFRA_ERROR` retry with cap; **terminal state when retries are exhausted is undefined** (critical log only) | `test_judge_worker.py` | EXISTS_BUT_DEFECTIVE | Explicit exhausted state + operator path | P8 |
+| JDG-08 | Provider callbacks authenticated or polled securely and de-duplicated | Poll-only; per-test token ownership verified; terminal submissions are no-ops | `test_judge_worker.py` | EXISTS_AND_VERIFIED | — | — |
+| JDG-09 | Regrade lineage | `create_regrade` → new version; MCQ/short-answer likewise | `test_judge_service.py`, `test_judge_grading.py` | EXISTS_AND_VERIFIED | — | — |
+| JDG-10 | MCQ / short-answer semantics | MCQ exact-match only; short answer manual review queue | `test_judge_outbox_handler.py` (8) | PARTIALLY_EXISTS (D-8) | Partial credit / negative marking semantics | P3/P10 |
+| JDG-11 | Grading triggered idempotently after finalization | `GradingTriggerOutboxHandler` | `test_judge_outbox_handler.py` | EXISTS_AND_VERIFIED | Only for attempts that actually finalize (TMR-02) | — |
+| JDG-12 | Authorization on judge routes | Student public-run relies on variant assignment (no enrollment check); faculty routes unscoped | none route-level | EXISTS_BUT_DEFECTIVE | See AUTH-05 / AUTH-09 | P1 |
+| JDG-13 | Student "Run public tests" end to end | Rate limit 10 / 300 s per (run, uid, question); stored as `PUBLIC_RUN` submissions | `test_judge_service.py` | EXISTS_AND_VERIFIED (fake provider) | — | — |
+| JDG-14 | Clipboard blocking | Client-only DOM handlers; recorded as `CLIPBOARD_BLOCKED` informational observation (never counted) | `fe:CodeEditorPanel.test.tsx` | EXISTS_AND_VERIFIED as a deterrent; not enforcement | State limitation in incident UI | P9 |
+
+## 9. Proctoring, live control, lockdown — Prompt 9 (and Prompt 7 control room)
+
+| ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
+|---|---|---|---|---|---|---|
+| PRC-01 | Institution-approved proctoring profile | Per-run `warning_threshold`; grace/cooldown are global env (`EXAM_PROCTORING_GRACE_SECONDS` 2.0, `COOLDOWN` 5.0); no institution profile entity | `test_proctoring_ledger_service.py` | PARTIALLY_EXISTS (D-7) | Per-run/institution overrides if required | P9 |
+| PRC-02 | Append-only incident ledger | `IncidentLogRepository` has create/list only | `test_proctoring_decisions.py` (20), `test_proctoring_ledger_service.py` (7) | EXISTS_AND_VERIFIED | — | — |
+| PRC-03 | Observations, not proof; dedupe, grace, cooldown | `correlate_observation` (bounded recent-event ids, grace, cooldown) | `test_proctoring_decisions.py::test_duplicate_event_id_is_deduped`, `…flapping…`, `…burst…` | EXISTS_AND_VERIFIED | — | — |
+| PRC-04 | Camera/permission/network failures informational | `INFORMATIONAL_KINDS` | `…test_blur_alone_is_informational…`, `…permission_denied_and_camera_error…` | EXISTS_AND_VERIFIED | — | — |
+| PRC-05 | Threshold → BLOCKED transactionally; stop writes/delivery; preserve drafts; audited review/recovery/appeal | `record_observation` sets `BLOCKED`; submit/question gating (`attempt_blocked`); `resolve_block`; appeals service | `test_proctoring_ledger_service.py`, `test_exams_decisions.py::test_submit_rejects_when_blocked`, `test_proctoring_appeals_service.py` (4) | EXISTS_AND_VERIFIED | — | — |
+| PRC-06 | Ledger never reset to unblock | `resolve_block` never touches counts | `…test_resolve_block_*` | EXISTS_AND_VERIFIED | — | — |
+| PRC-07 | Private evidence, short-lived tickets, access audit, retention across derivatives | Single-use expiring upload/view tickets; `evidence_access_log`; retention sweeper; **default storage = `InMemoryEvidenceStorage` unless `EXAM_EVIDENCE_STORAGE_BUCKET`** | `test_proctoring_evidence_service.py` (11), `test_proctoring_retention.py` (2) | EXISTS_AND_VERIFIED (real bucket/IAM UNVERIFIED) | Staging IAM evidence | P11 |
+| PRC-08 | Submission never fails solely because evidence upload failed | `student_service` does not import the evidence service | by construction (no explicit test) | EXISTS_AND_VERIFIED (add test) | One explicit test | P9 |
+| PRC-09 | No face recognition / biometric / automatic AI misconduct decisions | None present (grep) | — | EXISTS_AND_VERIFIED | — | — |
+| LIV-01 | Live candidate status with freshness; realtime + fallback | Ticketed WebSocket; per-run `seq`/`state_version`; heartbeat; client polling fallback; control page "Snapshot as of" (client time) | `test_live_*` (18), `fe:liveSocket.test.ts` (7) | EXISTS_AND_VERIFIED (single-process connection manager) | Server-stamped freshness (optional) | P7 |
+| LIV-02 | Live authorization scoped to the run | `exams_live._resolve_role`: any faculty obtains a FACULTY ticket for **any** run | none route-level | EXISTS_BUT_DEFECTIVE | AUTH-09 scope on ticket issuance | P1 |
+| LCK-01 | Managed-lockdown (SEB) admission, honestly scoped | `verify_seb_admission` (header hash; fail-closed when enabled without keys; never User-Agent) | `test_lockdown_decisions.py` (11), `test_lockdown_service.py` (6) | EXISTS_AND_VERIFIED (no real SEB pilot) | — | P11 |
+
+## 10. Gradebook, accessibility, PWA, exports — Prompt 10
+
+| ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
+|---|---|---|---|---|---|---|
+| GRD-01 | Scoped gradebook, released results, exact count semantics | Student routes use token uid, require a release; counts via `compute_all_counts`; negative marking/partial-credit semantics undefined | `test_gradebook_aggregation_service.py` (12), `test_gradebook_release_service.py` (8) | PARTIALLY_EXISTS (D-8) | Define semantics with MRK-01 | P10 |
+| GRD-02 | Original submissions preserved; corrected results = new version + reason + audit | `ReleaseRecord` versions; regrade lineage; append-only | `test_gradebook_release_service.py::test_second_release_increments_version_and_keeps_history` | EXISTS_AND_VERIFIED | — | — |
+| GRD-03 | Similarity is reviewer evidence only; excludes starter code; no automatic penalty | `similarity_service` strips starter code; never mutates scores | `test_gradebook_similarity.py` (7) | EXISTS_AND_VERIFIED (real JPlag unqualified) | — | — |
+| GRD-04 | Authenticated, scoped, expiring exports; CSV formula injection protected | Single-use expiring tickets bound to the issuing caller; `sanitize_csv_cell` | `test_gradebook_export_service.py` (11), `test_gradebook_decisions.py` (24) | EXISTS_AND_VERIFIED | — | — |
+| GRD-05 | Unreleased results/feedback denied to students | `_require_released` / `ResultsNotReleasedError` | `test_gradebook_feedback.py::test_feedback_service_raises_when_not_released` | EXISTS_AND_VERIFIED | — | — |
+| GRD-06 | Appeals (grade + proctoring) | Both workflows with resolver audit | `test_gradebook_release_service.py`, `test_proctoring_appeals_service.py` | EXISTS_AND_VERIFIED | — | — |
+| GRD-07 | Faculty gradebook/proctoring/lockdown routes scoped to the run | `require_exam_faculty` only; ids (`appeal_id`, `snapshot_id`, `job_id`) checked for existence, not for the caller's relation | none | EXISTS_BUT_DEFECTIVE | AUTH-09 | P1 |
+| PWA-01 | Only the static shell cached; authenticated pages/APIs network-only/no-store at SW, framework, CDN, API | SW precaches 4 static files and never calls `respondWith` for API/page requests; API: per-route + middleware `no-store`; Next: only `/_next/static` headers (prod immutable) — **no explicit `no-store` for `/exams/**` HTML** | `e2e:exams-pwa.spec.ts` (2) | PARTIALLY_EXISTS | Add `Cache-Control: private, no-store` for `/exams/:path*` in `next.config.ts` | P10 |
+| PWA-02 | SW updates never interrupt an active attempt; cache hygiene on logout | `useExamServiceWorker({attemptActive})` holds `skipWaiting`; SW caches no user data so there is nothing to purge | `fe:useExamServiceWorker.test.ts` (7), e2e above | EXISTS_AND_VERIFIED | — | — |
+| A11Y-01 | Accessibility automation: axe, keyboard, themes/contrast, accommodations | Axe + keyboard only for `/exams/login`; accommodation tests for camera waiver; manual checklist doc | `e2e:exams-accessibility.spec.ts` (2), `fe:useCameraCapture.test.ts` (4) | PARTIALLY_EXISTS | Cover exam pages and theme contrast | P10 |
+
+## 11. Staging, release readiness, operations — Prompt 11
+
+| ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
+|---|---|---|---|---|---|---|
+| OPS-01 | CI runs HireLog regression + exam suites | `ci.yml` (backend ruff/pytest/compileall, eval gate, pip-audit(informational)/bandit/npm audit, frontend lint/type/test/build, e2e smoke) triggers on PR / push-to-`main` only; **branch history unrelated to `origin/main`**; 11 smoke tests depend on local `.env` | baseline §2 | EXISTS_BUT_DEFECTIVE | Rebase onto `origin/main` (D-10); pin `EXAMS_ENABLED=false` in tests | P11 |
+| OPS-02 | Staging qualification (concurrency, p95/p99, burst) | Only a local-emulator admission load test (60 users, loopback) | `production-qualification-report.md` §3 | MISSING (real staging) | Staging run | P11 |
+| OPS-03 | Failure injection (disconnect, restart, outages) | Mapped to unit tests; no real outage rehearsal | qualification report §5 | PARTIALLY_EXISTS | Staging chaos pass | P11 |
+| OPS-04 | Rollback: disable new admissions while preserving completion; never delete data | `EXAM_NEW_ADMISSIONS_PAUSED`, per-run pause, `EXAMS_ENABLED` | `test_exams_student_service.py` (4), `rollback-runbook.md` | EXISTS_AND_VERIFIED | — | — |
+| OPS-05 | Secrets/config checklist, alerts, runbooks | `.env.example`, `deployment-guide.md`, `rollback-runbook.md`, `backup-dr.md`; alert thresholds are proposals — **no metrics/alert instrumentation** | docs | PARTIALLY_EXISTS | Instrument outbox age, judge retries, finalization lag | P11 |
+| OPS-06 | Backup restore with measured RPO/RTO | `docs/runbooks/backup-dr.md` (procedure); no measured restore | — | MISSING (measurement) | Isolated restore drill | P11 |
+| OPS-07 | Dependency vulnerabilities | `next` 16.2.10 (2 critical), `websocket-driver`, firebase/grpc/nanoid/source-map-js highs; backend `starlette`, `transformers`, … | `npm audit` 2026-10-09 | EXISTS_BUT_DEFECTIVE | `next ≥ 16.3.8` upgrade pass (separate decision) | P11 |
+
+## 12. Master-prompt invariants (cross-reference)
+
+| # | Invariant | Status | Rows |
+|---|---|---|---|
+| 1 | Server authorizes every protected read/write | PARTIALLY_EXISTS (baseline) → HTTP routes closed in Prompt 1, see §1.1; WebSocket stream and `check_revoked` remain | AUTH-05, AUTH-06, AUTH-09 |
+| 2 | College ID is an identifier; no public role escalation | EXISTS_AND_VERIFIED | AUTH-03, AUTH-07, ID-02 |
+| 3 | Server time controls admission/deadline/extension/close/finalization | PARTIALLY_EXISTS | TMR-01, TMR-02 |
+| 4 | Published revisions and final submissions immutable; draft ≠ submit | EXISTS_AND_VERIFIED (DOM-07 partial) | DOM-07, DOM-08, ATT-03/04 |
+| 5 | Locked content never reaches the student early | EXISTS_AND_VERIFIED | ATT-01, ATT-08 |
+| 6 | AI items stay drafts until checks + teacher approval | PARTIALLY_EXISTS | GEN-05, GEN-08 |
+| 7 | Uploaded/fetched content is untrusted data | PARTIALLY_EXISTS | ING-09, GEN-11 |
+| 8 | Student code never executes in the API process; SQL never touches production | EXISTS_AND_VERIFIED | JDG-01, JDG-03 |
+| 9 | Durable jobs/outbox restart-safe and idempotent | PARTIALLY_EXISTS | DOM-12, TMR-02 |
+| 10 | Private data not public/cacheable | PARTIALLY_EXISTS | ATT-07, PWA-01 |
+| 11 | Proctoring signals not proof; recovery/appeal preserved | EXISTS_AND_VERIFIED | PRC-03..06 |
+| 12 | Flags default off for new behavior | EXISTS_AND_VERIFIED | AUTH-11 |
+| 13 | Preserve legacy HireLog and working exam flows | EXISTS_AND_VERIFIED | AUTH-10 |
+| 14 | No overclaiming of mocks | EXISTS_AND_VERIFIED | baseline §6 |
+| 15 | Synthetic fixtures; no secrets in artifacts | EXISTS_AND_VERIFIED | baseline §1 |
+
+## 13. Backend model prompts
+
+| Prompt | Where implemented | Status |
+|---|---|---|
+| A — structured question generation | `generation/provider.py` (`GENERATION_SYSTEM_PROMPT_A_V1`, `DeterministicFakeProvider`, `HttpGenerationProviderAdapter`) | PARTIALLY_EXISTS — see GEN-03 (placeholder excerpts), GEN-05, GEN-07 |
+| B — independent review | `generation/independent_review*.py` | EXISTS_AND_VERIFIED (GEN-06) |
+| C — learning feedback | `gradebook/feedback_*.py` | EXISTS_AND_VERIFIED (GEN-10) |
+
+## 14. Decisions required (referenced above)
+
+| # | Decision | Needed by |
+|---|---|---|
+| D-1 | Final bootstrap super-admin list: the master prompt names three addresses, Prompt 1's text says "four" (the v1.0 fourth was removed) | P1 deployment config |
+| D-2 | **Resolved in Prompt 2: "definition = course"** (co-instructors on an exam definition, assigned by a super-admin or the institution's ADMIN). Still open: finer capabilities inside a course (e.g. a proctor-only assistant) and any separate Course entity | P2 (done) |
+| D-3 | Slot-release / navigation policy: v1.0 contract = forward-only sequential release; v1.1 requires Previous/Next + navigator over released slots | P6/P7 |
+| D-4 | Malware scanner, private object storage and retention for uploads | P4 |
+| D-5 | Judge architecture/provider approval, language set (C, JS/TS), SQL runner qualification | P8 |
+| D-6 | Institution SSO vs verified-email OTP; OTP delivery provider. Prompt 2 delivered the adapter contract, the selection setting and the fail-closed production behavior; **no real provider exists until this is decided** | P2 (provider) |
+| D-7 | Institution proctoring profile contents (thresholds, evidence policy, retention) | P9 |
+| D-8 | Negative marking and multi-select partial-credit semantics; official grade-count definitions | P3/P10 |
+| D-9 | Short-link domain, code format, expiry and rate-limit policy | P7 |
+| D-10 | History strategy for CI (rebase exam branch onto `origin/main` or add a branch trigger) | P11 |
+| D-11 | Legacy `PLACEMENT_CELL_EMAILS` promotion: verified-email/Google-only policy | outside exams |

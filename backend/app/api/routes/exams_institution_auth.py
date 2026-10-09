@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from app.api.exams_dependencies import get_current_exam_user, require_exams_enabled
 from app.core.firebase import db
 from app.domain.institution.auth_service import InstitutionAuthService
-from app.domain.institution.errors import IdentityAlreadyLinkedError
+from app.domain.institution.errors import AccountAlreadyLinkedError, IdentityAlreadyLinkedError
 
 router = APIRouter(
     prefix="/api/exams/v1/auth",
@@ -65,6 +65,9 @@ def link(payload: LinkRequest, user: dict = Depends(get_current_exam_user)) -> d
             institution_id=payload.institution_id, identity_key=payload.identity_key,
             code=payload.code, existing_uid=user["uid"],
         )
-    except IdentityAlreadyLinkedError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (IdentityAlreadyLinkedError, AccountAlreadyLinkedError) as exc:
+        # Audited by the service; an operator resolves it with the `unlink` action.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
     return {"status": "linked", "uid": user["uid"]}

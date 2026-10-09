@@ -11,7 +11,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.api.exams_dependencies import require_exam_faculty, require_exams_enabled
+from app.api.exams_dependencies import require_exams_enabled
+from app.api.exams_scope import require_run_scope
 from app.core.firebase import db
 from app.domain.lockdown.service import LockdownService
 
@@ -29,13 +30,13 @@ class ConfigureLockdownRequest(BaseModel):
 
 
 @router.get("/runs/{run_id}/profile")
-def get_lockdown_profile(run_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def get_lockdown_profile(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
     profile = LockdownService(db).get_or_default_profile(run_id)
     return profile.model_dump(mode="json")
 
 
 @router.post("/runs/{run_id}/profile")
-def configure_lockdown_profile(run_id: str, payload: ConfigureLockdownRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def configure_lockdown_profile(run_id: str, payload: ConfigureLockdownRequest, user: dict = Depends(require_run_scope)) -> dict:
     """Enabling with no keys configured is allowed to be SAVED (so an admin
     can stage the toggle before pasting keys) but `require_seb_admission`
     fails closed (`denied_not_configured`) for any student request against
@@ -52,6 +53,6 @@ def configure_lockdown_profile(run_id: str, payload: ConfigureLockdownRequest, u
 
 
 @router.get("/runs/{run_id}/admission-log")
-def list_admission_log(run_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def list_admission_log(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
     entries = LockdownService(db).list_admission_log(run_id)
     return {"results": [e.model_dump(mode="json") for e in entries]}

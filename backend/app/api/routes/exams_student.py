@@ -12,9 +12,16 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
-from app.api.exams_dependencies import get_current_exam_user, require_exams_enabled, require_seb_admission
+from app.api.exams_dependencies import (
+    get_current_exam_user,
+    require_exams_enabled,
+    require_seb_admission,
+    require_student_run_scope,
+    resolve_principal,
+)
 from app.api.exams_errors import raise_for_conflict_reason, raise_for_domain_error
 from app.core.firebase import db
+from app.domain.authz.policy import can_participate_as_student
 from app.domain.exams.commands import ExamCommandService
 from app.domain.exams.student_service import ExamStudentService
 from app.domain.generation.public_content import build_public_content
@@ -55,6 +62,12 @@ def list_my_runs(response: Response, user: dict = Depends(get_current_exam_user)
     _set_no_store(response)
     service = _service()
     runs = service.runs.list_for_student(user["uid"])
+    if any(run.institution_id for run in runs):
+        principal = resolve_principal(user)
+        runs = [
+            run for run in runs
+            if can_participate_as_student(principal, run_institution_id=run.institution_id)
+        ]
     results = []
     for run in runs:
         attempt = service.attempts.get(run.id, user["uid"])
@@ -71,7 +84,7 @@ def list_my_runs(response: Response, user: dict = Depends(get_current_exam_user)
 
 
 @router.get("/runs/{run_id}/accommodations")
-def get_my_accommodations(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_my_accommodations(run_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     """Own accommodation window only — never another student's (contract:
     'explicit, faculty-authored, never auto-derived'). `camera_waived`
     lets the client skip requesting camera permission entirely for a
@@ -92,7 +105,7 @@ def get_my_accommodations(run_id: str, response: Response, user: dict = Depends(
 
 
 @router.get("/runs/{run_id}/state")
-def get_state(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_state(run_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     _set_no_store(response)
     try:
         attempt = _service().get_state(run_id, user["uid"])
@@ -182,7 +195,7 @@ def save_draft(
 
 
 @router.get("/runs/{run_id}/drafts/{question_id}")
-def get_my_draft(run_id: str, question_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_my_draft(run_id: str, question_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     """Re-hydrates the editor/answer UI after a refresh — never another
     student's draft (ownership is the verified token's own uid, not a
     path/body-supplied one)."""
@@ -194,7 +207,7 @@ def get_my_draft(run_id: str, question_id: str, response: Response, user: dict =
 
 
 @router.get("/runs/{run_id}/drafts")
-def list_my_draft_versions(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def list_my_draft_versions(run_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     """Recovery endpoint for a refreshed/reopened tab — rebuilds the local
     `expected_draft_versions` map final-submit needs, without requiring the
     client to have remembered every slot's version across the whole session."""
@@ -246,7 +259,7 @@ def finish(run_id: str, payload: FinishRequest, response: Response, user: dict =
 
 
 @router.get("/runs/{run_id}/receipt")
-def get_receipt(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_receipt(run_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     """Works even after the deadline — a committed receipt is always
     reconcilable; it never authorizes new/late work (contract #4)."""
     _set_no_store(response)

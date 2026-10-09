@@ -14,6 +14,16 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.api.exams_dependencies import require_exam_faculty, require_exams_enabled
+from app.api.exams_scope import (
+    authorize_blueprint,
+    authorize_definition,
+    authorize_run,
+    authorize_source,
+    require_blueprint_scope,
+    require_candidate_scope,
+    require_generation_request_scope,
+    validate_variant_targets,
+)
 from app.core.config import settings
 from app.core.firebase import db
 from app.domain.generation.commands import GenerationCommandService
@@ -87,6 +97,7 @@ class ReserveVariantsRequest(BaseModel):
 
 @router.post("/blueprints")
 def create_blueprint(payload: CreateBlueprintRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+    authorize_definition(user, payload.exam_definition_id)
     now = datetime.now(timezone.utc)
     blueprint = ExamBlueprint(
         id=uuid4().hex, exam_definition_id=payload.exam_definition_id, title=payload.title,
@@ -97,7 +108,7 @@ def create_blueprint(payload: CreateBlueprintRequest, user: dict = Depends(requi
 
 
 @router.get("/blueprints/{blueprint_id}")
-def get_blueprint(blueprint_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def get_blueprint(blueprint_id: str, user: dict = Depends(require_blueprint_scope)) -> dict:
     blueprint = GenerationRepository(db).get_blueprint(blueprint_id)
     if blueprint is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="blueprint not found")
@@ -105,7 +116,7 @@ def get_blueprint(blueprint_id: str, user: dict = Depends(require_exam_faculty))
 
 
 @router.get("/blueprints/{blueprint_id}/candidates")
-def list_candidates_for_blueprint(blueprint_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def list_candidates_for_blueprint(blueprint_id: str, user: dict = Depends(require_blueprint_scope)) -> dict:
     """Question/test review screen data — every candidate for this
     blueprint, any status, regardless of which generation request made it."""
     candidates = GenerationRepository(db).list_candidates_by_blueprint(blueprint_id)
@@ -141,14 +152,14 @@ def create_and_run_generation_request(
     payload: CreateGenerationRequestPayload, user: dict = Depends(require_exam_faculty)
 ) -> dict:
     repo = GenerationRepository(db)
-    blueprint = repo.get_blueprint(payload.blueprint_id)
-    if blueprint is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="blueprint not found")
+    blueprint = authorize_blueprint(user, payload.blueprint_id)
     slot = next((s for s in blueprint.slots if s.slot_index == payload.slot_index), None)
     if slot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="slot not found on blueprint")
 
     now = datetime.now(timezone.utc)
+    for anchor in payload.source_anchors:
+        authorize_source(user, anchor.source_id)
     bundle = _resolve_source_bundle(payload.source_anchors)
     request = new_generation_request(
         blueprint_id=blueprint.id, slot_index=slot.slot_index, objective_ids=slot.objective_ids,
@@ -198,7 +209,7 @@ def create_and_run_generation_request(
 
 
 @router.get("/generation-requests/{request_id}")
-def get_generation_request(request_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def get_generation_request(request_id: str, user: dict = Depends(require_generation_request_scope)) -> dict:
     request = GenerationRepository(db).get_request(request_id)
     if request is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="request not found")
@@ -206,7 +217,7 @@ def get_generation_request(request_id: str, user: dict = Depends(require_exam_fa
 
 
 @router.get("/candidates/{candidate_id}")
-def get_candidate(candidate_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+def get_candidate(candidate_id: str, user: dict = Depends(require_candidate_scope)) -> dict:
     candidate = GenerationRepository(db).get_candidate(candidate_id)
     if candidate is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="candidate not found")
@@ -214,7 +225,7 @@ def get_candidate(candidate_id: str, user: dict = Depends(require_exam_faculty))
 
 
 @router.post("/candidates/{candidate_id}/review")
-def review_candidate(candidate_id: str, payload: ReviewCandidateRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def review_candidate(candidate_id: str, payload: ReviewCandidateRequest, user: dict = Depends(require_candidate_scope)) -> dict:
     service = GenerationCommandService(db)
     try:
         outcome = service.review_candidate(
@@ -229,8 +240,10 @@ def review_candidate(candidate_id: str, payload: ReviewCandidateRequest, user: d
 
 @router.post("/blueprints/{blueprint_id}/slots/{slot_index}/reserve-variants")
 def reserve_variants_for_slot(
-    blueprint_id: str, slot_index: int, payload: ReserveVariantsRequest, user: dict = Depends(require_exam_faculty)
+    blueprint_id: str, slot_index: int, payload: ReserveVariantsRequest, user: dict = Depends(require_blueprint_scope)
 ) -> dict:
+    run = authorize_run(user, payload.run_id)
+    validate_variant_targets(run, payload.uids)
     service = GenerationCommandService(db)
     result = service.reserve_variants_for_slot(
         run_id=payload.run_id, blueprint_id=blueprint_id, slot_index=slot_index,
