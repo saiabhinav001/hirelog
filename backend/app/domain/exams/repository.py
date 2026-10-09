@@ -330,19 +330,29 @@ class OutboxRepository:
         ref = self._db.collection(OUTBOX_COLLECTION).document(entry.id)
         transaction.set(ref, _model_dict(entry))
 
-    def claim_batch(self, *, limit: int, lease_seconds: int, worker_id: str, now: datetime) -> list[OutboxEntry]:
+    def claim_batch(
+        self, *, limit: int, lease_seconds: int, worker_id: str, now: datetime,
+        kinds: Optional[list[str]] = None, exclude_kinds: tuple[str, ...] = (),
+    ) -> list[OutboxEntry]:
         """Best-effort claim (optimistic — mirrors the existing
         `SearchIndexQueue` Firestore-claim pattern for consistency). A crash
         between claim and mark-processed just means another worker retries
-        after the lease expires, hence handlers MUST be idempotent."""
-        query = (
-            self._db.collection(OUTBOX_COLLECTION)
-            .where(filter=firestore.FieldFilter("processed", "==", False))
-            .limit(max(1, limit))
-        )
+        after the lease expires, hence handlers MUST be idempotent.
+
+        `kinds` selects entries by kind (server-side); `exclude_kinds` skips kinds a loop must
+        not touch (slow jobs run in their own loop). The exclusion over-fetches and filters here
+        to avoid a composite index, so a very long backlog of excluded entries could delay others."""
+        query = self._db.collection(OUTBOX_COLLECTION).where(filter=firestore.FieldFilter("processed", "==", False))
+        if kinds:
+            query = query.where(filter=firestore.FieldFilter("kind", "in", list(kinds)))
+        query = query.limit(max(1, limit) * (4 if exclude_kinds else 1))
         claimed: list[OutboxEntry] = []
         for doc in query.stream():
+            if len(claimed) >= max(1, limit):
+                break
             data = doc.to_dict() or {}
+            if data.get("kind") in exclude_kinds:
+                continue
             claimed_at = data.get("claimed_at")
             if claimed_at:
                 try:

@@ -20,6 +20,9 @@ class UploadStatus(str, Enum):
     REJECTED = "rejected"  # failed structural validation (type/size/macro/encryption)
     PARSED = "parsed"
     PARSE_FAILED = "parse_failed"
+    # Prompt 4 (ADR 0020)
+    PARSING = "parsing"
+    DELETED = "deleted"  # bytes and extracted text removed; metadata and audit kept
 
 
 class SourceReviewStatus(str, Enum):
@@ -44,6 +47,18 @@ class UploadedSource(BaseModel):
     storage_ref: str  # private storage path — never a public URL
     created_at: datetime
     updated_at: datetime
+    # Prompt 4 (ADR 0020) — all optional so legacy documents still validate.
+    source_kind: str = "file"  # "file" | "url"
+    origin_url: Optional[str] = None  # URL as submitted
+    final_url: Optional[str] = None  # URL after validated redirects (the canonical URL recorded)
+    fetched_at: Optional[datetime] = None
+    ingest_attempt: int = 0  # bumped by retry; a queued job for an older attempt is ignored
+    failure_code: Optional[str] = None  # stable machine code; `rejection_reason` is the human message
+    latest_extracted_version_id: Optional[str] = None
+    replaces_upload_id: Optional[str] = None
+    superseded_by_upload_id: Optional[str] = None
+    deleted_at: Optional[datetime] = None
+    deleted_by: Optional[str] = None
 
 
 class ExtractedAnchor(BaseModel):
@@ -53,6 +68,17 @@ class ExtractedAnchor(BaseModel):
     page: Optional[int] = None
     paragraph_index: int
     text: str = Field(max_length=4000)
+    section: Optional[str] = None  # nearest preceding heading, when the format has headings
+
+
+class ExtractionWarning(BaseModel):
+    """Content the parser could NOT read, shown to the teacher so a silent
+    omission is never mistaken for coverage."""
+
+    code: str  # e.g. "tables_not_extracted", "images_not_extracted", "pages_without_text", "truncated"
+    message: str = Field(max_length=500)
+    count: Optional[int] = None
+    pages: list[int] = Field(default_factory=list, max_length=200)
 
 
 class ExtractedVersion(BaseModel):
@@ -67,6 +93,14 @@ class ExtractedVersion(BaseModel):
     anchors: list[ExtractedAnchor] = Field(default_factory=list)
     total_pages: Optional[int] = None
     truncated: bool = False  # true if MAX_PAGES/MAX_EXTRACTED_TEXT_BYTES was hit
+    # Prompt 4 (ADR 0020)
+    content_sha256: Optional[str] = None  # hash of the extracted text, in anchor order
+    parser: Optional[str] = None
+    warnings: list[ExtractionWarning] = Field(default_factory=list)
+    stats: dict = Field(default_factory=dict)
+    ingest_attempt: Optional[int] = None
+    anchor_count: Optional[int] = None
+    chunk_count: int = 0  # > 0: anchors are stored in the `anchor_chunks` subcollection
 
 
 class RightsEvidence(BaseModel):

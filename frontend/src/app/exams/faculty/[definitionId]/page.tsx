@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
+import { SourceUploadPanel } from "@/components/exams/SourceUploadPanel";
 import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
 import { examApiFetch } from "@/lib/examsApi";
@@ -181,9 +182,10 @@ function DefinitionDetail() {
       <section className="card mt-6 p-5">
         <h2 className="text-lg font-semibold">Reference materials</h2>
         <p className="mt-1 text-sm text-[var(--text-muted)]">
-          Course notes, slides, or documentation your questions will be generated from. Add a link below — it must
-          be approved before it can be used for question generation.
+          Course notes, slides, or documentation your questions will be generated from. Upload documents or add a link
+          below — each one must be approved before it can be used for question generation.
         </p>
+        <SourceUploadPanel getToken={getToken} onSourcesChanged={load} />
         <form onSubmit={handleAddSourceUrl} className="mt-3 flex gap-3">
           <input className="input-field flex-1" placeholder="https://approved-source.example.edu/notes" value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} />
           <button className="btn-secondary" type="submit">Add reference link</button>

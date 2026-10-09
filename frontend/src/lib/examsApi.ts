@@ -12,7 +12,7 @@ export async function examApiFetch<T>(path: string, options: RequestInit = {}, t
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  if (options.body && !headers.has("Content-Type")) {
+  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -33,8 +33,51 @@ export async function examApiFetch<T>(path: string, options: RequestInit = {}, t
   }
 
   if (!response.ok) {
-    const message = (data?.detail as string) || (data?.message as string) || "Request failed";
-    throw new Error(typeof message === "string" ? message : JSON.stringify(message));
+    throw new Error(errorMessage(data));
   }
   return data as T;
+}
+
+/** Structured errors (`{code, message}`) show their message; plain strings are unchanged. */
+function errorMessage(data: Record<string, unknown>): string {
+  const detail = data?.detail;
+  if (detail && typeof detail === "object" && typeof (detail as { message?: unknown }).message === "string") {
+    return (detail as { message: string }).message;
+  }
+  const message = (detail as string) || (data?.message as string) || "Request failed";
+  return typeof message === "string" ? message : JSON.stringify(message);
+}
+
+/**
+ * Multipart upload with byte progress (fetch cannot report upload progress). Same pinned origin,
+ * bearer token and error handling as `examApiFetch`; the browser sets the multipart boundary.
+ */
+export function examApiUpload<T>(
+  path: string,
+  file: File,
+  token?: string,
+  onProgress?: (fraction: number) => void
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `${EXAMS_API_BASE}${path}`);
+    if (token) request.setRequestHeader("Authorization", `Bearer ${token}`);
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) onProgress(event.loaded / event.total);
+    };
+    request.onerror = () => reject(new Error("The upload could not reach the server. Check your connection and try again."));
+    request.onload = () => {
+      let data: Record<string, unknown> = {};
+      try {
+        data = request.responseText ? JSON.parse(request.responseText) : {};
+      } catch {
+        data = { message: request.responseText };
+      }
+      if (request.status >= 200 && request.status < 300) resolve(data as T);
+      else reject(new Error(errorMessage(data)));
+    };
+    const form = new FormData();
+    form.append("file", file);
+    request.send(form);
+  });
 }

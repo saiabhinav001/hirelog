@@ -116,6 +116,7 @@ SCOPE_FOR_PATH_PARAM = {
     "candidate_id": "require_candidate_scope",
     "request_id": "require_generation_request_scope",
     "source_id": "require_source_scope",
+    "upload_id": "require_upload_scope",
     "submission_id": "require_submission_scope",
     "review_id": "require_short_answer_review_scope",
     "snapshot_id": "require_snapshot_scope",
@@ -124,7 +125,7 @@ SCOPE_FOR_PATH_PARAM = {
 # Path parameters that are NOT resource ids of their own: a position, a target
 # inside an already-scoped run, a command verb, or a single-use ticket whose
 # issuing route is itself scoped (ticket redemption is bound to the issuer).
-UNSCOPED_PATH_PARAMS = {"slot_index", "question_id", "uid", "command", "ticket_id"}
+UNSCOPED_PATH_PARAMS = {"slot_index", "question_id", "uid", "command", "ticket_id", "version_id"}
 
 
 def _scope_requirements(method: str, path: str, params: list[str]) -> tuple[set[str], list[str]]:
@@ -251,7 +252,8 @@ INLINE_SCOPE_TOKENS = {
     ),
     ("POST", "/faculty/kt/sources/from-upload"): ("authorize_upload",),
     ("POST", "/faculty/kt/sources/from-url"): ('created_by=user["uid"]',),
-    ("POST", "/faculty/kt/uploads"): ('uploaded_by=user["uid"]',),
+    ("POST", "/faculty/kt/uploads"): ('owner_uid=user["uid"]',),
+    ("GET", "/faculty/kt/uploads"): ('list_by_owner(user["uid"])',),
     ("GET", "/faculty/kt/sources"): ("filter_accessible_sources",),
     ("GET", "/faculty/judge/short-answer-reviews/pending"): ("filter_reviews_for_user",),
     ("GET", "/faculty/institutions"): ("teacher_institution_ids", "is_super_admin"),

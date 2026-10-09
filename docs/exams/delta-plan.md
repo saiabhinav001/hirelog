@@ -1,4 +1,4 @@
-# Hirelog Exams — phased delta plan (confirmed gaps only)
+﻿# Hirelog Exams — phased delta plan (confirmed gaps only)
 
 Prompt 0 (v1.1), audited 2026-10-09 at `5b0ad3b`. Every item below traces to a row classified `EXISTS_BUT_DEFECTIVE`, `PARTIALLY_EXISTS`,
 `MISSING` or `BLOCKED_BY_DECISION` in [requirements-traceability.md](requirements-traceability.md); rows classified `EXISTS_AND_VERIFIED` are
@@ -18,7 +18,7 @@ planned. The only brand-new persisted concepts (Prompt 1) have no existing home:
 | **1 — authorization & roles** | AUTH-01/02/04/05/06/09, LIV-02, GRD-07, JDG-12, ATT-02 (membership), tests for AUTH-03/07/08/10/11 | Pure role policy + verified-email staff bootstrap with UID binding/audit; membership freshness in `get_current_exam_user`; owner/institution scope dependencies on every faculty route; student run scope on every student route; optional `institution_id` on definition/run | `EXAM_SUPER_ADMIN_EMAILS`, `EXAM_ALLOW_UNVERIFIED_STAFF_EMAIL` (dev only) | Behavior tightening for pilots (see migration notes) |
 | 2 — roster / linking / super-admin management **(implemented — see §5; the real OTP provider still waits on D-6)** | ID-03 (CSV upload), ID-05/06/08 (delivery, audit, recovery), ID-07, ID-09, AUTH-13 | `multipart` CSV onto existing dry-run/apply; real OTP delivery adapter behind `OtpDelivery`; persisted link-conflict audit; teacher assignment API after D-2 | provider env vars | Decisions D-2, D-6 |
 | 3 — domain, policy, state machines **(implemented — see §6)** | **DOM-12/TMR-02 (finalization sweeper never started — High)**, DOM-03/04/07/09/11, TMR-03, SCH-01, MRK-01 | Start `ExamFinalizationSweeper` from the existing `lifespan` loop pattern; actor/reason on commands and extensions; optional policy/blueprint fields; preview summary; publish validation; per-attempt commands | `EXAM_FINALIZATION_SWEEP_ENABLED` (default **on** — the missing sweep is a defect), policy fields optional | `extra="forbid"` on `ExamPolicy` affects rollback (compat §4) |
-| 4 — ingestion | ING-01/02/04/05/06/07 | Private object storage via the existing `evidence_storage` adapter pattern; scanner adapter honouring `EXAM_MALWARE_SCANNER_ENDPOINT`; parse as an outbox job; extracted-text hash; retry/replace/delete routes | storage / scanner env vars | Decision D-4 |
+| 4 — ingestion **(implemented — see §7; real ClamAV/bucket still wait on D-4)** | ING-01/02/04/05/06/07 | Private object storage via the existing `evidence_storage` adapter pattern; scanner adapter honouring `EXAM_MALWARE_SCANNER_ENDPOINT`; parse as an outbox job; extracted-text hash; retry/replace/delete routes | storage / scanner env vars | Decision D-4 |
 | 5 — blueprint, generation, review | GEN-01/02/03/05/07/08/09/11, DOM-05, RND-01 | Resolve **real** anchor text and reject unknown anchors (today placeholder excerpts); capacity summary + publish gate; answer-key / near-duplicate / option-shuffle validation; candidate edit → new version + approval reset; injection fixtures | optional blueprint fields | Highest correctness gap in the pipeline |
 | 6 — attempts, drafts, immutable submit | ATT-02 (slot validation, previous access), ATT-06, ATT-08, UI-03/05 backend | Validate `question_id` against released slot; read access to released slots; mark-for-review flag on drafts; emulator interleaving tests | none | Decision D-3 |
 | 7 — timer, navigator, themes, control room | UI-01/02/03/04/05/11/12, SHR-01, LIV-01 freshness | Ticking server-offset timer; threshold warnings; navigator + counts; short link; missing teacher controls | policy thresholds | Decisions D-3, D-9 |
@@ -148,3 +148,39 @@ P5), randomization/option shuffle (P5), time-remaining thresholds (P7), real-Fir
 - [x] Every new route is bound to run/definition scope; every state change has actor, reason (where applicable) and an audit event written in the same transaction.
 - [x] Full backend suite (`EXAMS_ENABLED=false`: 947 passed) and ruff pass; frontend not changed.
 - [x] Migration notes and ADR 0019 written; no production data touched; no secrets or addresses added. *(Real Firestore/emulator transaction behavior, index needs at scale and live websocket fan-out from the sweeper were not verified.)*
+
+## 7. Phase 4 — source ingestion (implemented, ADR 0020)
+
+Phase 4 was gated on decision D-4 (scanner, private storage, retention). The adapter contract, the storage seam and the teacher-facing lifecycle shipped; a real
+ClamAV, a real bucket and an upload retention window are deployment/decision items and are not claimed.
+
+| Area | Change |
+|---|---|
+| `backend/app/domain/kt/ingestion.py` (new) | `KtIngestionService` (accept, retry, delete, worker `process`) and `KtIngestionOutboxHandler`; intake = bytes + upload row + outbox job + audit in one transaction |
+| `backend/app/domain/kt/parse_isolation.py`, `parse_worker.py` (new) | Parse in a killable child process: scrubbed environment, memory cap (POSIX), deadline, output cap, classified failures |
+| `backend/app/domain/kt/parsers.py`, `file_validation.py`, `malware_scan.py`, `url_resolver.py` | HTML parser; sections, warnings and stats; no truncation of long paragraphs; extension + package checks; fetched-bytes classification; `ClamdScanner` + `build_scanner`; `is_global`, mapped IPv6, credentials/ports, relative redirects, streaming size cap (`LimitedHttpClient`), allowlist, fetch time |
+| `backend/app/domain/kt/storage.py` (new), `repository.py`, `models.py` | Private storage seam (evidence adapters, `kt-quarantine/`); chunked, create-only extracted versions; additive upload/version fields; new statuses `parsing`, `deleted` |
+| `backend/app/api/routes/exams_kt.py`, `exams_scope.py` | Async upload (`202`), list/detail/anchors, retry, replace, delete; URL sources through the pipeline; approval pins the parsed version; `require_upload_scope`; limiters |
+| `backend/app/exam_main.py`, `domain/exams/outbox.py`, `exams/repository.py` | `_kt_ingestion_loop`; outbox claim/drain accept `kinds` / `exclude_kinds` (main loop excludes `kt_ingest`) |
+| Config | `EXAM_KT_MAX_ACTIVE_UPLOADS_PER_USER`, `EXAM_KT_PARSE_MEMORY_MB`, `EXAM_KT_URL_ALLOWED_HOSTS`; `EXAM_MALWARE_SCANNER_ENDPOINT` is now honoured |
+| Frontend | `SourceUploadPanel` (progress, status, failure reason, retry, replace, delete, "not read" warnings, register as source) on the faculty exam page; `examApiUpload`; multipart-safe `examApiFetch` |
+| Tests | New backend: `kt_fixtures.py`, `test_kt_parsing_and_validation.py`, `test_kt_scanner_and_urls.py`, `test_kt_pipeline.py`, `test_kt_routes.py`; route-guard tripwires updated; new frontend: `SourceUploadPanel.test.tsx`, `examsApi.test.ts` |
+| Docs | ADR 0020 (+ index), compat §9, traceability §4.1, integration map |
+
+Out of Phase 4 on purpose: OCR and table/image extraction (need a qualified parser), an upload retention sweeper (D-4), a real ClamAV/bucket, DNS-pinning or an
+egress proxy for URL fetches (Phase 11), prompt-injection fixtures against the generation provider (Phase 5), replacing the placeholder excerpts generation still uses
+(Phase 5 reads the stored anchors).
+
+### Phase 4 acceptance checklist
+
+- [x] Uploads go to private quarantine storage under generated names; a failed intake leaves no orphan bytes; production refuses uploads without private storage.
+- [x] Signature, MIME and extension must agree; malformed, truncated, encrypted, macro, bomb, empty, oversized and spoofed files are refused with a reason and kept as history.
+- [x] Scanner honoured when configured (clean / infected / unavailable are distinct); fail closed otherwise with an actionable message.
+- [x] Parsing runs in a bounded worker in a killable child process; timeout, crash, corrupt and encrypted documents settle with stable codes; one automatic retry for crash/timeout.
+- [x] Extracted versions are immutable, hashed, anchored (page/section), chunked for Firestore, and written once under redelivery and concurrency.
+- [x] Unread content (tables, images, scanned pages, undecodable text, active content, hidden HTML, truncation) is reported; a fully scanned PDF is refused rather than "parsed".
+- [x] Status, failure reason, retry, replace and delete exist (API + UI) with history and audit; delete is refused while an approved source cites the upload.
+- [x] URL sources: SSRF classes, every redirect hop, size/time bounds, host allowlist, canonical URL + fetch time; fetched bytes are classified by content and parsed like uploads.
+- [x] Duplicate, multiple, replaced and deleted uploads are tested; an unread source can no longer be approved.
+- [x] Full backend suite (`EXAMS_ENABLED=false`: 1117 passed), ruff, frontend `tsc` and Vitest pass (one unrelated timeout under full-suite load, passes alone).
+- [x] Migration notes and ADR 0020 written; no production data touched; no secrets or addresses added. *(Real ClamAV/bucket, POSIX memory limit, composite-index behavior and real network not verified.)*

@@ -25,5 +25,6 @@ including decisions to deliberately **not** build something yet.
 | [0017](0017-exam-role-policy-and-resource-scope.md) | Server-owned exam role policy, verified staff bootstrap, and resource scope | Accepted |
 | [0018](0018-roster-linking-otp-and-teacher-assignment.md) | Roster import, account linking, OTP delivery and teacher assignment | Accepted |
 | [0019](0019-exam-domain-commands-and-finalization.md) | Exam domain: publication snapshot, commands, finalization and schedule | Accepted |
+| [0020](0020-durable-source-ingestion.md) | Durable, private source ingestion | Accepted |
 
 See [../architecture.md](../architecture.md) for the system diagram and request flow.

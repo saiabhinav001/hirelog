@@ -4,7 +4,7 @@
  * instead of repeating them per page.
  */
 
-import { examApiFetch } from "@/lib/examsApi";
+import { examApiFetch, examApiUpload } from "@/lib/examsApi";
 
 export type ExamDefinition = {
   id: string;
@@ -89,6 +89,44 @@ export type ApprovedSourceSummary = {
   kind: "upload" | "url";
   review_status: "pending" | "approved" | "rejected";
   url?: string;
+  upload_id?: string | null;
+};
+
+export type KtUploadStatus =
+  | "quarantined"
+  | "scanning"
+  | "clean"
+  | "parsing"
+  | "parsed"
+  | "parse_failed"
+  | "scan_unavailable"
+  | "infected"
+  | "rejected"
+  | "deleted";
+
+export type KtUpload = {
+  id: string;
+  filename: string;
+  kind: string | null;
+  source_kind: "file" | "url";
+  size_bytes: number;
+  status: KtUploadStatus;
+  failure_code: string | null;
+  failure_reason: string | null;
+  ingest_attempt: number;
+  final_url: string | null;
+  latest_extracted_version_id: string | null;
+  replaces_upload_id: string | null;
+  superseded_by_upload_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KtExtractionWarning = { code: string; message: string; count: number | null; pages: number[] };
+
+export type KtUploadDetail = KtUpload & {
+  versions: { id: string; version_number: number; anchor_count: number; total_pages: number | null; truncated: boolean; warnings: KtExtractionWarning[] }[];
+  sources: { id: string; review_status: string }[];
 };
 
 export type IncidentLogEntry = {
@@ -289,6 +327,27 @@ export const examEndpoints = {
       body: JSON.stringify({ decision, rights_statement: rightsStatement ?? null }),
     }),
   getRun: (token: string | undefined, runId: string) => authed<ExamRunSummary>(`/api/exams/v1/faculty/runs/${runId}`, token),
+  listKtUploads: (token?: string) => authed<{ results: KtUpload[] }>("/api/exams/v1/faculty/kt/uploads", token),
+  getKtUpload: (token: string | undefined, uploadId: string) =>
+    authed<KtUploadDetail>(`/api/exams/v1/faculty/kt/uploads/${uploadId}`, token),
+  uploadKtFile: (token: string | undefined, file: File, onProgress?: (fraction: number) => void) =>
+    examApiUpload<{ upload_id: string; status: KtUploadStatus }>("/api/exams/v1/faculty/kt/uploads", file, token, onProgress),
+  replaceKtUpload: (token: string | undefined, uploadId: string, file: File, onProgress?: (fraction: number) => void) =>
+    examApiUpload<{ upload_id: string; status: KtUploadStatus }>(
+      `/api/exams/v1/faculty/kt/uploads/${uploadId}/replace`,
+      file,
+      token,
+      onProgress
+    ),
+  retryKtUpload: (token: string | undefined, uploadId: string) =>
+    authed<KtUpload>(`/api/exams/v1/faculty/kt/uploads/${uploadId}/retry`, token, { method: "POST" }),
+  deleteKtUpload: (token: string | undefined, uploadId: string) =>
+    authed<KtUpload>(`/api/exams/v1/faculty/kt/uploads/${uploadId}`, token, { method: "DELETE" }),
+  registerSourceFromUpload: (token: string | undefined, uploadId: string) =>
+    authed<ApprovedSourceSummary>("/api/exams/v1/faculty/kt/sources/from-upload", token, {
+      method: "POST",
+      body: JSON.stringify({ upload_id: uploadId }),
+    }),
   runCommand: (
     token: string | undefined,
     runId: string,

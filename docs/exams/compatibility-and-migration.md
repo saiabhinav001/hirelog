@@ -281,3 +281,69 @@ defects in ADR 0019 and fails to read runs that carry the new policy fields (see
 
 Real Firestore transaction contention and the emulator (tests use an in-memory Firestore with optimistic transactions and thread jitter), read cost of the sweep at
 scale, live websocket fan-out from the sweeper, and any browser flow. The frontend was not changed and has no UI for these routes yet.
+
+## 9. Prompt 4 migration notes
+
+Implemented as [ADR 0020](../adr/0020-durable-source-ingestion.md). **No data migration or backfill is needed or performed**; no secrets or addresses were added.
+
+### 9.1 Configuration
+
+| Setting (exam API environment) | Default | Action |
+|---|---|---|
+| `EXAM_EVIDENCE_STORAGE_BUCKET` | unset | **Now required in production for source uploads** (`503 kt_storage_not_configured` otherwise; the ingestion loop is not started). Uploaded bytes use the `kt-quarantine/` prefix of the same bucket. Give the bucket a lifecycle/retention policy: the app has no retention sweeper for sources (decision D-4) |
+| `EXAM_MALWARE_SCANNER_ENDPOINT` | unset | **Now honoured**: `host:port` (or `tcp://host:port`) of a clamd daemon. Unset or invalid keeps every upload at `scan_unavailable` (nothing is read) |
+| `EXAM_KT_MAX_ACTIVE_UPLOADS_PER_USER` | `200` | Per-teacher cap on live uploads (rejected and deleted rows do not count) |
+| `EXAM_KT_PARSE_MEMORY_MB` | `1024` | Address-space limit of the parser child process (POSIX only) |
+| `EXAM_KT_URL_ALLOWED_HOSTS` | empty | Comma-separated host suffixes URL sources may come from; empty = any public host |
+
+The parser child needs the same Python environment as the API (it runs `python -m app.domain.kt.parse_worker` with the backend directory on `PYTHONPATH`).
+
+### 9.2 Behavior changes operators and teachers will see
+
+| Area | Before | Now |
+|---|---|---|
+| `POST …/kt/uploads` | Parsed inside the request, returned `{status: parsed, extracted_version_id, anchor_count}` (or `scan_unavailable`) | `202 {upload_id, status: "quarantined", queued: true}`; poll `GET …/uploads/{id}` |
+| Invalid upload | `422` with a string `detail`; a rejected row was stored | `422` with `{code: "invalid_file", message, upload_id}`; same history row; the extension must now match the content |
+| `POST …/kt/sources/from-url` | Fetched, bytes discarded, upload row stuck at `quarantined` | `202`; bytes stored, scanned, parsed; HTML/PDF/DOCX/TXT accepted by content; `422 unsafe_or_unreachable_url` / `invalid_file` on refusal |
+| Approving a source | Possible with no extracted text (always for URL sources) | `409 content_not_ready` until the upload is `parsed`; approval pins `extracted_version_id` |
+| Scanned PDF | "Parsed" with zero passages | `parse_failed / no_text` with an explanation |
+| Tables, images, scanned pages | Silently dropped | Listed as warnings on the extracted version |
+| Duplicates / quota | Allowed | `409 duplicate_upload` (same owner, same bytes) / `409 upload_limit_reached`; `429` when uploading too fast |
+| Default scanner (none configured) | Status `scan_unavailable`, no message | Same status, with "ask an administrator to enable scanning, then retry" |
+
+### 9.3 New routes (all under `/api/exams/v1/faculty/kt`, behind the exam flag, upload scope = owner / institution admin / super-admin)
+
+| Route | Purpose |
+|---|---|
+| `GET /uploads` | Own uploads, newest first (`include_deleted`) |
+| `GET /uploads/{id}` | Status, failure code/reason, versions (counts, hash, warnings), registered sources |
+| `GET /uploads/{id}/versions/{version_id}/anchors?offset=&limit=` | Extracted text, paged (untrusted data: show as plain text) |
+| `POST /uploads/{id}/retry` | New attempt for `parse_failed` / `scan_unavailable` |
+| `POST /uploads/{id}/replace` | Multipart corrected file; new upload linked to the old one |
+| `DELETE /uploads/{id}` | Remove bytes and text; keep the row and audit; refused (`409`) while an approved source cites it |
+
+### 9.4 Data and schema
+
+- **Additive optional fields:** `UploadedSource.source_kind/origin_url/final_url/fetched_at/ingest_attempt/failure_code/latest_extracted_version_id/replaces_upload_id/superseded_by_upload_id/deleted_at/deleted_by`;
+  `ExtractedAnchor.section`; `ExtractedVersion.content_sha256/parser/warnings/stats/ingest_attempt/anchor_count/chunk_count`; new `UploadStatus` values `parsing`, `deleted`.
+- **New subcollection** `kt_uploads/{id}/extracted_versions/{version}/anchor_chunks`; versions written before this change keep their anchors inline and read as before.
+- **Outbox:** new kind `kt_ingest` (`run_id` is empty). `claim_batch` / `drain_outbox_once` gained optional `kinds` / `exclude_kinds`.
+- Audit events reuse `exam_authz_audit` (`kt_upload_accepted|rejected|replaced|retried|deleted|parsed|failed|infected|scan_unavailable`).
+- New queries are single-field (`uploaded_by`, `sha256`, `upload_id`); the ingest loop uses `processed == false` plus `kind in [...]` (equality + `in`).
+
+### 9.5 Operator procedures
+
+- **Enable reading of documents:** provision a bucket (`EXAM_EVIDENCE_STORAGE_BUCKET`) and a clamd daemon (`EXAM_MALWARE_SCANNER_ENDPOINT`), restart, then teachers use **Retry** on uploads that show "Not scanned".
+- **A document will not read:** the status shows the reason. `no_text` (scanned), `encrypted`, `corrupt`: ask for a text-based or unprotected file and **Replace**. `parse_timeout` / `parse_crash`: **Retry**, then replace with a simpler export.
+- **Remove a confidential upload:** **Delete** (bytes and text go; the metadata row and audit remain). If an approved source depends on it the request is refused — that source backs published questions.
+- **Stuck `parsing`:** the job is redelivered after its lease; after the last delivery it settles as `parse_failed / processing_error` and can be retried.
+
+### 9.6 Rollback
+
+Turn ingestion off by leaving the bucket unset (uploads return 503) or the scanner unset (nothing is read). Reverting the Prompt 4 commit restores inline parsing and the defects in ADR 0020;
+uploads created meanwhile keep their stored bytes and rows (the previous code ignores the extra fields) but their anchors are in `anchor_chunks`, which the previous code does not read.
+
+### 9.7 Not verified in this phase
+
+A real ClamAV daemon, a real bucket, the POSIX memory limit, Firestore behavior of the equality + `in` outbox query, parser behavior on real-world (not synthetic) documents, and any browser flow
+against a running API. OCR and table/image extraction are not implemented.

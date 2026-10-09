@@ -345,6 +345,11 @@ def require_source_scope(source_id: str, user: dict = Depends(require_exam_facul
     return user
 
 
+def require_upload_scope(upload_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
+    authorize_upload(user, upload_id)
+    return user
+
+
 def require_submission_scope(submission_id: str, user: dict = Depends(require_exam_faculty)) -> dict:
     authorize_submission(user, submission_id)
     return user

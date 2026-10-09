@@ -60,13 +60,21 @@ def drain_outbox_once(
     lease_seconds: int = 60,
     max_attempts: int = 5,
     worker_id: str | None = None,
+    kinds: list[str] | None = None,
+    exclude_kinds: tuple[str, ...] = (),
 ) -> int:
     """Process up to `limit` unprocessed entries once. Returns count handled
     (successfully or exhausted). Callers loop this on a timer/thread, mirroring
-    `SearchIndexQueue`'s existing poll pattern."""
+    `SearchIndexQueue`'s existing poll pattern. `kinds` / `exclude_kinds` let a slow job
+    type (document parsing) run in its own loop without stalling the others."""
 
     wid = worker_id or f"exam-outbox-{uuid4().hex[:8]}"
-    entries = repo.claim_batch(limit=limit, lease_seconds=lease_seconds, worker_id=wid, now=now)
+    selection: dict = {}
+    if kinds:
+        selection["kinds"] = kinds
+    if exclude_kinds:
+        selection["exclude_kinds"] = exclude_kinds
+    entries = repo.claim_batch(limit=limit, lease_seconds=lease_seconds, worker_id=wid, now=now, **selection)
     handled = 0
     for entry in entries:
         try:

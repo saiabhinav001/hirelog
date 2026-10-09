@@ -63,8 +63,8 @@ class _DocRef:
             time.sleep(random.uniform(0, self._db.jitter))
         return snapshot
 
-    def set(self, data: dict) -> None:
-        self._db.apply([("set", self, data)])
+    def set(self, data: dict, merge: bool = False) -> None:
+        self._db.apply([("merge" if merge else "set", self, data)])
 
     def update(self, data: dict) -> None:
         self._db.apply([("update", self, data)])
@@ -219,7 +219,7 @@ class FakeFirestore:
             elif kind == "update":
                 if not exists:
                     raise NotFound(f"document {'/'.join(ref.path)} not found")
-            elif kind == "set":
+            elif kind in ("set", "merge"):
                 shadow[ref.path] = True
             elif kind == "delete":
                 shadow[ref.path] = False
@@ -229,7 +229,7 @@ class FakeFirestore:
                 self.docs.pop(ref.path, None)
                 continue
             record = self.docs.get(ref.path)
-            if kind == "update":
+            if kind == "update" or (kind == "merge" and record is not None):
                 merged = dict(record["data"])
                 merged.update(copy.deepcopy(data))
                 self.docs[ref.path] = {"data": merged, "rev": self._rev}

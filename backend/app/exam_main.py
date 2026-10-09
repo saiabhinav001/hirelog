@@ -39,6 +39,7 @@ from app.core.logging_config import configure_logging
 from app.domain.exams.clock import system_clock
 from app.domain.exams.outbox import CompositeOutboxHandler, LoggingNoopHandler, drain_outbox_once
 from app.domain.exams.repository import OutboxRepository
+from app.domain.kt.ingestion import KT_INGEST_KIND
 
 configure_logging(json_logs=settings.ENV.strip().lower() == "production")
 logger = logging.getLogger("hirelog.exams.api")
@@ -110,6 +111,25 @@ def _similarity_provider():
     return DeterministicFakeSimilarityProvider()
 
 
+def _kt_ingestion_handler():
+    """Scan + parse for uploaded sources (docs/adr/0020). Absent when private storage is not configured
+    in production: uploads are refused at the route in that case, so there is nothing to process."""
+    from app.api.routes.exams_kt import _scanner
+    from app.domain.kt.ingestion import KtIngestionOutboxHandler, KtIngestionService
+    from app.domain.kt.storage import StorageNotConfiguredError, kt_storage
+
+    try:
+        storage = kt_storage()
+    except StorageNotConfiguredError:
+        logger.warning("KT ingestion worker not started: EXAM_EVIDENCE_STORAGE_BUCKET is not configured")
+        return None
+    service = KtIngestionService(
+        db, storage, _scanner(), max_active_uploads=settings.EXAM_KT_MAX_ACTIVE_UPLOADS_PER_USER,
+        parse_memory_mb=settings.EXAM_KT_PARSE_MEMORY_MB,
+    )
+    return KtIngestionOutboxHandler(service, max_attempts=settings.EXAM_OUTBOX_MAX_ATTEMPTS)
+
+
 def _outbox_drain_loop() -> None:
     from app.domain.judge.outbox_handler import GradingTriggerOutboxHandler
     from app.domain.judge.runtime_allowlist import default_allowlist
@@ -127,10 +147,32 @@ def _outbox_drain_loop() -> None:
                 limit=25,
                 lease_seconds=settings.EXAM_OUTBOX_LEASE_SECONDS,
                 max_attempts=settings.EXAM_OUTBOX_MAX_ATTEMPTS,
+                exclude_kinds=(KT_INGEST_KIND,),
             )
         except Exception:
             logger.exception("exam outbox drain tick failed")
         _stop_event.wait(2.0)
+
+
+def _kt_ingestion_loop() -> None:
+    """Scan + parse uploaded sources, one at a time, on the shared outbox. Parsing can take ~a minute, so it
+    has its own loop and a longer lease: grading and run commands never wait behind a document."""
+    handler = _kt_ingestion_handler()
+    if handler is None:
+        return
+    repo = OutboxRepository(db)
+    while not _stop_event.is_set():
+        try:
+            handled = drain_outbox_once(
+                repo, handler, now=system_clock.now(), limit=1,
+                lease_seconds=max(120, settings.EXAM_OUTBOX_LEASE_SECONDS * 2),
+                max_attempts=settings.EXAM_OUTBOX_MAX_ATTEMPTS, kinds=[KT_INGEST_KIND],
+            )
+        except Exception:
+            logger.exception("kt ingestion drain tick failed")
+            handled = 0
+        if not handled:
+            _stop_event.wait(2.0)
 
 
 def _judge_sweep_loop() -> None:
@@ -218,6 +260,7 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_bg_bootstrap, daemon=True).start()
     if settings.EXAMS_ENABLED:
         threading.Thread(target=_outbox_drain_loop, daemon=True).start()
+        threading.Thread(target=_kt_ingestion_loop, daemon=True).start()
         threading.Thread(target=_judge_sweep_loop, daemon=True).start()
         threading.Thread(target=_proctoring_stale_incident_sweep_loop, daemon=True).start()
         threading.Thread(target=_evidence_retention_sweep_loop, daemon=True).start()

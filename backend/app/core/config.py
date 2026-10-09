@@ -149,6 +149,14 @@ class Settings(BaseSettings):
     # (never "clean") and DeterministicFakeProvider (test/dev only, no live
     # model). Configuring these is an institutional decision, not a code change.
     EXAM_MALWARE_SCANNER_ENDPOINT: Optional[str] = None
+    # Prompt 4 (docs/adr/0020): `host:port` of a clamd daemon enables the ClamdScanner
+    # adapter; unset/invalid keeps the fail-closed default. Uploaded bytes need private
+    # storage: EXAM_EVIDENCE_STORAGE_BUCKET (same bucket, `kt-quarantine/` prefix) —
+    # in production uploads are refused (503) while it is unset.
+    EXAM_KT_MAX_ACTIVE_UPLOADS_PER_USER: int = 200
+    EXAM_KT_PARSE_MEMORY_MB: int = 1024
+    # Comma-separated host suffixes a URL source may come from; empty = any public host.
+    EXAM_KT_URL_ALLOWED_HOSTS: str = ""
     EXAM_GENERATION_PROVIDER_BASE_URL: Optional[str] = None
     EXAM_GENERATION_PROVIDER_API_KEY: Optional[str] = None
 
@@ -241,6 +249,9 @@ class Settings(BaseSettings):
             for email in self.PLACEMENT_CELL_EMAILS.split(",")
             if email.strip()
         }
+
+    def exam_kt_url_allowed_hosts(self) -> list[str]:
+        return [h.strip().lower() for h in self.EXAM_KT_URL_ALLOWED_HOSTS.split(",") if h.strip()]
 
     def exam_faculty_emails_set(self) -> set[str]:
         return {

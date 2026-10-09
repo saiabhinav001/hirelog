@@ -1,4 +1,4 @@
-# Hirelog Exams — integration map (existing components and their callers)
+﻿# Hirelog Exams — integration map (existing components and their callers)
 
 Audited 2026-10-09 at `5b0ad3b` (pre-Prompt-1). Read-only evidence: every row below was read from code, not inferred from
 design documents. Companion documents: [baseline.md](baseline.md), [requirements-traceability.md](requirements-traceability.md),
@@ -76,7 +76,7 @@ All routers carry router-level `dependencies=[Depends(require_exams_enabled)]` (
 |---|---|---|---|
 | `exams_faculty` (`/api/exams/v1/faculty`) | POST `/definitions`; POST `/definitions/{id}/publish`; POST `/runs`; GET `/runs/{id}`; POST `/runs/{id}/commands/{publish\|release\|pause\|resume\|close\|end}`; POST `/runs/{id}/attempts/{uid}/extend`; GET `/definitions` (owned **and** co-instructed); GET `/definitions/{id}/runs`; GET `/definitions/{id}/blueprints`; GET `/runs/{id}/attempts`; GET/PUT `/definitions/{id}/instructors` | faculty | `ExamCommandService` → `exam_definitions`, `exam_runs`, `exam_command_receipts`, `exam_outbox`; `live.publisher` |
 | `exams_student` (`…/student`) | GET `/runs`; GET `/runs/{id}/accommodations`; GET `/runs/{id}/state`; POST `/runs/{id}/admit`; GET `/runs/{id}/question`; POST `/runs/{id}/next-question`; PATCH/GET `/runs/{id}/drafts/{qid}`; GET `/runs/{id}/drafts`; POST `/runs/{id}/submit`; POST `/runs/{id}/finish`; GET `/runs/{id}/receipt` | user / SEB | `ExamStudentService` → runs, attempts, drafts, outbox; `build_public_content` → `generation_candidates`, `exam_variant_assignments` |
-| `exams_kt` (`…/faculty/kt`) | POST `/uploads`; POST `/sources/from-upload`; POST `/sources/from-url`; GET `/sources`; GET `/sources/{id}`; POST `/sources/{id}/review` | faculty | `kt_uploads` (+`extracted_versions`), `kt_approved_sources` |
+| `exams_kt` (`…/faculty/kt`) | POST/GET `/uploads`; GET `/uploads/{id}` (+ `/versions/{id}/anchors`); POST `/uploads/{id}/retry` and `/replace`; DELETE `/uploads/{id}` (Prompt 4); POST `/sources/from-upload`; POST `/sources/from-url`; GET `/sources`; GET `/sources/{id}`; POST `/sources/{id}/review` | faculty | `kt_uploads` (+`extracted_versions`), `kt_approved_sources` |
 | `exams_generation` (`…/faculty`) | POST `/blueprints`; GET `/blueprints/{id}`; GET `/blueprints/{id}/candidates`; POST `/generation-requests`; GET `/generation-requests/{id}`; GET `/candidates/{id}`; POST `/candidates/{id}/review`; POST `/blueprints/{id}/slots/{n}/reserve-variants` | faculty | `exam_blueprints`, `generation_requests`, `generation_candidates`, `generation_malformed_candidates`, `exam_variant_assignments` |
 | `exams_institution_auth` (`/api/exams/v1/auth`) | POST `/challenge`, POST `/verify` (**unauthenticated by design** — they mint the session); POST `/link` | none / user | `institution_memberships`, `institution_otp_challenges`; Firebase `create_custom_token` |
 | `exams_institution_admin` (`…/faculty/institutions`) | POST `` (create institution); GET `` (list); GET `/{id}/memberships`; POST `/{id}/roster/dry-run` and `/{id}/roster/{job}/apply` (**JSON or multipart CSV**); GET `/{id}/roster/{job}`; POST `/{id}/memberships/revoke`, `/reinstate`, `/unlink`; POST `/{id}/teachers` | faculty / super-admin (+reauth on every authority-changing action) | `institutions`, `institution_roster_imports`, `institution_memberships`, `exam_authz_audit` |
@@ -93,7 +93,7 @@ All routers carry router-level `dependencies=[Depends(require_exams_enabled)]` (
 |---|---|---|---|
 | `exams` | `state_machine`, `decisions`, `policy`, `clock`, `models`, `errors` | `repository`, `commands` (`ExamCommandService`), `student_service`, `finalization` (`ExamFinalizationSweeper` — started from `exam_main.lifespan` since Prompt 3), `publication` (Prompt 3, pure preview/snapshot), `outbox`, `institution_enrollment` (tests only) | `exams_faculty`, `exams_student`, `exams_live`, `exams_proctoring`, `exams_gradebook`, `exam_main` |
 | `institution` | `normalization`, `roster_import`, `roster_csv` (Prompt 2), `otp`, `models`, `errors` | `repository`, `roster_service`, `auth_service`, `identity_provider` (`DevSinkOtpDelivery`, `UnconfiguredOtpDelivery`, `build_otp_delivery`, `UnconfiguredSsoProvider`) | `exams_institution_*`, `exams_me`, `exams_dependencies` |
-| `kt` | `file_validation`, `limits`, `source_registry`, `url_resolver`, `parsers` | `repository`, `malware_scan` (`NullMalwareScanner` default) | `exams_kt` |
+| `kt` | `file_validation`, `limits`, `source_registry`, `url_resolver`, `parsers`, `parse_worker` (child entry point) | `repository`, `ingestion` (`KtIngestionService` + outbox handler, Prompt 4), `parse_isolation`, `storage`, `malware_scan` (`NullMalwareScanner` default, `ClamdScanner` when configured) | `exams_kt`, `exam_main` (`_kt_ingestion_loop`) |
 | `generation` | `validation`, `variants`, `review`, `independent_review`, `public_content` | `repository`, `commands`, `jobs`, `provider` (fake default), `independent_review_provider` | `exams_generation`, `exams_student`, `exams_judge` |
 | `judge` | `grading`, `runtime_allowlist`, `submission`, `converters` | `repository`, `service`, `worker`, `outbox_handler`, `provider` (`DeterministicFakeJudgeProvider`; `Judge0HttpAdapter.submit` raises `NotImplementedError`) | `exams_judge`, `exam_main` (outbox + sweep loop) |
 | `proctoring` | `decisions` (correlation/grace/cooldown), `models` | `repository`, `ledger_service`, `evidence_service`, `evidence_storage` (`InMemoryEvidenceStorage` unless `EXAM_EVIDENCE_STORAGE_BUCKET`), `appeals_service`, `retention` | `exams_proctoring`, `exam_main` |
@@ -109,6 +109,7 @@ All routers carry router-level `dependencies=[Depends(require_exams_enabled)]` (
 | `_judge_sweep_loop` → `JudgeService.sweep_pending_once` | 2 s | yes | completes FINAL_GRADE / abandoned public runs |
 | `_proctoring_stale_incident_sweep_loop` | 15 s | yes | closes departures with no end event |
 | `_evidence_retention_sweep_loop` → `RetentionSweeper` | 3600 s | yes | deletes bytes + record together |
+| `_kt_ingestion_loop` → `KtIngestionOutboxHandler` (kind `kt_ingest`, one job at a time, lease ≥ 120 s) | idle 2 s | yes (status-checked, create-only versions, stale-attempt jobs ignored) | scan + parse uploaded sources in a killable child process (Prompt 4, ADR 0020); the main outbox loop excludes this kind so grading and run commands never wait behind a document |
 | `_finalization_sweep_loop` → `ExamFinalizationSweeper.sweep_active_runs_once` (+ `run_schedule_automation_once` when `EXAM_SCHEDULE_AUTOMATION_ENABLED`) | `EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS` (15 s) | yes (each seal re-decides in its own transaction) | seals attempts past their own deadline with receipt + `attempt_finalized` outbox row + audit (Prompt 3, ADR 0019); was absent at the audit (TMR-02) |
 
 Realtime: WebSocket with single-use TTL ticket (`live_tickets`), per-run monotonically increasing `seq`, 15 s heartbeat; the socket never accepts
@@ -121,7 +122,7 @@ manager is **per process** (single-instance caveat, ADR 0012 §4).
 |---|---|
 | Exams | `exam_definitions` (+`revisions`), `exam_runs` (+`attempts` → +`drafts`), `exam_command_receipts` (`{run}__{command}__{key}`), `exam_outbox` |
 | Institution | `institutions`, `institution_memberships` (doc id `{institution_id}::{NORMALIZED_IDENTITY_KEY}`), `institution_roster_imports`, `institution_otp_challenges` |
-| KT | `kt_uploads` (+`extracted_versions`), `kt_approved_sources` |
+| KT | `kt_uploads` (+`extracted_versions` (+`anchor_chunks`, Prompt 4)), `kt_approved_sources`; object store prefix `kt-quarantine/` in the evidence bucket |
 | Generation | `exam_blueprints`, `generation_requests`, `generation_candidates`, `generation_malformed_candidates`, `exam_variant_assignments` |
 | Judge | `judge_submissions`, `judge_grading_results`, `judge_mcq_results`, `judge_short_answer_reviews` |
 | Proctoring | `proctoring_states`, `proctoring_log` (append-only), `evidence_snapshots`, `evidence_upload_tickets`, `evidence_view_tickets`, `evidence_access_log`, `proctoring_appeals` |
@@ -138,7 +139,7 @@ No composite indexes exist for exam collections (`firestore.indexes.json` lists 
 |---|---|
 | `/exams/login` | `auth/challenge`, `auth/verify`, `me` |
 | `/exams/faculty` | `faculty/definitions` |
-| `/exams/faculty/[definitionId]` | definitions, kt sources (list/from-url/review), blueprints (create/list), generation-requests, candidates (list/review) |
+| `/exams/faculty/[definitionId]` | definitions, kt uploads (`SourceUploadPanel`: upload with progress, status, retry, replace, delete, warnings), kt sources (list/from-url/review), blueprints (create/list), generation-requests, candidates (list/review) |
 | `…/runs/[runId]/lobby` | `runs/{id}`, run commands (publish/release), reserve-variants |
 | `…/runs/[runId]/control` | `runs/{id}/attempts`, run commands (pause/resume/close/end), proctoring appeals, `live/ticket` + WebSocket |
 | `…/runs/[runId]/candidates/[uid]` | attempts, `extend`, proctoring incidents/snapshots/resolve |
@@ -153,7 +154,7 @@ There is **no** faculty UI for institutions/roster/memberships (API-only today) 
 ## 8. Configuration and feature flags (`backend/app/core/config.py`, `backend/.env.example`)
 
 `EXAMS_ENABLED` (false), `EXAM_NEW_ADMISSIONS_PAUSED` (false), `EXAM_FACULTY_EMAILS`, `EXAM_SUPER_ADMIN_EMAILS` (Prompt 1; empty), `EXAM_ALLOW_UNVERIFIED_STAFF_EMAIL` (Prompt 1; dev only, false), `EXAM_DEFAULT_WARNING_THRESHOLD` (3),
-`EXAM_DEFAULT_LATE_ADMISSION_GRACE_SECONDS` (120), `EXAM_FINALIZATION_BATCH_SIZE` (50), `EXAM_FINALIZATION_SWEEP_ENABLED` (Prompt 3; **true**), `EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS` (15), `EXAM_FINALIZATION_ENDED_RUN_WINDOW_HOURS` (24), `EXAM_SCHEDULE_AUTOMATION_ENABLED` (Prompt 3; false), `EXAM_NEGATIVE_MARKING_ENABLED` (Prompt 3; false), `EXAM_OUTBOX_LEASE_SECONDS` (60), `EXAM_OUTBOX_MAX_ATTEMPTS` (5),
+`EXAM_DEFAULT_LATE_ADMISSION_GRACE_SECONDS` (120), `EXAM_FINALIZATION_BATCH_SIZE` (50), `EXAM_FINALIZATION_SWEEP_ENABLED` (Prompt 3; **true**), `EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS` (15), `EXAM_FINALIZATION_ENDED_RUN_WINDOW_HOURS` (24), `EXAM_SCHEDULE_AUTOMATION_ENABLED` (Prompt 3; false), `EXAM_NEGATIVE_MARKING_ENABLED` (Prompt 3; false), `EXAM_KT_MAX_ACTIVE_UPLOADS_PER_USER` (200) / `EXAM_KT_PARSE_MEMORY_MB` (1024) / `EXAM_KT_URL_ALLOWED_HOSTS` (empty) (Prompt 4), `EXAM_OUTBOX_LEASE_SECONDS` (60), `EXAM_OUTBOX_MAX_ATTEMPTS` (5),
 `EXAM_OTP_HMAC_SECRET` / `_TTL_SECONDS` (300) / `_MAX_ATTEMPTS` (5) / `EXAM_OTP_DELIVERY_PROVIDER` (Prompt 2; empty), `EXAM_STAFF_REAUTH_MAX_AGE_SECONDS` (900),
 `EXAM_MALWARE_SCANNER_ENDPOINT` (ignored), `EXAM_GENERATION_PROVIDER_*`, `EXAM_REVIEW_PROVIDER_*`, `EXAM_FEEDBACK_PROVIDER_*`, `EXAM_JUDGE_PROVIDER_*`,
 `EXAM_LIVE_TICKET_TTL_SECONDS` (60), `EXAM_PROCTORING_GRACE_SECONDS` (2.0) / `_COOLDOWN_SECONDS` (5.0) / `_STALE_INCIDENT_SECONDS` (120),

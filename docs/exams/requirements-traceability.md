@@ -185,6 +185,40 @@ Defects found in the existing code while implementing (all fixed, none was in th
 | ING-08 | URL ingestion: SSRF/private/link-local/metadata blocked, redirects validated, size/time limits, canonical URL/hash/time | `url_resolver.py` (https only, IP-class denylist, metadata IPs, redirect re-validation ≤3, 25 MB, 10 s); documented TOCTOU/rebinding residual | `test_kt_url_resolver.py` (9) | EXISTS_AND_VERIFIED | Network-layer egress proxy remains an infra gate (P11) | P11 |
 | ING-09 | Source content treated as untrusted data | Provider system prompt tells the model to ignore embedded instructions; source text is data in the request; nothing executes it | no injection-specific tests | PARTIALLY_EXISTS | Prompt-injection fixtures (see GEN-11) | P5 |
 
+### 4.1 Status after the Prompt 4 implementation
+
+Implemented as [ADR 0020](../adr/0020-durable-source-ingestion.md); migration notes in
+[compatibility-and-migration.md §9](compatibility-and-migration.md). Evidence is unit-, HTTP- and component-level: the in-memory Firestore from Prompt 3, an
+in-memory object store, a local stand-in for a clamd daemon, httpx mock transports and **real** child-process parsing of synthetic PDF/DOCX/HTML/TXT fixtures.
+No real bucket, ClamAV, OCR engine, DNS or internet was used. Backend suite: 1117 tests passing with `EXAMS_ENABLED=false` (947 before + 170 new); `ruff check .`
+clean; frontend `tsc --noEmit` clean, 17 new Vitest tests (the full frontend suite passes; `submit/page.test.tsx` timed out once under load and passes alone).
+
+| ID | Status after P4 | What changed | Evidence |
+|---|---|---|---|
+| ING-01 | EXISTS_AND_VERIFIED (unit/HTTP) | Multiple PDF/DOCX/TXT uploads and URL sources (HTML/PDF/DOCX/TXT) all flow through one pipeline; URL sources now get extracted text; per-teacher active-upload cap; exact-duplicate refusal (same owner, same SHA-256) | `test_kt_pipeline.py::test_multiple_documents_*`, `::test_a_duplicate_*`, `::test_the_active_upload_cap_*`, `test_kt_routes.py` |
+| ING-02 | EXISTS_AND_VERIFIED (in-memory store) / `BLOCKED_BY_DECISION` D-4 for the real bucket | Validated bytes are written to private storage under a generated `kt-quarantine/{random}` name (never the client filename) as opaque bytes, in the same step as the upload record + outbox job; a failed intake removes the object; production refuses uploads with `503 kt_storage_not_configured` while `EXAM_EVIDENCE_STORAGE_BUCKET` is unset | `test_kt_pipeline.py::test_accept_*`, `::test_a_failed_intake_*`, `test_kt_routes.py::test_production_without_*` |
+| ING-03 | EXISTS_AND_VERIFIED | Added what was missing: file **extension** must match the real signature; a zip must actually be a Word package (`[Content_Types].xml` + `word/document.xml`); count cap | `test_kt_parsing_and_validation.py` (35) |
+| ING-04 | PARTIALLY_EXISTS — real scanner `BLOCKED_BY_DECISION` D-4 | `EXAM_MALWARE_SCANNER_ENDPOINT=host:port` now selects a clamd (`zINSTREAM`) adapter; unreachable/erroring daemon = unavailable (retried, then settled `scan_unavailable`), signature = `infected` (bytes deleted); no/invalid endpoint stays fail-closed with an actionable message. **Not exercised against a real ClamAV** | `test_kt_scanner_and_urls.py`, `test_kt_pipeline.py::test_*scanner*` |
+| ING-05 | EXISTS_AND_VERIFIED (unit) | Parsing moved out of the request into the existing outbox worker (own loop, longer lease) and into a **killable child process** with a scrubbed environment; versions are create-only with deterministic anchor ids, a content hash, parser name, warnings and stats; anchors are chunked so a large extract fits Firestore; a redelivered or concurrent job writes one version; URL sources get text | `test_kt_pipeline.py`, `test_kt_parsing_and_validation.py` |
+| ING-06 | PARTIALLY_EXISTS | OCR/table/image extraction still **not** done (needs a qualified parser). What is skipped is now reported: tables, images, image-only pages, undecodable text, active PDF content, hidden HTML, truncation; a fully scanned PDF is refused ("looks scanned; OCR is not available") instead of "succeeding" empty | `test_kt_parsing_and_validation.py::test_*scanned*`, `::test_docx_tables_*`, `::test_html_*` |
+| ING-07 | EXISTS_AND_VERIFIED (unit/component) | `GET /uploads`, `GET /uploads/{id}` (status, failure code/reason, versions, warnings), paged extracted text, `retry`, `replace` (new upload + links both ways), `delete` (bytes + text removed, row and audit kept, refused while an approved source cites it); progress/retry/replace/delete UI on the faculty exam page | `test_kt_pipeline.py`, `test_kt_routes.py`, `SourceUploadPanel.test.tsx` (10), `examsApi.test.ts` (7) |
+| ING-08 | EXISTS_AND_VERIFIED | Hardened further: non-global addresses (CGNAT etc.), IPv4-mapped IPv6, embedded credentials, non-443 ports, relative redirects (each hop re-validated), HTTP errors not ingested, size cap enforced **while streaming**, optional host allowlist (`EXAM_KT_URL_ALLOWED_HOSTS`), canonical URL + fetch time recorded. DNS-rebinding TOCTOU and the network egress proxy remain P11 | `test_kt_scanner_and_urls.py` (65) |
+| ING-09 | PARTIALLY_EXISTS | Source text is data throughout this phase (never executed or rendered as markup; hidden HTML text is dropped). Prompt-injection fixtures against the generation provider stay P5 | `test_kt_parsing_and_validation.py::test_html_hidden_*` |
+
+Defects found in the existing code while implementing (all fixed, none was in the audit baseline):
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| P4-1 | High | Upload bytes were never persisted (`storage_ref` pointed at nothing), so nothing could be retried, replaced or re-parsed | Private quarantine storage + generated names |
+| P4-2 | High | Parsing ran inside the request, and the default scanner meant nothing was ever parsed; the scanner setting was read nowhere | Outbox worker + clamd adapter + fail-closed default with an actionable message |
+| P4-3 | High | A URL source stored an upload row that stayed `QUARANTINED` forever; its bytes were discarded and it could be approved with no text behind it | Same pipeline as uploads; approval requires parsed content and pins the reviewed version |
+| P4-4 | Medium | The whole extracted text lived in one Firestore document (1 MiB limit), so a large document could not be saved | Chunked anchors with a commit-marker version document |
+| P4-5 | Medium | Paragraphs over 4000 characters were silently cut | Split on whitespace boundaries, nothing lost |
+| P4-6 | Medium | Tables, images and scanned pages were dropped silently; a scanned PDF "parsed" to zero anchors | Warnings per kind of skipped content; refusal when no text exists |
+| P4-7 | Medium | The file extension was never checked; any zip with the DOCX MIME type passed | Extension + package-structure checks |
+| P4-8 | Medium | URL fetch buffered the whole body before the size check, mishandled relative redirects, and accepted CGNAT/mapped-IPv6/credential/odd-port URLs and HTTP error pages | Streaming cap, `urljoin`, `is_global`, shape checks |
+| P4-9 | Low | No per-teacher cap, duplicate detection or rate limit on uploads/links | Count cap, SHA-256 duplicate check, sliding-window limiters |
+
 ## 5. Blueprint, generation, review — Prompt 5 and Backend prompts A/B/C
 
 | ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
@@ -331,7 +365,7 @@ Defects found in the existing code while implementing (all fixed, none was in th
 | D-1 | Final bootstrap super-admin list: the master prompt names three addresses, Prompt 1's text says "four" (the v1.0 fourth was removed) | P1 deployment config |
 | D-2 | **Resolved in Prompt 2: "definition = course"** (co-instructors on an exam definition, assigned by a super-admin or the institution's ADMIN). Still open: finer capabilities inside a course (e.g. a proctor-only assistant) and any separate Course entity | P2 (done) |
 | D-3 | Slot-release / navigation policy: v1.0 contract = forward-only sequential release; v1.1 requires Previous/Next + navigator over released slots | P6/P7 |
-| D-4 | Malware scanner, private object storage and retention for uploads | P4 |
+| D-4 | Malware scanner, private object storage and retention for uploads. **Prompt 4 delivered the clamd adapter, the storage seam and teacher delete; still open: provisioning a real ClamAV and bucket, and a retention window for uploaded sources (only evidence has a retention sweeper)** | P4 (adapter, done) / deployment |
 | D-5 | Judge architecture/provider approval, language set (C, JS/TS), SQL runner qualification | P8 |
 | D-6 | Institution SSO vs verified-email OTP; OTP delivery provider. Prompt 2 delivered the adapter contract, the selection setting and the fail-closed production behavior; **no real provider exists until this is decided** | P2 (provider) |
 | D-7 | Institution proctoring profile contents (thresholds, evidence policy, retention) | P9 |
