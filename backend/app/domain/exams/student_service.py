@@ -69,6 +69,10 @@ class ExamStudentService:
             raise LookupError(f"exam run {run_id} not found")
         return run
 
+    def now(self):
+        """The server's clock reading, sent to clients so their timer never trusts their own wall clock."""
+        return self._clock.now()
+
     # ── state ──────────────────────────────────────────────────────────────
 
     def get_state(self, run_id: str, uid: str) -> Attempt:
@@ -184,6 +188,7 @@ class ExamStudentService:
             })
         return {
             "current_slot_index": attempt.current_slot_index,
+            "server_time": self._clock.now().isoformat(),
             "total_slots": revision.slot_count,
             "locked_count": max(0, revision.slot_count - (attempt.current_slot_index + 1)),
             "revisit_enabled": settings.EXAM_STUDENT_REVISIT_RELEASED_SLOTS,

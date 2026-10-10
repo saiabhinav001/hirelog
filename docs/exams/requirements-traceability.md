@@ -344,6 +344,40 @@ the current draft, not a sealed copy.
 | UI-13 | Existing design tokens/routes only | CSS variables, `.card`, `.badge*`, `.btn-*` reused | — | EXISTS_AND_VERIFIED | — | — |
 | UI-14 | Exam API client: pinned origin, `getClientAuthToken`, `no-store` | `examsApi.ts` | — | EXISTS_AND_VERIFIED (login page calls `getIdToken` directly — acceptable pre-session) | — | — |
 
+### 7.1 Status after the Prompt 7 implementation
+
+Implemented as [ADR 0023](../adr/0023-exam-workspace-ui-timer-navigator-and-teacher-controls.md); migration notes in
+[compatibility-and-migration.md §12](compatibility-and-migration.md). Evidence is backend HTTP tests against the in-memory Firestore plus jsdom component tests
+with fake timers; **no real browser, screen reader, axe run or Firestore was used.** Backend suite: 1303 tests passing with `EXAMS_ENABLED=false` (1271 before
++ 32 new); `ruff check .` clean; frontend `tsc` and `eslint` clean; Vitest 163 passing (run with `--maxWorkers=2 --testTimeout=20000` - under default
+parallelism the already-slow `signup`, `submit`, `BlueprintPanel` and `CodeEditorPanel` files time out on this machine, as before this phase).
+
+| ID | Status after P7 | What changed | Evidence |
+|---|---|---|---|
+| UI-01 | EXISTS_AND_VERIFIED (jsdom, fake timers) | Server-time offset from `performance.now()` (monotonic); a once-a-second tick; `server_time` on state, slots and the faculty run/attempt lists. A device clock set to 1999 still shows the server's time left | `serverClock.test.ts`, `page.test.tsx::shows the time left from the server's clock…`, `::keeps ticking…`, `test_exams_ui_backend_p7.py` |
+| UI-02 | EXISTS_AND_VERIFIED (jsdom) | `ExamPolicy.time_warning_minutes` (default `[10]`); announced once per threshold in a polite live region; time-up is the only `alert`, locks editing and polls for the sealed state; **never auto-submits** | `page.test.tsx` (timer block), `test_exams_ui_backend_p7.py::test_the_default_warning_*`, `::test_invalid_warning_*` |
+| UI-03 | PARTIALLY_EXISTS (D-3) | Previous/Next over released slots, view index separate from release index; with `EXAM_STUDENT_REVISIT_RELEASED_SLOTS` off (default) Previous is disabled and no earlier question is requested | `page.test.tsx` (navigator block) |
+| UI-04 | EXISTS_AND_VERIFIED (jsdom) | Right-hand navigator: numbered buttons with answered / unanswered / marked / locked state in text (not colour only) and four counts | `QuestionNavigator.test.tsx` (8) |
+| UI-05 | EXISTS_AND_VERIFIED (jsdom) | Mark-for-review toggle (`aria-pressed`) saved with the draft | `page.test.tsx::marks a question for review…` |
+| UI-07 | PARTIALLY_EXISTS | Real finding: dark `--text-muted` was ≈3.9:1 on the card surface. Exam-scoped override (`.dark .exam-scope`) raises it; token ratios are tested. No rendered-page axe run | `examTheme.test.ts` (4) |
+| UI-08 | PARTIALLY_EXISTS | Labelled controls, focus-managed dialogs (start on Cancel, Escape, Tab contained, focus restored), `aria-current`, live regions. Not tested with a screen reader or in a real browser | `ConfirmDialog.test.tsx` (7), `QuestionNavigator.test.tsx` |
+| UI-11 | PARTIALLY_EXISTS | Added: schedule window/timezone/duration/warnings and topics/marks fields, short-link panel, per-student extend / end attempt / recover, per-student grant / revoke, server-stamped freshness. **Still missing:** upload management beyond the existing panel, institution/roster UI, source-derived topic suggestion UI, a negative-marking control (grading does not apply it, D-8) | `AttemptActions.test.tsx` (6), `ShortLinkPanel.test.tsx` (7), `control/page.test.tsx` (8), `examSchedule.test.ts` |
+| UI-12 | EXISTS_AND_VERIFIED (jsdom) | Every state change confirms, names the student/run and consequence, asks for an audited reason where it matters, uses a key generated at dialog open, and reloads after success **or** rejection; 409s become plain sentences | `examConflicts.test.ts`, `control/page.test.tsx::on a version conflict…` |
+| SHR-01 | PARTIALLY_EXISTS (flag, default off) | `EXAM_SHORT_LINKS_ENABLED`; random 8-char code, one active per run, revocable, regenerate; resolver needs an enrolled signed-in student, identical 404 for every refusal, rate-limited, audited | `test_exams_ui_backend_p7.py` (short-link tests), `join/[code]/page.test.tsx` (3) |
+| LIV-01 | EXISTS_AND_VERIFIED (jsdom) | Freshness line shows the **server's** time at the last refresh and a ticking age; stale warning when the feed is not connected and data is >30 s old | `control/page.test.tsx` (3) |
+
+Defects found in the existing code while implementing (all fixed):
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| P7-1 | High | The timer was `deadline − Date.now()` computed once per render with no tick, and used the device clock | Server-offset clock + 1 s tick |
+| P7-2 | Medium | Run-command conflicts replaced the whole control room with a generic error page | Inline plain-language feedback + reload |
+| P7-3 | Medium | "Snapshot as of" was the teacher's browser time, implying server freshness | Server time + age |
+| P7-4 | Medium | Dark-theme muted text below AA | Exam-scoped override |
+
+Residual: no real-browser, screen-reader or axe verification; the timer is accurate to one round trip; `epoch` is still a constant; institution/roster teacher
+screens are not built; decisions D-3 (revisit) and D-9 (warning thresholds) stay with the institution; nothing ran against real Firestore.
+
 ## 8. Coding and SQL judge — Prompt 8
 
 | ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |

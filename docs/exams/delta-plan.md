@@ -248,3 +248,32 @@ Out of Phase 6 on purpose: the navigator / timer UI (Phase 7), an advancing epoc
 - [x] Authenticated student responses are `no-store`; no private marker appears in any student response or live event payload tested.
 - [x] Full backend suite (`EXAMS_ENABLED=false`: 1271 passed), ruff, frontend `tsc` and `eslint` pass.
 - [x] Migration notes and ADR 0022 written; no production data touched; no secrets or addresses added. *(No real Firestore, browser or socket was used.)*
+
+## 10. Phase 7 — workspace UI: timer, navigator, teacher controls, short link (implemented, ADR 0023)
+
+Phase 7 needed no new institutional decision to ship; D-3 (revisit) stays a default-off flag and D-9 (warning thresholds) is policy data with a 10-minute default.
+
+| Area | Change |
+|---|---|
+| `backend/app/domain/exams/policy.py` | Optional `time_warning_minutes` (default `[10]`, validated, sorted) |
+| `backend/app/domain/exams/short_links.py` (new) | Random unambiguous 8-char codes, one active per run, transactional issue / regenerate / revoke, audit |
+| `backend/app/domain/exams/student_service.py`, `api/routes/exams_student.py` | `server_time` on state and slots; `time_warning_minutes` on state; resolver `GET /short-links/{code}` (enrolled only, uniform 404, per-user and per-IP limits) |
+| `backend/app/api/routes/exams_faculty.py` | `server_time` on run and attempts; short-link routes (run scope, per-teacher limit) |
+| Config | `EXAM_SHORT_LINKS_ENABLED` (default off) |
+| Frontend libs | `serverClock`, `useServerClock` (+ warnings), `ExamApiError`, `examConflicts`, `examSchedule`, endpoint client additions |
+| Frontend components | `QuestionNavigator`, `ConfirmDialog`, `AttemptActions`, `ShortLinkPanel`; `ExamShellHeader` ticks; student exam workspace reworked; control room, candidate detail and definition page extended; `/exams/join/[code]`; exam-scoped dark contrast |
+| Tests | New `test_exams_ui_backend_p7.py`; Vitest for the clock, navigator, header, workspace (19), dialogs, teacher actions, short link, join page, control room, schedule helpers and theme contrast |
+| Docs | ADR 0023 (+ index), compat §12, traceability §7.1, integration map, `.env.example` |
+
+Out of Phase 7 on purpose: institution/roster teacher screens, source-derived topic suggestion UI, a negative-marking control (grading does not apply it, D-8), an advancing epoch fence, real-browser / screen-reader / axe verification (Phase 10/11).
+
+### Phase 7 acceptance checklist
+
+- [x] The timer is anchored to the server's clock and keeps ticking; a wrong device clock does not change it; at zero editing locks and the server seals - the browser never submits.
+- [x] Warnings come from policy, are announced once in a polite region, and time-up is the only alert.
+- [x] Navigator with four counts; Previous/Next over released questions only; pending answers saved before leaving a question; mark-for-review toggles.
+- [x] Every teacher state change confirms with the consequence, records a reason where it matters, uses a stable key, reloads state and shows a plain-language conflict message.
+- [x] Short link: off by default, random, revocable, enrolled-student-only, uniform refusals, rate-limited, audited; it grants nothing.
+- [x] Dark muted text meets AA inside the exam scope (tested from the stylesheet tokens).
+- [x] Full backend suite (`EXAMS_ENABLED=false`: 1303 passed), ruff, frontend `tsc`, `eslint` and Vitest (163 passed with `--maxWorkers=2 --testTimeout=20000`) pass.
+- [x] Migration notes and ADR 0023 written; no production data touched; no secrets or addresses added. *(No real browser, screen reader, axe run or Firestore was used.)*

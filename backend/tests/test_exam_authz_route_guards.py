@@ -217,6 +217,7 @@ STUDENT_WITHOUT_RUN_DEP = {
     ("GET", "/student/runs"),  # lists the caller's own runs; filters by institution membership inline
     ("POST", "/student/judge/public-run"),  # run_id arrives in the body; authorize_student_for_run inline
     ("POST", "/student/proctoring/snapshots/upload/{ticket_id}"),  # single-use upload ticket bound to uid+run at issue
+    ("GET", "/student/short-links/{code}"),  # a locator; answers only for a student enrolled in the run it names (inline)
 }
 
 

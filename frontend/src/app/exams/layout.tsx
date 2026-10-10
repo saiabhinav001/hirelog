@@ -11,7 +11,7 @@ export default function ExamsLayout({ children }: { children: React.ReactNode })
   return (
     <ExamAuthProvider>
       <ExamServiceWorkerRegistrar />
-      {children}
+      <div className="exam-scope contents">{children}</div>
     </ExamAuthProvider>
   );
 }

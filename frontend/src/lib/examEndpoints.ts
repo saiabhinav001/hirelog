@@ -20,6 +20,7 @@ export type ExamRunSummary = {
   status: "draft" | "published" | "released" | "paused" | "closed" | "ended";
   version: number;
   enrolled_uids: string[];
+  server_time?: string;
 };
 
 export type StudentRunSummary = {
@@ -42,6 +43,9 @@ export type Attempt = {
   warning_count: number;
   current_slot_index: number;
   submit_receipt: { receipt_id: string; finalized_at: string } | null;
+  // Present on the student's own state response (ADR 0023).
+  server_time?: string;
+  time_warning_minutes?: number[];
 };
 
 export type PublicQuestion = {
@@ -76,11 +80,18 @@ export type LockdownAdmissionLogEntry = {
   at: string;
 };
 
+export type ShortLinkState = {
+  enabled: boolean;
+  link: { code: string; display_code: string; created_at: string; created_by: string } | null;
+  created?: boolean;
+};
+
 export type ReleasedSlots = {
   current_slot_index: number;
   total_slots: number;
   locked_count: number;
   revisit_enabled: boolean;
+  server_time?: string;
   slots: { slot_index: number; question_id: string; answered: boolean; marked_for_review: boolean; version: number }[];
 };
 
@@ -471,22 +482,49 @@ export const examEndpoints = {
     command: "publish" | "release" | "pause" | "resume" | "close" | "end",
     expectedVersion: number,
     idempotencyKey: string,
-    force = false
+    force = false,
+    reason?: string
   ) =>
     authed(`/api/exams/v1/faculty/runs/${runId}/commands/${command}`, token, {
       method: "POST",
-      body: JSON.stringify({ expected_version: expectedVersion, idempotency_key: idempotencyKey, force }),
+      body: JSON.stringify({ expected_version: expectedVersion, idempotency_key: idempotencyKey, force, reason: reason || undefined }),
     }),
   listAttemptsForRun: (token: string | undefined, runId: string, cursorUid?: string) =>
-    authed<{ results: Attempt[]; next_cursor_uid: string | null }>(
+    authed<{ results: Attempt[]; next_cursor_uid: string | null; server_time?: string }>(
       `/api/exams/v1/faculty/runs/${runId}/attempts${cursorUid ? `?cursor_uid=${encodeURIComponent(cursorUid)}` : ""}`,
       token
     ),
-  extendTime: (token: string | undefined, runId: string, uid: string, extraMinutes: number) =>
+  extendTime: (token: string | undefined, runId: string, uid: string, extraMinutes: number, idempotencyKey?: string, reason?: string) =>
     authed(`/api/exams/v1/faculty/runs/${runId}/attempts/${uid}/extend`, token, {
       method: "POST",
-      body: JSON.stringify({ extra_minutes: extraMinutes }),
+      body: JSON.stringify({ extra_minutes: extraMinutes, idempotency_key: idempotencyKey, reason: reason || undefined }),
     }),
+  terminateAttempt: (token: string | undefined, runId: string, uid: string, idempotencyKey: string, reason: string) =>
+    authed<{ status: string }>(`/api/exams/v1/faculty/runs/${runId}/attempts/${uid}/terminate`, token, {
+      method: "POST",
+      body: JSON.stringify({ idempotency_key: idempotencyKey, reason }),
+    }),
+  recoverAttempt: (token: string | undefined, runId: string, uid: string, idempotencyKey: string, reason: string) =>
+    authed<{ status: string }>(`/api/exams/v1/faculty/runs/${runId}/attempts/${uid}/recover`, token, {
+      method: "POST",
+      body: JSON.stringify({ idempotency_key: idempotencyKey, reason }),
+    }),
+  changeRunAccess: (token: string | undefined, runId: string, action: "grant" | "revoke", uid: string, idempotencyKey: string, reason?: string) =>
+    authed<{ changed: boolean }>(`/api/exams/v1/faculty/runs/${runId}/access/${action}`, token, {
+      method: "POST",
+      body: JSON.stringify({ uid, idempotency_key: idempotencyKey, reason: reason || undefined }),
+    }),
+  getShortLink: (token: string | undefined, runId: string) =>
+    authed<ShortLinkState>(`/api/exams/v1/faculty/runs/${runId}/short-link`, token),
+  issueShortLink: (token: string | undefined, runId: string, regenerate = false) =>
+    authed<ShortLinkState>(`/api/exams/v1/faculty/runs/${runId}/short-link`, token, {
+      method: "POST",
+      body: JSON.stringify({ regenerate }),
+    }),
+  revokeShortLink: (token: string | undefined, runId: string) =>
+    authed<{ revoked: number }>(`/api/exams/v1/faculty/runs/${runId}/short-link/revoke`, token, { method: "POST" }),
+  resolveShortLink: (token: string | undefined, code: string) =>
+    authed<{ run_id: string }>(`/api/exams/v1/student/short-links/${encodeURIComponent(code)}`, token),
 
   // ── Managed lockdown (faculty) ───────────────────────────────────────────
   getLockdownProfile: (token: string | undefined, runId: string) =>

@@ -168,6 +168,8 @@ class Settings(BaseSettings):
     # Prompt 6 (ADR 0022): let a student re-open questions they were already shown (default off: current slot only).
     EXAM_STUDENT_REVISIT_RELEASED_SLOTS: bool = False
     EXAM_DRAFT_MAX_BYTES: int = 100_000
+    # Prompt 7 (ADR 0023): short share links for runs (default off).
+    EXAM_SHORT_LINKS_ENABLED: bool = False
 
     # ── Independent item review (Backend model prompt B, docs/adr/0009) ─────
     # A separate provider/endpoint from generation above — may be the same

@@ -11,9 +11,11 @@
 
 import type { ConnectionHealth } from "@/lib/liveSocket";
 
-function formatRemaining(deadline: string | null): string {
+function formatRemaining(deadline: string | null, serverNowMs?: number | null): string {
   if (!deadline) return "--:--";
-  const ms = new Date(deadline).getTime() - Date.now();
+  // `serverNowMs` is the server-anchored estimate; without one (legacy callers) fall back to the device clock.
+  const nowMs = serverNowMs ?? Date.now();
+  const ms = new Date(deadline).getTime() - nowMs;
   if (ms <= 0) return "00:00";
   const totalSeconds = Math.floor(ms / 1000);
   const hours = Math.floor(totalSeconds / 3600);
@@ -49,12 +51,14 @@ const HEALTH_BADGE_CLASS: Record<ConnectionHealth, string> = {
 
 export function ExamShellHeader({
   deadline,
+  serverNowMs,
   connectionHealth,
   saveReceipt,
   warningCount,
   camera,
 }: {
   deadline?: string | null;
+  serverNowMs?: number | null;
   connectionHealth: ConnectionHealth;
   saveReceipt?: { savedAt: string; version: number } | null;
   warningCount?: number;
@@ -74,9 +78,12 @@ export function ExamShellHeader({
       aria-label="Exam session status"
     >
       <div className="flex items-center gap-4">
-        <div aria-live="polite">
-          <span className="label mb-0">Time remaining</span>
-          <p className="text-lg font-semibold tabular-nums text-[var(--text)]">{formatRemaining(deadline ?? null)}</p>
+        <div>
+          <span className="label mb-0" id="exam-timer-label">Time remaining</span>
+          {/* A ticking value must not be a live region (it would be read out every second); warnings are announced elsewhere. */}
+          <p role="timer" aria-labelledby="exam-timer-label" aria-live="off" className="text-lg font-semibold tabular-nums text-[var(--text)]">
+            {formatRemaining(deadline ?? null, serverNowMs)}
+          </p>
         </div>
 
         <div className="flex flex-col">
@@ -98,7 +105,7 @@ export function ExamShellHeader({
         <div className="flex flex-col">
           <span className="label mb-0">Save status</span>
           <span className="text-sm text-[var(--text-secondary)]">
-            {saveReceipt ? `Saved (v${saveReceipt.version})` : "Not saved yet"}
+            {saveReceipt ? `Draft saved (v${saveReceipt.version}) - not submitted` : "Not saved yet"}
           </span>
         </div>
 

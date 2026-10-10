@@ -23,11 +23,14 @@ from app.api.exams_scope import (
 )
 from app.core.config import settings
 from app.core.firebase import db
+from app.core.rate_limit import SlidingWindowLimiter
 from app.domain.exams.commands import ExamCommandService
 from app.domain.exams.finalization import ExamFinalizationSweeper
 from app.domain.exams.institution_enrollment import InstructorAssignmentError, assign_instructors
+from app.domain.exams.models import RunStatus
 from app.domain.exams.policy import ExamPolicy
 from app.domain.exams.repository import AttemptRepository
+from app.domain.exams.short_links import ShortLink, ShortLinkError, ShortLinkService, format_code
 from app.domain.generation.repository import GenerationRepository
 from app.domain.live.publisher import publish_attempt_status_changed, publish_run_state_changed
 
@@ -180,7 +183,7 @@ def get_run(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
     run = _service().runs.get(run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
-    return run.model_dump(mode="json")
+    return {**run.model_dump(mode="json"), "server_time": datetime.now(timezone.utc).isoformat()}
 
 
 @router.post("/runs/{run_id}/commands/{command}")
@@ -375,4 +378,63 @@ def list_attempts_for_run(run_id: str, user: dict = Depends(require_run_scope), 
     """Candidate grid data — paginated (contract: 'pagination/virtualization')."""
     bounded_limit = max(1, min(limit, 200))
     attempts, next_cursor = AttemptRepository(db).list_page_for_run(run_id, limit=bounded_limit, cursor_uid=cursor_uid)
-    return {"results": [a.model_dump(mode="json") for a in attempts], "next_cursor_uid": next_cursor}
+    return {
+        "results": [a.model_dump(mode="json") for a in attempts],
+        "next_cursor_uid": next_cursor,
+        "server_time": datetime.now(timezone.utc).isoformat(),  # the freshness stamp the control room shows
+    }
+
+
+# -- short share links (Prompt 7, ADR 0023) ---------------------------------------------------------------
+
+_short_link_issue_limiter = SlidingWindowLimiter(10, 600, namespace="exam_short_link_issue")
+
+
+class ShortLinkRequest(BaseModel):
+    regenerate: bool = False
+
+
+def _short_link_view(link: ShortLink | None) -> dict | None:
+    if link is None:
+        return None
+    return {"code": link.code, "display_code": format_code(link.code), "created_at": link.created_at.isoformat(), "created_by": link.created_by}
+
+
+def _require_short_links_enabled() -> None:
+    if not settings.EXAM_SHORT_LINKS_ENABLED:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"code": "short_links_not_enabled", "message": "Short links are not enabled on this deployment."})
+
+
+@router.get("/runs/{run_id}/short-link")
+def get_short_link(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
+    """Current link for the run (a locator only - see the resolver for what it does not grant)."""
+    if not settings.EXAM_SHORT_LINKS_ENABLED:
+        return {"enabled": False, "link": None}
+    return {"enabled": True, "link": _short_link_view(ShortLinkService(db).current(run_id))}
+
+
+@router.post("/runs/{run_id}/short-link")
+def issue_short_link(run_id: str, payload: ShortLinkRequest, user: dict = Depends(require_run_scope)) -> dict:
+    """Create the run's short link, or with `regenerate` replace it (the old code stops working at once)."""
+    _require_short_links_enabled()
+    run = _service().runs.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
+    if run.status in (RunStatus.ENDED, RunStatus.CLOSED):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "run_not_admitting", "message": "This run no longer admits students."})
+    _short_link_issue_limiter.check(user["uid"], detail="Too many short-link changes. Please wait before trying again.")
+    try:
+        link, created = ShortLinkService(db).issue(run_id, actor_uid=user["uid"], institution_id=run.institution_id, regenerate=payload.regenerate)
+    except ShortLinkError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail={"code": exc.code, "message": str(exc)}) from exc
+    return {"enabled": True, "link": _short_link_view(link), "created": created}
+
+
+@router.post("/runs/{run_id}/short-link/revoke")
+def revoke_short_link(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
+    _require_short_links_enabled()
+    run = _service().runs.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
+    _short_link_issue_limiter.check(user["uid"], detail="Too many short-link changes. Please wait before trying again.")
+    return {"enabled": True, "revoked": ShortLinkService(db).revoke(run_id, actor_uid=user["uid"], institution_id=run.institution_id)}

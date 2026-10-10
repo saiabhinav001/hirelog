@@ -158,6 +158,14 @@
   color-scheme: light;
 }
 
+/*
+  Exam screens only (ADR 0023): the shared dark muted-text colour is about 3.9:1 on the card surface, below the 4.5:1 WCAG AA minimum for body text.
+  Raised here, inside the exam scope, so the rest of the product is untouched.
+*/
+.dark .exam-scope {
+  --text-muted: #a1a1aa;
+}
+
 @theme inline {
   --font-sans: var(--font-plex-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: var(--font-plex-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

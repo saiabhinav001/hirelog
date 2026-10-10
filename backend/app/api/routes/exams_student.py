@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
 from app.api.exams_dependencies import (
@@ -20,9 +20,12 @@ from app.api.exams_dependencies import (
     resolve_principal,
 )
 from app.api.exams_errors import raise_for_conflict_reason, raise_for_domain_error
+from app.core.config import settings
 from app.core.firebase import db
+from app.core.rate_limit import SlidingWindowLimiter
 from app.domain.authz.policy import can_participate_as_student
 from app.domain.exams.commands import ExamCommandService
+from app.domain.exams.short_links import ShortLinkService
 from app.domain.exams.student_service import ExamStudentService
 from app.domain.generation.public_content import build_public_content
 from app.domain.generation.repository import GenerationRepository, VariantAssignmentRepository
@@ -33,6 +36,10 @@ router = APIRouter(prefix="/api/exams/v1/student", tags=["exams-student"], depen
 
 def _service() -> ExamStudentService:
     return ExamStudentService(db)
+
+
+_short_link_user_limiter = SlidingWindowLimiter(30, 60, namespace="exam_short_link_resolve")
+_short_link_ip_limiter = SlidingWindowLimiter(120, 60, namespace="exam_short_link_resolve_ip")
 
 
 def _set_no_store(response: Response) -> None:
@@ -109,13 +116,41 @@ def get_my_accommodations(run_id: str, response: Response, user: dict = Depends(
 
 @router.get("/runs/{run_id}/state")
 def get_state(run_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
+    """The attempt plus the server's clock reading and the run's time-warning thresholds: the client
+    anchors its timer to `server_time` (see ADR 0023) and never to its own wall clock."""
     _set_no_store(response)
+    service = _service()
     try:
-        attempt = _service().get_state(run_id, user["uid"])
+        attempt = service.get_state(run_id, user["uid"])
+        run = service.get_run_or_404(run_id)
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
-    return attempt.model_dump(mode="json")
+    return {
+        **attempt.model_dump(mode="json"),
+        "server_time": service.now().isoformat(),
+        "time_warning_minutes": run.policy.time_warning_minutes,
+    }
+
+
+@router.get("/short-links/{code}")
+def resolve_short_link(code: str, request: Request, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+    """Turns a short code into the run it names - for a signed-in student who is enrolled in that run, and
+    nobody else. Unknown, revoked, malformed and not-yours all answer the same 404, so the code cannot be used
+    to probe for runs. It authorizes nothing: admission and content keep their own checks."""
+    _set_no_store(response)
+    not_found = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "short_link_not_found"})
+    _short_link_user_limiter.check(user["uid"], detail="Too many attempts. Please wait a moment.")
+    _short_link_ip_limiter.check(request.client.host if request.client else "unknown", detail="Too many attempts. Please wait a moment.")
+    if not settings.EXAM_SHORT_LINKS_ENABLED:
+        raise not_found
+    link = ShortLinkService(db).resolve(code)
+    run = _service().runs.get(link.run_id) if link else None
+    if run is None or user["uid"] not in run.enrolled_uids:
+        raise not_found
+    if run.institution_id and not can_participate_as_student(resolve_principal(user), run_institution_id=run.institution_id):
+        raise not_found
+    return {"run_id": run.id}
 
 
 @router.post("/runs/{run_id}/admit")

@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { AttemptActions } from "@/components/exams/AttemptActions";
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
 import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
@@ -16,8 +17,7 @@ function CandidateDetailContent() {
   const [incidents, setIncidents] = useState<IncidentLogEntry[]>([]);
   const [snapshots, setSnapshots] = useState<EvidenceSnapshotSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [extraMinutes, setExtraMinutes] = useState(10);
-  const [granting, setGranting] = useState(false);
+  const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [resolveNotes, setResolveNotes] = useState("");
   const [resolving, setResolving] = useState(false);
   const [viewedImageUrl, setViewedImageUrl] = useState<string | null>(null);
@@ -56,19 +56,6 @@ function CandidateDetailContent() {
   }, [refresh]);
 
   useLiveSocket({ runId, getToken, onReconcile: refresh });
-
-  const handleGrantExtension = async () => {
-    setGranting(true);
-    try {
-      const token = await getToken();
-      await examEndpoints.extendTime(token, runId, uid, extraMinutes);
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not grant the extension.");
-    } finally {
-      setGranting(false);
-    }
-  };
 
   const handleResolveBlock = async (allowContinue: boolean) => {
     setResolving(true);
@@ -182,15 +169,13 @@ function CandidateDetailContent() {
       </div>
 
       <div className="card mt-4 p-5">
-        <h2 className="text-lg font-semibold">Grant time extension</h2>
-        <p className="mt-1 text-sm text-[var(--text-muted)]">Explicit, audited — never automatic.</p>
-        <div className="mt-3 flex items-center gap-3">
-          <input type="number" min={1} className="input-field w-24" value={extraMinutes} onChange={(e) => setExtraMinutes(Number(e.target.value))} />
-          <span className="text-sm text-[var(--text-muted)]">minutes</span>
-          <button className="btn-primary" onClick={handleGrantExtension} disabled={granting}>
-            {granting ? "Granting…" : "Grant"}
-          </button>
+        <h2 className="text-lg font-semibold">Actions for this student</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">Explicit, audited, and checked against the latest state - never automatic.</p>
+        <div className="mt-3">
+          <AttemptActions runId={runId} attempt={attempt} getToken={getToken} onChanged={refresh} onFeedback={setFeedback} />
         </div>
+        <p role={feedback?.kind === "error" ? "alert" : "status"} className={`mt-3 text-sm ${feedback?.kind === "error" ? "text-[var(--error)]" : ""}`}>{feedback?.text}</p>
+        {attempt.status === "not_started" && <p className="mt-2 text-sm text-[var(--text-muted)]">This student has not started, so there is nothing to extend or end.</p>}
       </div>
     </div>
   );

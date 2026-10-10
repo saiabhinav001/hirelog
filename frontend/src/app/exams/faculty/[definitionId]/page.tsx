@@ -11,6 +11,7 @@ import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
 import { examApiFetch } from "@/lib/examsApi";
 import { examEndpoints, type ApprovedSourceSummary, type ExamRunSummary } from "@/lib/examEndpoints";
+import { buildRunPolicy, parseTopics } from "@/lib/examSchedule";
 
 type Blueprint = { id: string; title: string; slots: unknown[] };
 
@@ -32,6 +33,13 @@ function DefinitionDetail() {
   const [shuffleOptions, setShuffleOptions] = useState(false);
   const [slotCount, setSlotCount] = useState(1);
   const [enrolledUidsText, setEnrolledUidsText] = useState("");
+  const [topicsText, setTopicsText] = useState("");
+  const [marksPerQuestion, setMarksPerQuestion] = useState(1);
+  const [durationMinutes, setDurationMinutes] = useState(60);
+  const [warningText, setWarningText] = useState("10");
+  const [startAt, setStartAt] = useState("");
+  const [endAt, setEndAt] = useState("");
+  const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   const load = useCallback(async () => {
     try {
@@ -83,16 +91,19 @@ function DefinitionDetail() {
           spec: {
             question_count: questionCount,
             type_counts: { [blueprintItemType]: questionCount },
+            marks_per_type: { [blueprintItemType]: marksPerQuestion },
             difficulty_distribution: { medium: 100 },
             languages: blueprintItemType === "coding" ? [blueprintLanguage] : [],
             variants_per_slot: variantsPerQuestion,
           },
+          topics: parseTopics(topicsText),
           shuffle_options: shuffleOptions,
         }),
       },
       token
     );
     setBlueprintTitle("");
+    setTopicsText("");
     await load();
   };
 
@@ -122,6 +133,11 @@ function DefinitionDetail() {
 
   const handleScheduleRun = async (event: React.FormEvent) => {
     event.preventDefault();
+    const built = buildRunPolicy({ durationMinutes, warningMinutesText: warningText, start: startAt, end: endAt, timezone: browserZone });
+    if (!built.ok) {
+      setNotice(built.error);
+      return;
+    }
     const token = await getToken();
     const enrolledUids = enrolledUidsText.split(",").map((s) => s.trim()).filter(Boolean);
     const definitionsResp = await examEndpoints.listMyDefinitions(token);
@@ -137,13 +153,14 @@ function DefinitionDetail() {
         body: JSON.stringify({
           definition_id: definitionId,
           revision_id: def.latest_published_revision_id,
-          policy: { duration_minutes: 60, warning_threshold: 3 },
+          policy: built.policy,
           enrolled_uids: enrolledUids,
         }),
       },
       token
     );
     setEnrolledUidsText("");
+    setNotice("Session scheduled.");
     await load();
   };
 
@@ -226,9 +243,18 @@ function DefinitionDetail() {
             <input type="number" min={1} max={50} className="input-field w-20" aria-label="Variants per question" value={variantsPerQuestion} onChange={(e) => setVariantsPerQuestion(Math.max(1, Number(e.target.value) || 1))} />
           </label>
           <label className="flex items-center gap-2">
+            Marks per question
+            <input type="number" min={0.5} step={0.5} className="input-field w-20" aria-label="Marks per question" value={marksPerQuestion} onChange={(e) => setMarksPerQuestion(Math.max(0.5, Number(e.target.value) || 1))} />
+          </label>
+          <label className="flex items-center gap-2">
             <input type="checkbox" checked={shuffleOptions} onChange={(e) => setShuffleOptions(e.target.checked)} />
             Shuffle answer options per student
           </label>
+        </div>
+        <div className="mt-2 text-sm">
+          <label htmlFor="blueprint-topics" className="label">Topics (optional, comma-separated)</label>
+          <input id="blueprint-topics" className="input-field w-full" placeholder="Recursion, Sorting, Big-O" value={topicsText} onChange={(e) => setTopicsText(e.target.value)} />
+          <p className="mt-1 text-xs text-[var(--text-muted)]">Topics you type here are the ones you have confirmed. Scoring: every question counts for the marks above; negative marking is not applied to grading.</p>
         </div>
         <div className="mt-4 space-y-4">
           {blueprints.length === 0 && <p className="text-sm text-[var(--text-muted)]">No blueprints yet.</p>}
@@ -251,14 +277,38 @@ function DefinitionDetail() {
           <button className="btn-secondary" onClick={handlePublishRevision}>Publish revision</button>
         </div>
 
-        <form onSubmit={handleScheduleRun} className="mt-4 flex gap-3">
-          <input
-            className="input-field flex-1"
-            placeholder="Enrolled student UIDs, comma-separated"
-            value={enrolledUidsText}
-            onChange={(e) => setEnrolledUidsText(e.target.value)}
-          />
-          <button className="btn-primary" type="submit">Schedule session</button>
+        <form onSubmit={handleScheduleRun} className="mt-4 space-y-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label htmlFor="run-duration" className="label">Duration (minutes)</label>
+              <input id="run-duration" type="number" min={1} max={1440} className="input-field w-28" value={durationMinutes} onChange={(e) => setDurationMinutes(Number(e.target.value))} />
+            </div>
+            <div>
+              <label htmlFor="run-warnings" className="label">Time warnings (minutes left)</label>
+              <input id="run-warnings" className="input-field w-40" value={warningText} onChange={(e) => setWarningText(e.target.value)} />
+            </div>
+            <div>
+              <label htmlFor="run-start" className="label">Opens (optional)</label>
+              <input id="run-start" type="datetime-local" className="input-field" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
+            </div>
+            <div>
+              <label htmlFor="run-end" className="label">Closes (optional)</label>
+              <input id="run-end" type="datetime-local" className="input-field" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
+            </div>
+          </div>
+          <p className="text-xs text-[var(--text-muted)]">
+            Times are in your time zone ({browserZone}). Students see the time left counted down from the server&apos;s clock; the window only controls when new students can start. Automatic opening and closing also needs the scheduler turned on for this deployment.
+          </p>
+          <div className="flex gap-3">
+            <input
+              className="input-field flex-1"
+              aria-label="Enrolled student UIDs"
+              placeholder="Enrolled student UIDs, comma-separated"
+              value={enrolledUidsText}
+              onChange={(e) => setEnrolledUidsText(e.target.value)}
+            />
+            <button className="btn-primary" type="submit">Schedule session</button>
+          </div>
         </form>
       </section>
 

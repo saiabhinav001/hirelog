@@ -49,8 +49,18 @@ class ExamPolicy(BaseModel):
     # historical behavior (reservation is blocked when the pool is too small);
     # "balanced_reuse" pre-authorises explicit round-robin reuse.
     variant_policy: Literal["unique", "balanced_reuse"] = "unique"
+    # Prompt 7 (ADR 0023): minutes before a student's deadline at which the workspace announces the time left.
+    # Display only - the deadline itself is always the server's.
+    time_warning_minutes: list[int] = Field(default_factory=lambda: [10], max_length=8)
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("time_warning_minutes")
+    @classmethod
+    def _validate_time_warnings(cls, value: list[int]):
+        if any(m < 1 or m > 24 * 60 for m in value):
+            raise ValueError("time warnings must be between 1 and 1440 minutes")
+        return sorted(set(value), reverse=True)
 
     @field_validator("accommodations")
     @classmethod

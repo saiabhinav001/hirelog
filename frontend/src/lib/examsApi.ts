@@ -33,9 +33,32 @@ export async function examApiFetch<T>(path: string, options: RequestInit = {}, t
   }
 
   if (!response.ok) {
-    throw new Error(errorMessage(data));
+    throw new ExamApiError(errorMessage(data), response.status, errorCode(data));
   }
   return data as T;
+}
+
+/** Carries the HTTP status and the server's stable error code so screens can say what actually conflicted. */
+export class ExamApiError extends Error {
+  status: number;
+  code: string | null;
+
+  constructor(message: string, status: number, code: string | null = null) {
+    super(message);
+    this.name = "ExamApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function errorCode(data: Record<string, unknown>): string | null {
+  const detail = data?.detail;
+  if (detail && typeof detail === "object") {
+    const d = detail as { code?: unknown; reason?: unknown };
+    if (typeof d.reason === "string") return d.reason;
+    if (typeof d.code === "string") return d.code;
+  }
+  return null;
 }
 
 /** Structured errors (`{code, message}`) show their message; plain strings are unchanged. */

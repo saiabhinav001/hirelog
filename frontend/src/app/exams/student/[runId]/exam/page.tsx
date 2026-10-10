@@ -6,15 +6,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
 import { ExamShellHeader } from "@/components/exams/ExamShellHeader";
 import { LazyCodeEditorPanel } from "@/components/exams/LazyCodeEditorPanel";
+import { QuestionNavigator } from "@/components/exams/QuestionNavigator";
 import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
-import { examEndpoints, type Attempt, type PublicQuestion } from "@/lib/examEndpoints";
+import { examEndpoints, type Attempt, type PublicQuestion, type ReleasedSlots } from "@/lib/examEndpoints";
 import { useLiveSocket } from "@/lib/liveSocket";
 import { useProctoringObservations } from "@/lib/proctoringObservations";
+import { remainingMs } from "@/lib/serverClock";
 import { useCameraCapture } from "@/lib/useCameraCapture";
 import { useExamServiceWorker } from "@/lib/useExamServiceWorker";
+import { timeWarningMessage, useServerClock } from "@/lib/useServerClock";
 
 const AUTOSAVE_DEBOUNCE_MS = 1200;
+const DEFAULT_TIME_WARNINGS = [10];
+const FINALIZING_POLL_MS = 3000;
 
 // Visible, on-screen feedback for detections the backend already logs
 // silently — the ledger/warning counter existed before, but nothing told
@@ -47,51 +52,93 @@ function ExamContent() {
   const [liveWarning, setLiveWarning] = useState<string | null>(null);
   const [fullscreenSupported, setFullscreenSupported] = useState(false);
   const [fullscreenActive, setFullscreenActive] = useState(false);
+  const [slots, setSlots] = useState<ReleasedSlots | null>(null);
+  const [viewIndex, setViewIndex] = useState<number | null>(null); // null = follow the current (released) question
+  const [markedForReview, setMarkedForReview] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const draftVersionsRef = useRef<Record<string, number>>({});
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const redirectedRef = useRef(false);
   const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewIndexRef = useRef<number | null>(null);
+  const releasedIndexRef = useRef(0);
+  const { clock, tick } = useServerClock();
+  void tick; // re-render every second so the timer advances
 
-  const loadQuestion = useCallback(async () => {
+  const sampleClock = useCallback(
+    (serverTime: string | undefined, startedAt: number) => {
+      if (serverTime) clock.sample(serverTime, performance.now() - startedAt);
+    },
+    [clock]
+  );
+
+  const syncState = useCallback(async () => {
     const token = await getToken();
-    const q = await examEndpoints.getCurrentQuestion(token, runId);
-    setQuestion(q);
-    const existing = await examEndpoints.getMyDraft(token, runId, q.question_id);
-    setDraftVersion(existing.version);
-    const existingAnswer = existing.answer ?? {};
-    // The language <select> only fires onChange when the student actually
-    // picks a DIFFERENT option — with just one permitted language (the
-    // common case) there is nothing to change, so answer.language never
-    // gets written even though the select visually shows it selected.
-    // "Run public tests"/submit then silently sent language: "" (found
-    // live: a real runtime_not_allowed 400 on a brand new, untouched coding
-    // attempt). Seed it from the question itself, not just the select's
-    // display-only fallback.
-    if (q.public_content.item_type === "coding" && !existingAnswer.language) {
-      const permitted = q.public_content.permitted_languages as string[] | undefined;
-      if (permitted && permitted.length > 0) {
-        existingAnswer.language = permitted[0];
-      }
+    const startedAt = performance.now();
+    const state = await examEndpoints.getState(token, runId);
+    sampleClock(state.server_time, startedAt);
+    setAttempt(state);
+    releasedIndexRef.current = state.current_slot_index;
+    return state;
+  }, [getToken, runId, sampleClock]);
+
+  const refreshSlots = useCallback(async () => {
+    try {
+      const token = await getToken();
+      setSlots(await examEndpoints.listReleasedSlots(token, runId));
+    } catch {
+      // the navigator is a convenience; the question and save paths do not depend on it
     }
-    setAnswer(existingAnswer);
-    draftVersionsRef.current[q.question_id] = existing.version;
   }, [getToken, runId]);
+
+  const loadQuestion = useCallback(
+    async (target?: number | null) => {
+      const token = await getToken();
+      const wanted = target === undefined ? viewIndexRef.current : target;
+      const showCurrent = wanted === null || wanted >= releasedIndexRef.current;
+      const q = showCurrent
+        ? await examEndpoints.getCurrentQuestion(token, runId)
+        : await examEndpoints.getReleasedQuestion(token, runId, wanted);
+      setQuestion(q);
+      const existing = await examEndpoints.getMyDraft(token, runId, q.question_id);
+      setDraftVersion(existing.version);
+      setMarkedForReview(Boolean(existing.marked_for_review));
+      const existingAnswer = existing.answer ?? {};
+      // The language <select> only fires onChange when the student actually
+      // picks a DIFFERENT option — with just one permitted language (the
+      // common case) there is nothing to change, so answer.language never
+      // gets written even though the select visually shows it selected.
+      // "Run public tests"/submit then silently sent language: "" (found
+      // live: a real runtime_not_allowed 400 on a brand new, untouched coding
+      // attempt). Seed it from the question itself, not just the select's
+      // display-only fallback.
+      if (q.public_content.item_type === "coding" && !existingAnswer.language) {
+        const permitted = q.public_content.permitted_languages as string[] | undefined;
+        if (permitted && permitted.length > 0) {
+          existingAnswer.language = permitted[0];
+        }
+      }
+      setAnswer(existingAnswer);
+      draftVersionsRef.current[q.question_id] = existing.version;
+    },
+    [getToken, runId]
+  );
 
   const refresh = useCallback(async () => {
     try {
       const token = await getToken();
-      const state = await examEndpoints.getState(token, runId);
-      setAttempt(state);
+      const state = await syncState();
       const versions = await examEndpoints.listMyDraftVersions(token, runId);
       draftVersionsRef.current = versions.versions;
       if (state.status === "in_progress") {
         await loadQuestion();
+        await refreshSlots();
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load your exam state.");
     }
-  }, [getToken, loadQuestion, runId]);
+  }, [getToken, loadQuestion, refreshSlots, runId, syncState]);
 
   useEffect(() => {
     refresh();
@@ -162,7 +209,7 @@ function ExamContent() {
     if (attempt.status === "blocked") {
       redirectedRef.current = true;
       router.push(`/exams/student/${runId}/blocked`);
-    } else if (attempt.status === "submitted" || attempt.status === "finalized") {
+    } else if (attempt.status === "submitted" || attempt.status === "finalized" || attempt.status === "expired") {
       redirectedRef.current = true;
       router.push(`/exams/student/${runId}/receipt`);
     } else if (attempt.status === "admitted") {
@@ -172,7 +219,7 @@ function ExamContent() {
   }, [attempt, router, runId]);
 
   const persistDraft = useCallback(
-    async (nextAnswer: Record<string, unknown>) => {
+    async (nextAnswer: Record<string, unknown>, marked?: boolean) => {
       if (!question) return;
       // One id per save: if the response is lost the retry below is recognised by the server and
       // acknowledged without creating another version.
@@ -183,10 +230,12 @@ function ExamContent() {
           const result = await examEndpoints.saveDraft(token, runId, question.question_id, draftVersion, nextAnswer, {
             clientEpoch: attempt?.epoch,
             clientSaveId,
+            markedForReview: marked,
           });
           setDraftVersion(result.version);
           draftVersionsRef.current[question.question_id] = result.version;
           setSaveReceipt({ savedAt: new Date().toISOString(), version: result.version });
+          void refreshSlots();
           return;
         } catch {
           // fall through: retry once with the same id, then reconcile
@@ -196,25 +245,82 @@ function ExamContent() {
       // recently — reconcile from the server rather than overwrite it.
       await loadQuestion();
     },
-    [attempt?.epoch, draftVersion, getToken, loadQuestion, question, runId]
+    [attempt?.epoch, draftVersion, getToken, loadQuestion, question, refreshSlots, runId]
   );
+
+  const remaining = remainingMs(attempt?.deadline, clock.now());
+  const timeUp = attempt?.status === "in_progress" && remaining === 0;
+  const timeWarning = timeUp ? null : timeWarningMessage(remaining, attempt?.time_warning_minutes ?? DEFAULT_TIME_WARNINGS);
+
+  // The server seals the attempt at the deadline (sweeper); this only waits for it and then follows the status.
+  useEffect(() => {
+    if (!timeUp) return undefined;
+    const id = setInterval(() => {
+      syncState().catch(() => undefined);
+    }, FINALIZING_POLL_MS);
+    return () => clearInterval(id);
+  }, [syncState, timeUp]);
 
   const updateAnswer = useCallback(
     (next: Record<string, unknown>) => {
+      if (timeUp) return;
       setAnswer(next);
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       saveTimerRef.current = setTimeout(() => persistDraft(next), AUTOSAVE_DEBOUNCE_MS);
     },
-    [persistDraft]
+    [persistDraft, timeUp]
+  );
+
+  const flushPendingSave = useCallback(async () => {
+    if (!saveTimerRef.current) return;
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    await persistDraft(answer);
+  }, [answer, persistDraft]);
+
+  const toggleMarked = useCallback(async () => {
+    if (timeUp) return;
+    const next = !markedForReview;
+    setMarkedForReview(next);
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    await persistDraft(answer, next);
+  }, [answer, markedForReview, persistDraft, timeUp]);
+
+  const goToSlot = useCallback(
+    async (index: number) => {
+      await flushPendingSave();
+      viewIndexRef.current = index >= releasedIndexRef.current ? null : index;
+      setViewIndex(viewIndexRef.current);
+      setPublicRunStatus(null);
+      setPublicRunResults([]);
+      try {
+        await loadQuestion(viewIndexRef.current);
+        setNotice(`Question ${index + 1}`);
+      } catch (err) {
+        setNotice(err instanceof Error ? err.message : "That question is not available.");
+      }
+    },
+    [flushPendingSave, loadQuestion]
   );
 
   const handleNextQuestion = useCallback(async () => {
+    await flushPendingSave();
+    const current = viewIndexRef.current ?? releasedIndexRef.current;
+    if (current < releasedIndexRef.current) {
+      await goToSlot(current + 1);
+      return;
+    }
     const token = await getToken();
     await examEndpoints.advanceToNextQuestion(token, runId);
+    viewIndexRef.current = null;
+    setViewIndex(null);
     setPublicRunStatus(null);
     setPublicRunResults([]);
     await refresh();
-  }, [getToken, refresh, runId]);
+  }, [flushPendingSave, getToken, goToSlot, refresh, runId]);
 
   const handleRunPublicTests = useCallback(async () => {
     if (!question) return;
@@ -268,6 +374,20 @@ function ExamContent() {
 
   const itemType = question.public_content.item_type as string | undefined;
   const isLastSlot = question.slot_index + 1 >= question.total_slots;
+  const releasedIndex = attempt.current_slot_index;
+  const viewing = viewIndex ?? releasedIndex;
+  const revisitEnabled = slots?.revisit_enabled ?? false;
+  const markButton = (
+    <button
+      type="button"
+      className={markedForReview ? "btn-primary" : "btn-secondary"}
+      aria-pressed={markedForReview}
+      onClick={toggleMarked}
+      disabled={timeUp}
+    >
+      {markedForReview ? "Marked for review" : "Mark for review"}
+    </button>
+  );
   const publicTestGroups =
     (question.public_content.public_tests as
       | { group_name: string; tests: { stdin: string; expected_output: string }[] }[]
@@ -295,19 +415,36 @@ function ExamContent() {
       )}
       <ExamShellHeader
         deadline={attempt.deadline}
+        serverNowMs={clock.now()}
         connectionHealth={health}
         saveReceipt={saveReceipt}
         warningCount={attempt.warning_count}
         camera={cameraState}
       />
 
+      {/* Always mounted so assistive tech registers the region before the first message arrives. */}
+      <div role="status" aria-live="polite" aria-atomic="true" className={timeWarning && !timeUp ? "card-muted mt-4 border border-[var(--warning-border)] bg-[var(--warning-soft)] p-3 text-sm font-medium text-[var(--text)]" : "sr-only"}>
+        {timeUp ? "" : timeWarning}
+      </div>
+      {timeUp && (
+        <div role="alert" className="card-muted mt-4 border border-[var(--warning-border)] bg-[var(--warning-soft)] p-3 text-sm font-medium text-[var(--text)]">
+          Time is up. Your saved answers are being submitted automatically - you can no longer change them.
+        </div>
+      )}
+      <p className="sr-only" role="status" aria-live="polite">{notice}</p>
+
+      <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_16rem] lg:items-start">
+      <div className="min-w-0">
       {itemType !== "coding" && (
-        <div className="mt-6 card p-6">
-          <div className="flex items-center justify-between">
+        <div className="card p-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="badge-primary badge">
               Question {question.slot_index + 1} of {question.total_slots}
             </span>
-            <span className="badge">{itemType}</span>
+            <div className="flex items-center gap-2">
+              <span className="badge">{itemType}</span>
+              {markButton}
+            </div>
           </div>
 
           <p className="mt-4 whitespace-pre-wrap text-[var(--text)]">{String(question.public_content.prompt ?? "")}</p>
@@ -320,6 +457,7 @@ function ExamContent() {
                   <input
                     type={itemType === "single_choice" ? "radio" : "checkbox"}
                     name="mcq-option"
+                    disabled={timeUp}
                     checked={
                       itemType === "single_choice"
                         ? answer.selected === opt.key
@@ -346,6 +484,7 @@ function ExamContent() {
               className="input-field mt-4 w-full"
               style={{ minHeight: 160 }}
               aria-label="Your answer"
+              readOnly={timeUp}
               value={String(answer.text ?? "")}
               onChange={(e) => updateAnswer({ text: e.target.value })}
             />
@@ -354,13 +493,16 @@ function ExamContent() {
       )}
 
       {itemType === "coding" && (
-        <div className="mt-6 grid gap-4 lg:grid-cols-2 lg:items-start">
+        <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
           <div className="card p-6 lg:sticky lg:top-4 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="badge-primary badge">
                 Question {question.slot_index + 1} of {question.total_slots}
               </span>
-              <span className="badge">{itemType}</span>
+              <div className="flex items-center gap-2">
+                <span className="badge">{itemType}</span>
+                {markButton}
+              </div>
             </div>
             <p className="mt-4 whitespace-pre-wrap text-[var(--text)]">{String(question.public_content.prompt ?? "")}</p>
           </div>
@@ -458,17 +600,46 @@ function ExamContent() {
         </div>
       )}
 
-      <div className="mt-4 flex justify-end gap-3">
-        {!isLastSlot && (
-          <button className="btn-primary" onClick={handleNextQuestion}>
-            Next question
-          </button>
-        )}
-        {isLastSlot && (
-          <button className="btn-primary" onClick={() => setShowSubmitConfirm(true)}>
-            Submit exam
-          </button>
-        )}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <button
+          className="btn-secondary"
+          onClick={() => goToSlot(viewing - 1)}
+          disabled={timeUp || !revisitEnabled || viewing <= 0}
+          title={!revisitEnabled ? "Earlier questions can't be reopened in this exam." : undefined}
+        >
+          Previous question
+        </button>
+        <div className="flex gap-3">
+          {!isLastSlot && (
+            <button className="btn-primary" onClick={handleNextQuestion} disabled={timeUp}>
+              Next question
+            </button>
+          )}
+          {isLastSlot && (
+            <button className="btn-primary" onClick={() => setShowSubmitConfirm(true)} disabled={timeUp}>
+              Submit exam
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="mt-2 text-right text-xs text-[var(--text-secondary)]">
+        {saveReceipt ? `Your answer is saved as a draft (v${saveReceipt.version}). ` : ""}
+        Saving a draft is not submitting: your answers count only after you submit, or when time runs out.
+        {viewing >= releasedIndex && !isLastSlot ? " Moving to the next question releases it and cannot be undone." : ""}
+      </p>
+      </div>
+
+      <aside className="lg:sticky lg:top-4">
+        <QuestionNavigator
+          totalSlots={question.total_slots}
+          slots={slots?.slots ?? []}
+          viewIndex={viewing}
+          releasedIndex={releasedIndex}
+          revisitEnabled={revisitEnabled}
+          disabled={timeUp}
+          onSelect={goToSlot}
+        />
+      </aside>
       </div>
 
       {showSubmitConfirm && (

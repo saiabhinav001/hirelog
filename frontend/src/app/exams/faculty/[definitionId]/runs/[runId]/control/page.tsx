@@ -4,11 +4,18 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
+import { AttemptActions } from "@/components/exams/AttemptActions";
+import { ConfirmDialog } from "@/components/exams/ConfirmDialog";
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
+import { ShortLinkPanel } from "@/components/exams/ShortLinkPanel";
 import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
+import { describeConflict } from "@/lib/examConflicts";
 import { examEndpoints, type Appeal, type Attempt, type ExamRunSummary } from "@/lib/examEndpoints";
 import { useLiveSocket } from "@/lib/liveSocket";
+
+/** Older than this, with the live feed not connected, the grid may no longer match the server. */
+const STALE_AFTER_MS = 30_000;
 
 function statusBadge(status: string): string {
   if (status === "submitted" || status === "finalized") return "badge-success";
@@ -27,8 +34,18 @@ function ControlRoomContent() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
+  const [serverTime, setServerTime] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [pendingCommand, setPendingCommand] = useState<{ command: "pause" | "resume" | "close" | "end" } | null>(null);
   const [acting, setActing] = useState(false);
+  const [accessUid, setAccessUid] = useState("");
+  const [accessAction, setAccessAction] = useState<{ action: "grant" | "revoke"; uid: string; key: string } | null>(null);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const loadPage = useCallback(
     async (cursorUid?: string) => {
@@ -43,7 +60,9 @@ function ControlRoomContent() {
         setAttempts(attemptsData.results);
         setNextCursor(attemptsData.next_cursor_uid);
         setAppeals(appealsData.results);
+        setServerTime(attemptsData.server_time ?? runData.server_time ?? null);
         setFetchedAt(Date.now());
+        setNow(Date.now());
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load the candidate grid.");
       }
@@ -57,23 +76,52 @@ function ControlRoomContent() {
 
   const { health } = useLiveSocket({ runId, getToken, onReconcile: () => loadPage(cursor) });
 
-  const runCommand = async (command: "pause" | "resume" | "close" | "end") => {
+  const runCommand = async (command: "pause" | "resume" | "close" | "end", reason: string) => {
     if (!run) return;
     setActing(true);
+    setFeedback(null);
     try {
       const token = await getToken();
-      await examEndpoints.runCommand(token, runId, command, run.version, `${command}-${runId}-${run.version}`);
-      await loadPage(cursor);
+      await examEndpoints.runCommand(token, runId, command, run.version, `${command}-${runId}-${run.version}`, false, reason);
+      setFeedback({ kind: "ok", text: `Run ${command === "end" ? "ended" : command === "close" ? "closed" : command === "pause" ? "paused" : "resumed"}.` });
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Could not ${command} the run.`);
+      setFeedback({ kind: "error", text: describeConflict(err, `Could not ${command} the run.`) });
     } finally {
       setActing(false);
       setPendingCommand(null);
+      // Reload after success AND after any rejection, so a stale screen never survives a conflict.
+      await loadPage(cursor);
+    }
+  };
+
+  const changeAccess = async (reason: string) => {
+    if (!accessAction) return;
+    setActing(true);
+    setFeedback(null);
+    try {
+      const token = await getToken();
+      const result = await examEndpoints.changeRunAccess(token, runId, accessAction.action, accessAction.uid, accessAction.key, reason);
+      setFeedback({
+        kind: "ok",
+        text: result.changed
+          ? `${accessAction.action === "grant" ? "Added" : "Removed"} ${accessAction.uid} ${accessAction.action === "grant" ? "to" : "from"} this run.`
+          : `No change: ${accessAction.uid} ${accessAction.action === "grant" ? "was already enrolled" : "was not enrolled"}.`,
+      });
+      if (accessAction.action === "grant") setAccessUid("");
+    } catch (err) {
+      setFeedback({ kind: "error", text: describeConflict(err) });
+    } finally {
+      setActing(false);
+      setAccessAction(null);
+      await loadPage(cursor);
     }
   };
 
   if (error) return <ErrorState title="Something went wrong" description={error} />;
   if (!run) return <LoadingState message="Loading live control room…" />;
+
+  const ageMs = fetchedAt ? Math.max(0, now - fetchedAt) : 0;
+  const stale = health !== "connected" && ageMs > STALE_AFTER_MS;
 
   return (
     <div className="page-container py-10">
@@ -93,35 +141,46 @@ function ControlRoomContent() {
         {run.status !== "ended" && <button className="btn-secondary" onClick={() => setPendingCommand({ command: "end" })}>End</button>}
       </div>
 
+      <p role={feedback?.kind === "error" ? "alert" : "status"} className={`mt-3 text-sm ${feedback?.kind === "error" ? "text-[var(--error)]" : ""}`}>{feedback?.text}</p>
+
       {pendingCommand && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
-          <div className="card max-w-md p-6">
-            <h2 className="text-lg font-semibold">Confirm: {pendingCommand.command}</h2>
-            <dl className="mt-3 space-y-1 text-sm">
-              <div className="flex justify-between"><dt className="text-[var(--text-muted)]">Scope</dt><dd>All {run.enrolled_uids.length} enrolled students</dd></div>
-              <div className="flex justify-between"><dt className="text-[var(--text-muted)]">Current version</dt><dd>{run.version}</dd></div>
-              <div className="flex justify-between"><dt className="text-[var(--text-muted)]">Consequence</dt><dd>
-                {pendingCommand.command === "close" && "Unresolved in-progress attempts will be sealed."}
-                {pendingCommand.command === "end" && "Content access ends for all students, even accommodated ones."}
-                {pendingCommand.command === "pause" && "Students keep their deadline but lose content access temporarily."}
-                {pendingCommand.command === "resume" && "Content access resumes for all eligible students."}
-              </dd></div>
-            </dl>
-            <div className="mt-5 flex justify-end gap-3">
-              <button className="btn-secondary" onClick={() => setPendingCommand(null)} disabled={acting}>Cancel</button>
-              <button className="btn-primary" onClick={() => runCommand(pendingCommand.command)} disabled={acting}>
-                {acting ? "Applying…" : "Confirm"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title={`Confirm: ${pendingCommand.command}`}
+          details={[
+            { label: "Scope", value: `All ${run.enrolled_uids.length} enrolled students` },
+            { label: "Current version", value: String(run.version) },
+          ]}
+          consequence={
+            pendingCommand.command === "close"
+              ? "Stops new admissions. Unresolved in-progress attempts will be sealed."
+              : pendingCommand.command === "end"
+                ? "Content access ends for all students, even accommodated ones."
+                : pendingCommand.command === "pause"
+                  ? "Students keep their deadline but lose content access temporarily."
+                  : "Content access resumes for all eligible students."
+          }
+          reasonLabel="Reason"
+          reasonRequired={pendingCommand.command === "end" || pendingCommand.command === "close"}
+          danger={pendingCommand.command === "end"}
+          confirmLabel={`Confirm ${pendingCommand.command}`}
+          busy={acting}
+          onCancel={() => setPendingCommand(null)}
+          onConfirm={(reason) => runCommand(pendingCommand.command, reason)}
+        />
       )}
 
       <div className="card mt-4 overflow-x-auto p-0">
-        <div className="flex items-center justify-between border-b border-[var(--border)] p-3 text-xs text-[var(--text-muted)]">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] p-3 text-xs text-[var(--text-muted)]">
           <span>Candidates ({attempts.length} shown)</span>
-          <span>Snapshot as of {fetchedAt ? new Date(fetchedAt).toLocaleTimeString() : "—"}</span>
+          <span data-testid="freshness">
+            Server time {serverTime ? new Date(serverTime).toLocaleTimeString() : "-"} · refreshed {Math.floor(ageMs / 1000)}s ago
+          </span>
         </div>
+        {stale && (
+          <p role="alert" className="border-b border-[var(--border)] p-3 text-sm text-[var(--error)]">
+            Live updates are {health}. These figures may be out of date.
+          </p>
+        )}
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-[var(--text-muted)]">
@@ -129,7 +188,7 @@ function ControlRoomContent() {
               <th className="p-3">Status</th>
               <th className="p-3">Warnings</th>
               <th className="p-3">Question</th>
-              <th className="p-3">Review</th>
+              <th className="p-3">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -140,9 +199,12 @@ function ControlRoomContent() {
                 <td className="p-3">{a.warning_count}</td>
                 <td className="p-3">{a.current_slot_index + 1}</td>
                 <td className="p-3">
-                  <Link className="btn-secondary" href={`/exams/faculty/${definitionId}/runs/${runId}/candidates/${a.uid}`}>
-                    Detail
-                  </Link>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Link className="btn-secondary" href={`/exams/faculty/${definitionId}/runs/${runId}/candidates/${a.uid}`}>
+                      Detail
+                    </Link>
+                    <AttemptActions runId={runId} attempt={a} getToken={getToken} onChanged={() => loadPage(cursor)} onFeedback={setFeedback} />
+                  </div>
                 </td>
               </tr>
             ))}
@@ -156,6 +218,37 @@ function ControlRoomContent() {
           <button className="btn-secondary" disabled={!nextCursor} onClick={() => setCursor(nextCursor ?? undefined)}>Next page</button>
         </div>
       </div>
+
+      <section className="card mt-4 p-5" aria-labelledby="access-title">
+        <h2 id="access-title" className="text-lg font-semibold">Student access</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">
+          Add a student to this run, or remove one who has not started. A student who has started can&apos;t be removed; end their attempt instead.
+        </p>
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <div>
+            <label htmlFor="access-uid" className="label">Student ID</label>
+            <input id="access-uid" className="input-field font-mono" value={accessUid} onChange={(e) => setAccessUid(e.target.value)} />
+          </div>
+          <button className="btn-primary" disabled={!accessUid.trim() || run.status === "ended"} onClick={() => setAccessAction({ action: "grant", uid: accessUid.trim(), key: crypto.randomUUID() })}>Add to run</button>
+          <button className="btn-secondary" disabled={!accessUid.trim() || run.status === "ended"} onClick={() => setAccessAction({ action: "revoke", uid: accessUid.trim(), key: crypto.randomUUID() })}>Remove from run</button>
+        </div>
+      </section>
+
+      {accessAction && (
+        <ConfirmDialog
+          title={accessAction.action === "grant" ? "Add student to this run?" : "Remove student from this run?"}
+          details={[{ label: "Student", value: accessAction.uid }, { label: "Run", value: runId }]}
+          consequence={accessAction.action === "grant" ? "They can then sign in, run the readiness check and be admitted." : "They lose access to this run. Refused if they have already started."}
+          reasonLabel="Reason"
+          danger={accessAction.action === "revoke"}
+          confirmLabel={accessAction.action === "grant" ? "Add student" : "Remove student"}
+          busy={acting}
+          onCancel={() => setAccessAction(null)}
+          onConfirm={(reason) => changeAccess(reason)}
+        />
+      )}
+
+      <ShortLinkPanel runId={runId} getToken={getToken} />
 
       <div className="card mt-4 p-5">
         <h2 className="text-lg font-semibold">Pending appeals</h2>

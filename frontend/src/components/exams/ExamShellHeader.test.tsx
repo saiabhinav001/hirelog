@@ -63,6 +63,27 @@ describe("ExamShellHeader", () => {
     const { rerender } = render(<ExamShellHeader connectionHealth="connected" />);
     expect(screen.getByText("Not saved yet")).toBeInTheDocument();
     rerender(<ExamShellHeader connectionHealth="connected" saveReceipt={{ savedAt: "2026-06-01T10:00:00Z", version: 3 }} />);
-    expect(screen.getByText("Saved (v3)")).toBeInTheDocument();
+    expect(screen.getByText("Draft saved (v3) - not submitted")).toBeInTheDocument();
+  });
+
+  it("anchors the timer to the server's time, ignoring the device clock", () => {
+    vi.useFakeTimers().setSystemTime(new Date("1999-01-01T00:00:00Z")); // a wrong device clock
+    const serverNow = Date.parse("2026-06-01T10:00:00Z");
+    render(<ExamShellHeader connectionHealth="connected" deadline="2026-06-01T10:12:05Z" serverNowMs={serverNow} />);
+    expect(screen.getByRole("timer")).toHaveTextContent("12:05");
+    vi.useRealTimers();
+  });
+
+  it("shows zero, never a negative time, once the deadline has passed", () => {
+    render(<ExamShellHeader connectionHealth="connected" deadline="2026-06-01T10:00:00Z" serverNowMs={Date.parse("2026-06-01T10:30:00Z")} />);
+    expect(screen.getByRole("timer")).toHaveTextContent("00:00");
+  });
+
+  it("is not a live region, so a screen reader is not interrupted every second", () => {
+    render(<ExamShellHeader connectionHealth="connected" deadline="2026-06-01T10:12:05Z" serverNowMs={Date.parse("2026-06-01T10:00:00Z")} />);
+    const timer = screen.getByRole("timer");
+    expect(timer).toHaveAttribute("aria-live", "off");
+    expect(timer.closest("[aria-live='polite']")).toBeNull();
+    expect(screen.getByRole("timer", { name: "Time remaining" })).toBeInTheDocument();
   });
 });

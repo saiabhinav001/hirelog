@@ -28,4 +28,5 @@ including decisions to deliberately **not** build something yet.
 | [0020](0020-durable-source-ingestion.md) | Durable, private source ingestion | Accepted |
 | [0021](0021-grounded-generation-and-versioned-review.md) | Grounded, provider-neutral question generation with versioned review | Accepted |
 | [0022](0022-student-attempts-gating-and-idempotent-submit.md) | Student attempts: released-slot gating, idempotent drafts and receipt-backed submit | Accepted |
+| [0023](0023-exam-workspace-ui-timer-navigator-and-teacher-controls.md) | Exam workspace UI: server-anchored timer, navigator, teacher controls and short links | Accepted |
 See [../architecture.md](../architecture.md) for the system diagram and request flow.

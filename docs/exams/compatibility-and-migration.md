@@ -424,6 +424,33 @@ Implemented as [ADR 0022](../adr/0022-student-attempts-gating-and-idempotent-sub
 
 Existing clients keep working: every new request field is optional. A client that has never sent `client_save_id` keeps the old "stale save = conflict" behavior.
 
+## 12. Prompt 7 migration notes
+
+Implemented as [ADR 0023](../adr/0023-exam-workspace-ui-timer-navigator-and-teacher-controls.md). **No data migration or backfill is needed or performed**; no secrets or addresses were added.
+
+### 12.1 Configuration
+
+| Setting (exam API environment) | Default | Action |
+|---|---|---|
+| `EXAM_SHORT_LINKS_ENABLED` | `false` | On = teachers can create a join link per run and enrolled students can resolve it. Off = `GET …/short-link` answers `{enabled: false}`, creating or revoking answers `403 short_links_not_enabled`, the student resolver answers `404`, the UI says so. Turn on after reviewing the rate limits below |
+
+Rate limits (in-process sliding windows, per instance): resolver 30 / 60 s per user and 120 / 60 s per IP; issue / regenerate / revoke 10 / 600 s per teacher.
+
+### 12.2 Behavior changes teachers, students and integrators will see
+
+| Area | Before | Now |
+|---|---|---|
+| Student `GET …/state` | `Attempt` fields | adds `server_time`, `time_warning_minutes` (run policy, default `[10]`) |
+| Student `GET …/slots` | navigator data | adds `server_time` |
+| Faculty `GET …/runs/{id}` and `…/attempts` | run / attempts | add `server_time` |
+| Run policy | duration, warnings (proctoring), grace, pause, accommodations, schedule | optional `time_warning_minutes` (1–1440, ≤8 values; invalid = `422`; a run stored without it reads as `[10]`) |
+| Student timer | Rendered once from the device clock | Counts down from the server's clock; locks editing at zero and waits for the server to seal; never auto-submits |
+| New routes | — | Faculty `GET/POST /runs/{id}/short-link`, `POST /runs/{id}/short-link/revoke`; student `GET /short-links/{code}`; new collection `exam_short_links` (server-only, default-deny rules) |
+| Teacher screens | Raw error page on a conflict | Inline plain-language message and automatic reload; confirm dialogs with reasons; per-student extend / end attempt / recover / grant / revoke; schedule window, warnings, topics and marks fields on the definition page |
+| Dark theme inside `/exams/**` | Muted text ≈3.9:1 | ≈7:1 (`.dark .exam-scope`); other pages unchanged |
+
+New fields are optional everywhere; an older client ignores them. Rollback: redeploy the previous code - `time_warning_minutes` on stored policies is then rejected by the old `extra="forbid"` model, so **before rolling back below Prompt 7, list runs that set it** (a one-off cleanup after authorization) or keep the field unset. `exam_short_links` documents are ignored by older code.
+
 ### 11.3 New routes (all under `/api/exams/v1/student`, behind the exam flag, student run scope, `no-store`)
 
 | Route | Purpose |
