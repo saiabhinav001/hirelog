@@ -14,6 +14,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.api.exams_dependencies import require_exam_faculty, require_exams_enabled
+from app.api.exams_scope import (
+    assert_faculty_scope_for,
+    blueprint_institution,
+    definition_institution,
+    make_faculty_scope_guard,
+    run_access,
+    run_institution,
+)
 from app.core.config import settings
 from app.core.firebase import db
 from app.domain.generation.commands import GenerationCommandService
@@ -31,7 +39,7 @@ from app.domain.kt.repository import ApprovedSourceRepository
 router = APIRouter(
     prefix="/api/exams/v1/faculty",
     tags=["exams-generation"],
-    dependencies=[Depends(require_exams_enabled)],
+    dependencies=[Depends(require_exams_enabled), Depends(make_faculty_scope_guard())],
 )
 
 
@@ -87,6 +95,7 @@ class ReserveVariantsRequest(BaseModel):
 
 @router.post("/blueprints")
 def create_blueprint(payload: CreateBlueprintRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+    assert_faculty_scope_for(user, definition_institution, payload.exam_definition_id)
     now = datetime.now(timezone.utc)
     blueprint = ExamBlueprint(
         id=uuid4().hex, exam_definition_id=payload.exam_definition_id, title=payload.title,
@@ -112,14 +121,15 @@ def list_candidates_for_blueprint(blueprint_id: str, user: dict = Depends(requir
     return {"results": [c.model_dump(mode="json") for c in candidates]}
 
 
-def _resolve_source_bundle(anchors: list[SourceAnchorInput]) -> list[dict]:
-    """Only APPROVED sources may ever be cited — this is re-checked here,
-    not trusted from the request, and again inside `validation.py`."""
+def _resolve_source_bundle(anchors: list[SourceAnchorInput], institution_id: str | None) -> list[dict]:
+    """Only APPROVED sources of the blueprint's own institution may ever be
+    cited — re-checked here, not trusted from the request, and again inside
+    `validation.py`."""
     sources_repo = ApprovedSourceRepository(db)
     bundle: list[dict] = []
     for item in anchors:
         source: ApprovedSource | None = sources_repo.get(item.source_id)
-        if source is None or source.review_status.value != "approved":
+        if source is None or source.review_status.value != "approved" or source.institution_id != institution_id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"source {item.source_id} is not an approved source",
@@ -141,6 +151,7 @@ def create_and_run_generation_request(
     payload: CreateGenerationRequestPayload, user: dict = Depends(require_exam_faculty)
 ) -> dict:
     repo = GenerationRepository(db)
+    blueprint_scope = assert_faculty_scope_for(user, blueprint_institution, payload.blueprint_id)
     blueprint = repo.get_blueprint(payload.blueprint_id)
     if blueprint is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="blueprint not found")
@@ -149,7 +160,7 @@ def create_and_run_generation_request(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="slot not found on blueprint")
 
     now = datetime.now(timezone.utc)
-    bundle = _resolve_source_bundle(payload.source_anchors)
+    bundle = _resolve_source_bundle(payload.source_anchors, blueprint_scope)
     request = new_generation_request(
         blueprint_id=blueprint.id, slot_index=slot.slot_index, objective_ids=slot.objective_ids,
         item_type=slot.item_type, difficulty=slot.difficulty, marks=slot.marks,
@@ -231,6 +242,15 @@ def review_candidate(candidate_id: str, payload: ReviewCandidateRequest, user: d
 def reserve_variants_for_slot(
     blueprint_id: str, slot_index: int, payload: ReserveVariantsRequest, user: dict = Depends(require_exam_faculty)
 ) -> dict:
+    assert_faculty_scope_for(user, run_institution, payload.run_id)
+    if run_institution(payload.run_id) != blueprint_institution(blueprint_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="run and blueprint belong to different institutions")
+    unenrolled = set(payload.uids) - run_access(payload.run_id).enrolled_uids
+    if unenrolled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "uids_not_enrolled", "count": len(unenrolled)},
+        )
     service = GenerationCommandService(db)
     result = service.reserve_variants_for_slot(
         run_id=payload.run_id, blueprint_id=blueprint_id, slot_index=slot_index,

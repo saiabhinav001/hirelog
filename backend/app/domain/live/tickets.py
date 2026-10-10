@@ -17,9 +17,12 @@ from app.domain.live.models import LiveRole, LiveTicket
 DEFAULT_TICKET_TTL_SECONDS = 60
 
 
-def mint_ticket(*, run_id: str, uid: str, role: LiveRole, now: datetime, ttl_seconds: int = DEFAULT_TICKET_TTL_SECONDS) -> LiveTicket:
+def mint_ticket(
+    *, run_id: str, uid: str, role: LiveRole, now: datetime, ttl_seconds: int = DEFAULT_TICKET_TTL_SECONDS,
+    operator: bool = False,
+) -> LiveTicket:
     return LiveTicket(
-        id=uuid4().hex, run_id=run_id, uid=uid, role=role,
+        id=uuid4().hex, run_id=run_id, uid=uid, role=role, operator=operator,
         issued_at=now, expires_at=now + timedelta(seconds=ttl_seconds),
     )
 

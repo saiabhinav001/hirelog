@@ -65,10 +65,16 @@ class ExamStudentService:
             raise LookupError(f"exam run {run_id} not found")
         return run
 
+    def get_run_cached_or_404(self, run_id: str):
+        run = self.runs.get_cached(run_id)
+        if run is None:
+            raise LookupError(f"exam run {run_id} not found")
+        return run
+
     # ── state ──────────────────────────────────────────────────────────────
 
     def get_state(self, run_id: str, uid: str) -> Attempt:
-        run = self.get_run_or_404(run_id)
+        run = self.get_run_cached_or_404(run_id)
         self._require_enrolled(run, uid)
         attempt = self.attempts.get(run_id, uid)
         if attempt is None:
@@ -130,7 +136,7 @@ class ExamStudentService:
     # ── question delivery (allowlisted DTO only) ──────────────────────────
 
     def get_current_question(self, run_id: str, uid: str, revision: ExamRevision) -> PublicQuestionRef:
-        run = self.get_run_or_404(run_id)
+        run = self.get_run_cached_or_404(run_id)
         self._require_enrolled(run, uid)
         attempt = self.attempts.get(run_id, uid)
         if attempt is None:
@@ -154,14 +160,12 @@ class ExamStudentService:
     def advance_to_next_question(self, run_id: str, uid: str, revision: ExamRevision) -> AdvanceSlotOutcome:
         """Forward-only slot advance — see `decide_advance_slot` docstring.
         Transactional so a double-click/two-tab race can't skip two slots."""
+        run = self.get_run_cached_or_404(run_id)  # status only; the attempt is read transactionally below
         transaction = self._db.transaction()
 
         @firestore.transactional
         def _txn(transaction) -> AdvanceSlotOutcome:
             now = self._clock.now()
-            run = self.runs.get_in_transaction(transaction, run_id)
-            if run is None:
-                raise LookupError(f"exam run {run_id} not found")
             self._require_enrolled(run, uid)
             attempt = self.attempts.get_in_transaction(transaction, run_id, uid)
             if attempt is None:
@@ -182,15 +186,13 @@ class ExamStudentService:
     def save_draft(
         self, run_id: str, uid: str, question_id: str, *, expected_version: int, answer: dict
     ) -> DraftSaveOutcome:
+        run = self.get_run_cached_or_404(run_id)  # status/policy only; attempt + draft are read transactionally
+        self._require_enrolled(run, uid)
         transaction = self._db.transaction()
 
         @firestore.transactional
         def _txn(transaction) -> DraftSaveOutcome:
             now = self._clock.now()
-            run = self.runs.get_in_transaction(transaction, run_id)
-            if run is None:
-                raise LookupError(f"exam run {run_id} not found")
-            self._require_enrolled(run, uid)
             attempt = self.attempts.get_in_transaction(transaction, run_id, uid)
             if attempt is None:
                 raise NotEnrolledError("attempt not admitted yet")
@@ -303,7 +305,7 @@ class ExamStudentService:
     def get_receipt(self, run_id: str, uid: str) -> Optional[SubmitReceipt]:
         """Read-only lookup. Works even after the deadline has passed — it
         never authorizes new work, it only returns what was already sealed."""
-        run = self.get_run_or_404(run_id)
+        run = self.get_run_cached_or_404(run_id)
         self._require_enrolled(run, uid)
         attempt = self.attempts.get(run_id, uid)
         if attempt is None:

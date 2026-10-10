@@ -12,12 +12,13 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.api.exams_dependencies import require_exam_faculty, require_exams_enabled
+from app.api.exams_scope import invalidate_lockdown_profile, make_faculty_scope_guard
 from app.core.firebase import db
 from app.domain.lockdown.service import LockdownService
 
 router = APIRouter(
     prefix="/api/exams/v1/faculty/lockdown", tags=["exams-lockdown-faculty"],
-    dependencies=[Depends(require_exams_enabled)],
+    dependencies=[Depends(require_exams_enabled), Depends(make_faculty_scope_guard())],
 )
 
 
@@ -48,6 +49,7 @@ def configure_lockdown_profile(run_id: str, payload: ConfigureLockdownRequest, u
         piloted_platforms=payload.piloted_platforms,
         updated_by=user["uid"],
     )
+    invalidate_lockdown_profile(run_id)
     return profile.model_dump(mode="json")
 
 

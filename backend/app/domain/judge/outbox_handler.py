@@ -44,22 +44,21 @@ class GradingTriggerOutboxHandler:
         if not uid:
             return
 
-        for question_id in self._drafts.all_versions(run_id, uid):
-            self._grade_one_question(run_id, uid, question_id)
+        for draft in self._drafts.list_all(run_id, uid):
+            self._grade_one_question(run_id, uid, draft.question_id, draft)
 
-    def _grade_one_question(self, run_id: str, uid: str, question_id: str) -> None:
+    def _grade_one_question(self, run_id: str, uid: str, question_id: str, draft) -> None:
         slot_index = _parse_slot_index(question_id)
         candidate_id = self._assignments.get_assignment(run_id=run_id, uid=uid, slot_index=slot_index)
         if not candidate_id:
             logger.warning("no variant assignment for run=%s uid=%s question=%s — skipping grading", run_id, uid, question_id)
             return
 
-        candidate = self._generation.get_candidate(candidate_id)
+        candidate = self._generation.get_candidate_cached(candidate_id)
         if candidate is None or candidate.status not in (CandidateStatus.APPROVED, CandidateStatus.PUBLISHED):
             logger.warning("candidate %s not approved/published — skipping grading", candidate_id)
             return
 
-        draft = self._drafts.get(run_id, uid, question_id)
         answer = draft.answer if draft else None
         if not answer:
             return  # blank — nothing to grade (counted as "blank" by the gradebook, Prompt 9)

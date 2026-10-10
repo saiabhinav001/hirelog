@@ -28,6 +28,9 @@ class _FakeDraftRepo:
     def all_versions(self, run_id: str, uid: str) -> dict[str, int]:
         return {qid: d.version for qid, d in self._drafts.items()}
 
+    def list_all(self, run_id: str, uid: str):
+        return list(self._drafts.values())
+
     def get(self, run_id: str, uid: str, question_id: str):
         return self._drafts.get(question_id)
 
@@ -46,6 +49,8 @@ class _FakeGenerationRepo:
 
     def get_candidate(self, candidate_id: str):
         return self._candidates.get(candidate_id)
+
+    get_candidate_cached = get_candidate
 
 
 class _RecordingJudgeService:

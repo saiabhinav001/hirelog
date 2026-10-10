@@ -78,10 +78,21 @@ class ApprovedSourceRepository:
         self._ref(source.id).set(_model_dict(source), merge=True)
 
     def list_all(self) -> list[ApprovedSource]:
-        """KT/source review screen data. Sources are a shared institutional
-        registry, not scoped to one uploader — any faculty member reviews
-        any pending source."""
+        """Unscoped listing — internal/admin use only. Faculty-facing routes
+        must use `list_for_institution` so one institution never sees
+        another's reference material."""
         return [
             ApprovedSource.model_validate({**(doc.to_dict() or {}), "id": doc.id})
             for doc in self._db.collection(APPROVED_SOURCES_COLLECTION).stream()
         ]
+
+    def list_for_institution(self, institution_id: Optional[str]) -> list[ApprovedSource]:
+        """`None` selects pre-institution (pilot) sources."""
+        if institution_id is None:
+            return [s for s in self.list_all() if s.institution_id is None]
+        from firebase_admin import firestore
+
+        query = self._db.collection(APPROVED_SOURCES_COLLECTION).where(
+            filter=firestore.FieldFilter("institution_id", "==", institution_id)
+        )
+        return [ApprovedSource.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]

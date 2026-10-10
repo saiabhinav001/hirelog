@@ -23,7 +23,7 @@ from app.domain.institution.errors import (
     MembershipNotActiveError,
     StaleAuthorizationVersionError,
 )
-from app.domain.institution.identity_provider import DevSinkOtpDelivery, OtpDelivery
+from app.domain.institution.identity_provider import OtpDelivery, OtpDeliveryError, default_otp_delivery
 from app.domain.institution.models import Membership, MembershipStatus
 from app.domain.institution.normalization import normalize_email, normalize_identity_key
 from app.domain.institution.otp import new_otp_record, verify_otp
@@ -52,6 +52,7 @@ def _otp_secret_key() -> bytes:
 
 
 _GENERIC_CHALLENGE_ACK = {"status": "ok", "detail": "If this identifier is valid, a code was sent."}
+_INVALID_CODE = "invalid_or_expired_code"
 
 
 @dataclass(frozen=True)
@@ -67,11 +68,14 @@ class InstitutionAuthService:
         from app.domain.institution.repository import OtpRepository
 
         self._otp_repo = OtpRepository(db)
-        self._delivery = otp_delivery or DevSinkOtpDelivery()
+        self._delivery = otp_delivery or default_otp_delivery()
 
     def challenge(self, *, institution_id: str, identity_key: str, contact_email: str) -> dict:
         """Always returns the same generic ack — never reveals whether the
         identifier exists (no user enumeration)."""
+        if not getattr(self._delivery, "configured", True):
+            # Checked before any identity lookup so it cannot act as an oracle.
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="otp_delivery_not_configured")
         key = normalize_identity_key(identity_key)
         email = normalize_email(contact_email)
         _challenge_limiter.check(f"{institution_id}:{key}", detail="Too many code requests. Try again later.")
@@ -87,7 +91,11 @@ class InstitutionAuthService:
             ttl_seconds=settings.EXAM_OTP_TTL_SECONDS, max_attempts=settings.EXAM_OTP_MAX_ATTEMPTS,
         )
         self._otp_repo.save(institution_id, key, record)
-        self._delivery.send(contact_email=email, code=code)
+        try:
+            self._delivery.send(contact_email=email, code=code)
+        except OtpDeliveryError:
+            # Same ack as success: a visible failure would reveal the identity exists.
+            logger.exception("OTP delivery failed for institution %s", institution_id)
         return _GENERIC_CHALLENGE_ACK
 
     def _verify_code(self, *, institution_id: str, identity_key: str, code: str) -> Membership:
@@ -96,19 +104,21 @@ class InstitutionAuthService:
 
         membership = self._memberships.get(institution_id, key)
         if membership is None or membership.status != MembershipStatus.ACTIVE:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_or_expired_code")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_INVALID_CODE)
 
         record = self._otp_repo.get(institution_id, key)
         if record is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_or_expired_code")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_INVALID_CODE)
 
         now = datetime.now(timezone.utc)
         outcome = verify_otp(record, submitted_code=code, secret_key=_otp_secret_key(), now=now)
         if not outcome.ok:
+            logger.info("OTP verification rejected (%s)", outcome.reason)  # reason stays server-side
             self._otp_repo.increment_attempts(institution_id, key)
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"invalid_or_expired_code:{outcome.reason}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_INVALID_CODE)
 
-        self._otp_repo.mark_consumed(institution_id, key)
+        if not self._otp_repo.consume_once(institution_id, key):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_INVALID_CODE)
         return membership
 
     def verify_and_sign_in(self, *, institution_id: str, identity_key: str, code: str) -> VerifyResult:

@@ -34,6 +34,7 @@ class UploadedSource(BaseModel):
 
     id: str
     uploaded_by: str
+    institution_id: Optional[str] = None
     original_filename: str = Field(max_length=260)
     declared_content_type: str
     detected_kind: Optional[str] = None  # "pdf" | "docx" | "txt", set after magic-byte sniff
@@ -85,6 +86,7 @@ class ApprovedSource(BaseModel):
 
     id: str
     kind: str  # "upload" | "url"
+    institution_id: Optional[str] = None
     upload_id: Optional[str] = None
     url: Optional[str] = None
     extracted_version_id: Optional[str] = None

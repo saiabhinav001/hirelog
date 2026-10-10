@@ -6,24 +6,21 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.api.exams_dependencies import get_current_exam_user, require_exams_enabled
-from app.core.config import settings
-from app.core.firebase import db
-from app.domain.institution.repository import MembershipRepository
+from app.api.exams_dependencies import get_current_exam_user, is_bootstrap_faculty, memberships_for, require_exams_enabled
 
 router = APIRouter(prefix="/api/exams/v1", tags=["exams-me"], dependencies=[Depends(require_exams_enabled)])
 
 
 @router.get("/me")
 def get_me(user: dict = Depends(get_current_exam_user)) -> dict:
-    email = str(user.get("email") or "").strip().lower()
-    is_bootstrap_faculty = bool(email) and email in settings.exam_faculty_emails_set()
-    memberships = MembershipRepository(db).find_by_uid(user["uid"])
+    memberships = memberships_for(user["uid"])
 
     return {
         "uid": user["uid"],
-        "email": user.get("email"),
-        "is_bootstrap_faculty": is_bootstrap_faculty,
+        # Only a verified email is ever surfaced or trusted.
+        "email": user.get("email") or None,
+        "email_verified": bool(user.get("email_verified")),
+        "is_bootstrap_faculty": is_bootstrap_faculty(user),
         "memberships": [
             {
                 "institution_id": m.institution_id,

@@ -7,6 +7,11 @@ param (browsers cannot set an Authorization header on a WebSocket upgrade)
 seconds (contract: "authenticated WebSocket ticket admission... no
 privileged event before authentication").
 
+A socket outlives the request that authorised it, so access is re-checked
+when the socket opens and again every `_REVALIDATE_SECONDS` while it is open:
+a student or faculty member whose institutional membership is revoked
+mid-exam is disconnected (close code 4403) instead of staying subscribed.
+
 The socket NEVER accepts client-sent commands — it only streams snapshot/
 state-changed/heartbeat events outward. Every mutation still goes through
 the existing REST command/student endpoints with their own transactional
@@ -18,14 +23,23 @@ from __future__ import annotations
 import asyncio
 import logging
 import queue
+import time
 from datetime import datetime, timezone
+from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from firebase_admin import firestore
 from pydantic import BaseModel
 
-from app.api.exams_dependencies import _has_institution_faculty_membership, get_current_exam_user, require_exams_enabled
+from app.api.exams_dependencies import (
+    active_membership,
+    faculty_institution_ids,
+    get_current_exam_user,
+    is_bootstrap_faculty,
+    require_exams_enabled,
+)
+from app.api.exams_scope import assert_student_run_access, run_access
 from app.core.config import settings
 from app.core.firebase import db
 from app.domain.exams.commands import ExamCommandService
@@ -41,30 +55,51 @@ logger = logging.getLogger("hirelog.exams.live")
 router = APIRouter(prefix="/api/exams/v1/live", tags=["exams-live"], dependencies=[Depends(require_exams_enabled)])
 
 _HEARTBEAT_INTERVAL_SECONDS = 15.0
+_REVALIDATE_SECONDS = 30.0
 
 
 class TicketRequest(BaseModel):
     run_id: str
 
 
-def _resolve_role(run, uid: str, email: str) -> LiveRole:
-    is_faculty = (email and email in settings.exam_faculty_emails_set()) or _has_institution_faculty_membership(uid)
-    if is_faculty:
-        return LiveRole.FACULTY
-    if uid in run.enrolled_uids:
-        return LiveRole.STUDENT
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enrolled or faculty on this run.")
+def _resolve_role(user: dict, run_id: str) -> tuple[LiveRole, bool]:
+    """Faculty of the run's institution (or a platform operator), else an
+    enrolled student whose membership is still active. Returns (role, operator)."""
+    try:
+        access = run_access(run_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.") from exc
+    operator = is_bootstrap_faculty(user)
+    if operator or (access.institution_id is not None and access.institution_id in faculty_institution_ids(user)):
+        return LiveRole.FACULTY, operator
+    assert_student_run_access(user, run_id)
+    return LiveRole.STUDENT, False
+
+
+def still_authorized(uid: str, run_id: str, role: LiveRole, operator: bool) -> bool:
+    """Blocking (Firestore-backed, mostly cached) — call via `asyncio.to_thread`."""
+    try:
+        access = run_access(run_id)
+    except LookupError:
+        return False
+    if role == LiveRole.FACULTY:
+        if operator:
+            return True  # platform operators are config-defined; revoked by redeploy
+        return access.institution_id is not None and access.institution_id in faculty_institution_ids({"uid": uid})
+    if uid not in access.enrolled_uids:
+        return False
+    return access.institution_id is None or active_membership(uid, access.institution_id) is not None
 
 
 @router.post("/ticket")
 def issue_ticket(payload: TicketRequest, user: dict = Depends(get_current_exam_user)) -> dict:
-    run = ExamCommandService(db).runs.get(payload.run_id)
-    if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
-    role = _resolve_role(run, user["uid"], str(user.get("email") or "").strip().lower())
+    role, operator = _resolve_role(user, payload.run_id)
 
     now = datetime.now(timezone.utc)
-    ticket = mint_ticket(run_id=payload.run_id, uid=user["uid"], role=role, now=now, ttl_seconds=settings.EXAM_LIVE_TICKET_TTL_SECONDS)
+    ticket = mint_ticket(
+        run_id=payload.run_id, uid=user["uid"], role=role, now=now,
+        ttl_seconds=settings.EXAM_LIVE_TICKET_TTL_SECONDS, operator=operator,
+    )
     TicketRepository(db).create(ticket)
     return {"ticket": ticket.id, "role": role.value, "expires_at": ticket.expires_at.isoformat()}
 
@@ -96,7 +131,14 @@ async def live_ws(websocket: WebSocket, ticket: str, run_id: str) -> None:
         await websocket.close(code=4401, reason=exc.code)
         return
 
-    connection = Connection(connection_id=uuid4().hex, run_id=run_id, role=consumed.role, uid=consumed.uid)
+    if not await asyncio.to_thread(still_authorized, consumed.uid, run_id, consumed.role, consumed.operator):
+        await websocket.close(code=4403, reason="access_revoked")
+        return
+
+    connection = Connection(
+        connection_id=uuid4().hex, run_id=run_id, role=consumed.role, uid=consumed.uid,
+        loop=asyncio.get_running_loop(), notify=asyncio.Event(),
+    )
     live_connection_manager.register(connection)
     logger.info("live ws admitted: run=%s uid=%s role=%s", run_id, consumed.uid, consumed.role.value)
 
@@ -109,12 +151,27 @@ async def live_ws(websocket: WebSocket, ticket: str, run_id: str) -> None:
     )
 
     async def _drain_and_send() -> None:
+        last_check = time.monotonic()
         while True:
             try:
-                event = await asyncio.to_thread(connection.queue.get, True, _HEARTBEAT_INTERVAL_SECONDS)
-            except queue.Empty:
-                continue  # no event within the heartbeat window — client's own ping/pong keeps the socket alive
-            await websocket.send_json(event.model_dump(mode="json"))
+                await asyncio.wait_for(connection.notify.wait(), timeout=_HEARTBEAT_INTERVAL_SECONDS)
+            except asyncio.TimeoutError:
+                pass  # heartbeat window elapsed — the client's own ping/pong keeps the socket alive
+            connection.notify.clear()
+            while True:
+                try:
+                    event = connection.queue.get_nowait()
+                except queue.Empty:
+                    break
+                await websocket.send_json(event.model_dump(mode="json"))
+            if time.monotonic() - last_check >= _REVALIDATE_SECONDS:
+                last_check = time.monotonic()
+                if not await asyncio.to_thread(
+                    still_authorized, consumed.uid, run_id, consumed.role, consumed.operator
+                ):
+                    logger.info("live ws closed (access revoked): run=%s uid=%s", run_id, consumed.uid)
+                    await websocket.close(code=4403, reason="access_revoked")
+                    return
 
     async def _receive_loop() -> None:
         # The socket never accepts commands — this loop exists only to
@@ -130,7 +187,7 @@ async def live_ws(websocket: WebSocket, ticket: str, run_id: str) -> None:
         for task in pending:
             task.cancel()
         for task in done:
-            exc = task.exception()
+            exc: Optional[BaseException] = task.exception()
             if exc is not None and not isinstance(exc, WebSocketDisconnect):
                 raise exc
     except WebSocketDisconnect:

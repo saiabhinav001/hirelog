@@ -12,9 +12,11 @@ scaling needs a shared pub/sub backend (e.g. Redis), not implemented here.
 
 from __future__ import annotations
 
+import asyncio
 import queue
 import threading
 from dataclasses import dataclass, field
+from typing import Optional
 
 from app.domain.live.models import LiveEvent, LiveRole
 
@@ -24,13 +26,25 @@ _MAX_QUEUED_EVENTS_PER_CONNECTION = 200
 @dataclass
 class Connection:
     """One admitted socket. `queue` is a stdlib thread-safe queue — safe to
-    `put` from any thread, drained by the connection's own async task."""
+    `put` from any thread. When `loop`/`notify` are set, `publish` wakes the
+    connection's async task through the event loop, so no thread ever blocks
+    waiting on a socket (a blocking `queue.get` per connection would exhaust
+    the loop's small default executor after a handful of sockets)."""
 
     connection_id: str
     run_id: str
     role: LiveRole
     uid: str
     queue: "queue.Queue[LiveEvent]" = field(default_factory=lambda: queue.Queue(maxsize=_MAX_QUEUED_EVENTS_PER_CONNECTION))
+    loop: Optional[asyncio.AbstractEventLoop] = None
+    notify: Optional[asyncio.Event] = None
+
+    def wake(self) -> None:
+        if self.loop is not None and self.notify is not None:
+            try:
+                self.loop.call_soon_threadsafe(self.notify.set)
+            except RuntimeError:
+                pass  # loop already closed — the connection is going away
 
 
 class LiveConnectionManager:
@@ -82,6 +96,7 @@ class LiveConnectionManager:
             try:
                 conn.queue.put_nowait(event)
                 delivered += 1
+                conn.wake()
             except queue.Full:
                 pass
         return delivered

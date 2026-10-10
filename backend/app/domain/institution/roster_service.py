@@ -55,9 +55,9 @@ class RosterService:
         if job is None:
             raise LookupError(f"roster import job {job_id} not found")
 
-        existing = self._memberships.existing_identity_keys(job.institution_id)
+        existing_by_key = {m.identity_key: m for m in self._memberships.list_by_institution(job.institution_id)}
         results, next_cursor = plan_apply_batch(
-            rows, requester_max_role_scope=requester_max_role_scope, existing_identity_keys=existing,
+            rows, requester_max_role_scope=requester_max_role_scope, existing_identity_keys=set(existing_by_key),
             cursor=job.applied_cursor, batch_size=batch_size,
         )
 
@@ -66,19 +66,31 @@ class RosterService:
             if not result.ok:
                 continue
             row = rows[result.row_index]
-            existing_membership = self._memberships.get(job.institution_id, result.identity_key)
-            membership = Membership(
-                institution_id=job.institution_id,
-                identity_key=normalize_identity_key(row.identity_key),
-                contact_email=normalize_email(row.contact_email),
-                role_scope=RoleScope(row.role_scope),
-                status=MembershipStatus.ACTIVE,
-                uid=existing_membership.uid if existing_membership else None,
-                authorization_version=(existing_membership.authorization_version if existing_membership else 1),
-                created_at=existing_membership.created_at if existing_membership else now,
-                updated_at=now,
+            previous = existing_by_key.get(result.identity_key)
+            role = RoleScope(row.role_scope)
+            email = normalize_email(row.contact_email)
+            if previous and previous.status == MembershipStatus.ACTIVE and previous.role_scope == role and previous.contact_email == email:
+                continue  # unchanged — no write
+            # Students get their uid now, so they can be enrolled in an exam before
+            # their first sign-in. Faculty/admins keep uid=None until first login or
+            # an explicit link of an existing account.
+            uid = previous.uid if previous else (f"exam-{uuid4().hex}" if role == RoleScope.STUDENT else None)
+            version = previous.authorization_version if previous else 1
+            if previous and (previous.role_scope != role or previous.contact_email != email):
+                version += 1  # sessions issued under the old role/contact stop working
+            self._memberships.upsert(
+                Membership(
+                    institution_id=job.institution_id,
+                    identity_key=normalize_identity_key(row.identity_key),
+                    contact_email=email,
+                    role_scope=role,
+                    status=MembershipStatus.ACTIVE,
+                    uid=uid,
+                    authorization_version=version,
+                    created_at=previous.created_at if previous else now,
+                    updated_at=now,
+                )
             )
-            self._memberships.upsert(membership)
 
         merged_results = list(job.row_results) + results
         new_status = RosterImportStatus.COMPLETED if next_cursor >= job.total_rows else RosterImportStatus.APPLYING

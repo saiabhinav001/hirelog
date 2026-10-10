@@ -15,8 +15,10 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel, Field
 
-from app.api.exams_dependencies import get_current_exam_user, require_exam_faculty, require_exams_enabled
+from app.api.exams_dependencies import get_current_exam_user, require_exam_faculty, require_exams_enabled, require_student_run_access
 from app.api.exams_errors import raise_for_domain_error
+from app.api.exams_scope import make_faculty_scope_guard, proctoring_appeal_institution, run_access
+from app.core import background
 from app.core.config import settings
 from app.core.firebase import db
 from app.core.rate_limit import SlidingWindowLimiter
@@ -35,7 +37,10 @@ student_router = APIRouter(
 )
 faculty_router = APIRouter(
     prefix="/api/exams/v1/faculty/proctoring", tags=["exams-proctoring-faculty"],
-    dependencies=[Depends(require_exams_enabled)],
+    dependencies=[
+        Depends(require_exams_enabled),
+        Depends(make_faculty_scope_guard({"appeal_id": proctoring_appeal_institution})),
+    ],
 )
 
 # Generous but bounded — legitimate rapid focus-switching must not lock a
@@ -99,21 +104,20 @@ def _set_no_store(response: Response) -> None:
 
 
 @student_router.post("/runs/{run_id}/observations")
-def record_observation(run_id: str, payload: ObservationRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def record_observation(run_id: str, payload: ObservationRequest, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     _set_no_store(response)
     _observation_limiter.check(f"{run_id}:{user['uid']}", detail="Too many observations reported. Please slow down.")
 
     service = ProctoringLedgerService(db)
-    run = service.runs.get(run_id)
-    if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
+    access = run_access(run_id)  # cached; immutable per run
     # Threshold is per-run policy, not a global default (contract #5:
     # "Default warning threshold is 3; policy can customize it.").
     outcome = service.record_observation(
         run_id=run_id, uid=user["uid"], kind=payload.kind, client_event_id=payload.client_event_id,
         client_timestamp=payload.client_timestamp, grace_seconds=settings.EXAM_PROCTORING_GRACE_SECONDS,
-        cooldown_seconds=settings.EXAM_PROCTORING_COOLDOWN_SECONDS, threshold=run.policy.warning_threshold,
+        cooldown_seconds=settings.EXAM_PROCTORING_COOLDOWN_SECONDS, threshold=access.warning_threshold,
     )
+    background.wake("proctoring")
     if outcome.should_block:
         updated_attempt = service.attempts.get(run_id, user["uid"])
         if updated_attempt is not None:
@@ -122,7 +126,7 @@ def record_observation(run_id: str, payload: ObservationRequest, response: Respo
 
 
 @student_router.get("/runs/{run_id}/incidents")
-def list_my_incidents(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def list_my_incidents(run_id: str, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     """Visible count explanations — a student can always see why their own
     warning count is what it is (contract: 'visible count explanations')."""
     _set_no_store(response)
@@ -131,7 +135,7 @@ def list_my_incidents(run_id: str, response: Response, user: dict = Depends(get_
 
 
 @student_router.post("/runs/{run_id}/snapshots")
-def request_snapshot(run_id: str, payload: SnapshotRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def request_snapshot(run_id: str, payload: SnapshotRequest, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     _set_no_store(response)
     service = EvidenceService(db, _storage())
     snapshot, ticket = service.request_snapshot(
@@ -161,7 +165,7 @@ async def upload_snapshot(ticket_id: str, response: Response, file: UploadFile =
 
 
 @student_router.post("/runs/{run_id}/snapshots/missing")
-def record_missing_snapshot(run_id: str, payload: MissingSnapshotRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def record_missing_snapshot(run_id: str, payload: MissingSnapshotRequest, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     """The client calls this when permission was denied or capture failed —
     an honest, complete outcome, not an error (contract: submission
     acceptance never depends on this)."""
@@ -171,7 +175,7 @@ def record_missing_snapshot(run_id: str, payload: MissingSnapshotRequest, respon
 
 
 @student_router.post("/runs/{run_id}/appeals")
-def submit_appeal(run_id: str, payload: AppealRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def submit_appeal(run_id: str, payload: AppealRequest, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     _set_no_store(response)
     appeal = AppealsService(db).submit_appeal(run_id=run_id, uid=user["uid"], student_statement=payload.student_statement)
     return appeal.model_dump(mode="json")

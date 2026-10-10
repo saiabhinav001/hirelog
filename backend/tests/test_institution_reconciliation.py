@@ -53,8 +53,22 @@ def test_require_exam_faculty_still_accepts_bootstrap_email_allowlist(monkeypatc
     from app.api import exams_dependencies as deps
 
     monkeypatch.setattr(deps.settings, "EXAM_FACULTY_EMAILS", "prof@college.edu")
-    user = {"uid": "uid-x", "email": "prof@college.edu"}
+    user = {"uid": "uid-x", "email": "prof@college.edu", "email_verified": True}
     assert deps.require_exam_faculty(user) == user
+
+
+def test_require_exam_faculty_rejects_allowlisted_but_unverified_email(monkeypatch) -> None:
+    """Email/Password sign-up in the shared Firebase project can mint a token
+    for any address without proving ownership — an allow-listed address is not
+    authority unless the token says it is verified."""
+    from app.api import exams_dependencies as deps
+
+    monkeypatch.setattr(deps.settings, "EXAM_FACULTY_EMAILS", "prof@college.edu")
+    monkeypatch.setattr("app.domain.institution.repository.MembershipRepository", _FakeMembershipRepoCtor([]))
+    user = {"uid": "uid-x", "email": "prof@college.edu", "email_verified": False}
+    with pytest.raises(HTTPException) as exc:
+        deps.require_exam_faculty(user)
+    assert exc.value.status_code == 403
 
 
 def test_require_exam_faculty_grants_via_institution_faculty_membership(monkeypatch) -> None:

@@ -80,6 +80,14 @@ class _FakeOtpRepo:
         record = self._records[key]
         self._records[key] = replace(record, consumed=True)
 
+    def consume_once(self, institution_id, identity_key) -> bool:
+        key = f"{institution_id}::{identity_key.upper()}"
+        record = self._records.get(key)
+        if record is None or record.consumed:
+            return False
+        self._records[key] = replace(record, consumed=True)
+        return True
+
 
 def _membership(identity_key: str, **overrides) -> Membership:
     defaults = dict(
@@ -180,7 +188,8 @@ def test_verify_rejects_replayed_code(monkeypatch) -> None:
     with pytest.raises(HTTPException) as exc:
         service.verify_and_sign_in(institution_id=INSTITUTION, identity_key="K07", code=code)
     assert exc.value.status_code == 400
-    assert "already_consumed" in exc.value.detail
+    # The precise reason (consumed/expired/mismatch) must stay server-side.
+    assert exc.value.detail == "invalid_or_expired_code"
 
 
 def test_verify_rejects_expired_code(monkeypatch) -> None:

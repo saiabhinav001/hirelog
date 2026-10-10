@@ -61,6 +61,8 @@ class ExamDefinition(BaseModel):
     id: str
     title: str = Field(min_length=1, max_length=200)
     owner_uid: str
+    # Owning institution (None = pre-institution/pilot record). Immutable once set.
+    institution_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     latest_published_revision_id: Optional[str] = None
@@ -88,6 +90,9 @@ class ExamRun(BaseModel):
     id: str
     definition_id: str
     revision_id: str
+    # Inherited from the definition at creation; immutable. Student and faculty
+    # access is checked against current membership in this institution.
+    institution_id: Optional[str] = None
     status: RunStatus = RunStatus.DRAFT
     version: int = 1
     policy: ExamPolicy

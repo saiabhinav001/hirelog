@@ -18,6 +18,8 @@ from uuid import uuid4
 
 from firebase_admin import firestore
 
+from app.core.config import settings
+from app.core.lookup_cache import LookupCache
 from app.domain.exams.models import (
     Attempt,
     CommandReceipt,
@@ -37,6 +39,17 @@ ATTEMPTS_SUBCOLLECTION = "attempts"
 DRAFTS_SUBCOLLECTION = "drafts"
 COMMAND_RECEIPTS_COLLECTION = "exam_command_receipts"
 OUTBOX_COLLECTION = "exam_outbox"
+
+# Revisions are immutable once published. A run changes only through faculty
+# commands, which invalidate it here immediately (single process); the short TTL
+# only bounds staleness for a command applied by another process.
+_revision_cache = LookupCache(max_entries=256)
+_run_cache = LookupCache(max_entries=64, ttl_seconds=max(settings.EXAM_RUN_CACHE_TTL_SECONDS, 0.001))
+
+
+def reset_read_caches() -> None:
+    _revision_cache.clear()
+    _run_cache.clear()
 
 
 def _model_dict(model) -> dict:
@@ -70,6 +83,18 @@ class ExamDefinitionRepository:
         if not snap.exists:
             return None
         return ExamRevision.model_validate({**(snap.to_dict() or {}), "id": snap.id})
+
+    def get_revision_cached(self, definition_id: str, revision_id: str) -> Optional[ExamRevision]:
+        def load() -> ExamRevision:
+            revision = self.get_revision(definition_id, revision_id)
+            if revision is None:
+                raise LookupError(revision_id)
+            return revision
+
+        try:
+            return _revision_cache.get((definition_id, revision_id), load)
+        except LookupError:
+            return None
 
     def get_revision_in_transaction(self, transaction, definition_id: str, revision_id: str) -> Optional[ExamRevision]:
         snap = self._revisions(definition_id).document(revision_id).get(transaction=transaction)
@@ -111,6 +136,27 @@ class ExamRunRepository:
         if not snap.exists:
             return None
         return ExamRun.model_validate({**(snap.to_dict() or {}), "id": snap.id})
+
+    def get_cached(self, run_id: str) -> Optional[ExamRun]:
+        """For hot student paths (draft save, question delivery) that only need the
+        run's status/policy; submit/finish keep reading it transactionally."""
+        if settings.EXAM_RUN_CACHE_TTL_SECONDS <= 0:
+            return self.get(run_id)
+
+        def load() -> ExamRun:
+            run = self.get(run_id)
+            if run is None:
+                raise LookupError(run_id)
+            return run
+
+        try:
+            return _run_cache.get(run_id, load)
+        except LookupError:
+            return None
+
+    @staticmethod
+    def invalidate(run_id: str) -> None:
+        _run_cache.invalidate(run_id)
 
     def get_in_transaction(self, transaction, run_id: str) -> Optional[ExamRun]:
         snap = self._ref(run_id).get(transaction=transaction)
@@ -248,6 +294,13 @@ class DraftRepository:
     def all_versions(self, run_id: str, uid: str) -> dict[str, int]:
         docs = self._collection(run_id, uid).stream()
         return {doc.id: int((doc.to_dict() or {}).get("version", 0)) for doc in docs}
+
+    def list_all(self, run_id: str, uid: str) -> list[Draft]:
+        """Every draft with its answer in a single listing (one read per draft)."""
+        return [
+            Draft.model_validate({**(doc.to_dict() or {}), "question_id": doc.id})
+            for doc in self._collection(run_id, uid).stream()
+        ]
 
     def set_in_transaction(self, transaction, run_id: str, uid: str, draft: Draft) -> None:
         ref = self._collection(run_id, uid).document(draft.question_id)

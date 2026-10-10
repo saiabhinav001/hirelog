@@ -7,8 +7,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
-from app.api.exams_dependencies import get_current_exam_user, require_exam_faculty, require_exams_enabled
+import re
+
+from app.api.exams_dependencies import (
+    get_current_exam_user,
+    require_exam_faculty,
+    require_exams_enabled,
+)
 from app.api.exams_errors import raise_for_domain_error
+from app.api.exams_scope import assert_student_run_access, make_faculty_scope_guard, run_institution, visible_institution_ids
 from app.core.firebase import db
 from app.domain.generation.repository import GenerationRepository, VariantAssignmentRepository
 from app.domain.judge.converters import to_test_groups
@@ -28,8 +35,11 @@ student_router = APIRouter(
     prefix="/api/exams/v1/student/judge", tags=["exams-judge-student"], dependencies=[Depends(require_exams_enabled)]
 )
 faculty_router = APIRouter(
-    prefix="/api/exams/v1/faculty/judge", tags=["exams-judge-faculty"], dependencies=[Depends(require_exams_enabled)]
+    prefix="/api/exams/v1/faculty/judge", tags=["exams-judge-faculty"],
+    dependencies=[Depends(require_exams_enabled), Depends(make_faculty_scope_guard())],
 )
+
+_QUESTION_ID = re.compile(r"^[0-9a-f]{32}:slot:[0-9]{1,3}$")
 
 
 class PublicRunRequest(BaseModel):
@@ -54,11 +64,13 @@ class McqRegradeRequest(BaseModel):
 
 
 def _candidate_for_question(run_id: str, uid: str, question_id: str):
+    if not _QUESTION_ID.match(question_id):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid question id.")
     slot_index = int(question_id.rsplit(":slot:", 1)[1])
-    candidate_id = VariantAssignmentRepository(db).get_assignment(run_id=run_id, uid=uid, slot_index=slot_index)
+    candidate_id = VariantAssignmentRepository(db).get_assignment_cached(run_id=run_id, uid=uid, slot_index=slot_index)
     if not candidate_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No variant assigned for this question.")
-    candidate = GenerationRepository(db).get_candidate(candidate_id)
+    candidate = GenerationRepository(db).get_candidate_cached(candidate_id)
     if candidate is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Candidate not found.")
     return candidate
@@ -67,6 +79,7 @@ def _candidate_for_question(run_id: str, uid: str, question_id: str):
 @student_router.post("/public-run")
 def public_run(payload: PublicRunRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
     response.headers["Cache-Control"] = "no-store"
+    assert_student_run_access(user, payload.run_id)
     candidate = _candidate_for_question(payload.run_id, user["uid"], payload.question_id)
     service = JudgeService(db, _judge_provider_for_request())
     # Quota (HTTP 429) is enforced inside `run_public_test` by `SlidingWindowLimiter.check`,
@@ -87,6 +100,7 @@ def public_run(payload: PublicRunRequest, response: Response, user: dict = Depen
 @student_router.get("/public-run/{submission_id}")
 def get_public_run(submission_id: str, run_id: str, question_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
     response.headers["Cache-Control"] = "no-store"
+    assert_student_run_access(user, run_id)
     candidate = _candidate_for_question(run_id, user["uid"], question_id)
     service = JudgeService(db, _judge_provider_for_request())
     submission = service.poll_public_run(submission_id, public_tests=to_test_groups(candidate.public_tests))
@@ -144,7 +158,17 @@ def regrade_mcq(run_id: str, uid: str, question_id: str, payload: McqRegradeRequ
 
 @faculty_router.get("/short-answer-reviews/pending")
 def list_pending_short_answer_reviews(user: dict = Depends(require_exam_faculty)) -> dict:
+    visible = visible_institution_ids(user)
     reviews = ShortAnswerReviewRepository(db).list_pending()
+    if visible is not None:
+        in_scope = []
+        for review in reviews:
+            try:
+                if run_institution(review.run_id) in visible:
+                    in_scope.append(review)
+            except LookupError:
+                continue
+        reviews = in_scope
     return {"results": [r.model_dump(mode="json") for r in reviews]}
 
 

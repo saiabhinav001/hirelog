@@ -5,14 +5,15 @@ tricky logic lives there instead of here."""
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
+from typing import Optional
 from uuid import uuid4
 
 from firebase_admin import firestore
 
 from app.domain.exams.clock import Clock, system_clock
 from app.domain.exams.decisions import CommandOutcome, decide_run_command
-from app.domain.exams.models import ExamDefinition, ExamPolicy, ExamRevision, ExamRun, RunStatus
+from app.domain.exams.models import AttemptStatus, ExamDefinition, ExamPolicy, ExamRevision, ExamRun, RunStatus
 from app.domain.exams.repository import (
     AttemptRepository,
     CommandReceiptRepository,
@@ -23,6 +24,10 @@ from app.domain.exams.repository import (
 )
 
 logger = logging.getLogger("hirelog.exams.commands")
+
+_EXTENDABLE_ATTEMPT_STATUSES = frozenset(
+    {AttemptStatus.ADMITTED, AttemptStatus.IN_PROGRESS, AttemptStatus.BLOCKED}
+)
 
 
 class ExamCommandService:
@@ -35,10 +40,13 @@ class ExamCommandService:
         self._receipts = CommandReceiptRepository(db)
         self._outbox = OutboxRepository(db)
 
-    def create_definition(self, *, title: str, owner_uid: str) -> ExamDefinition:
+    def create_definition(
+        self, *, title: str, owner_uid: str, institution_id: Optional[str] = None
+    ) -> ExamDefinition:
         now = self._clock.now()
         definition = ExamDefinition(
-            id=uuid4().hex, title=title, owner_uid=owner_uid, created_at=now, updated_at=now
+            id=uuid4().hex, title=title, owner_uid=owner_uid, institution_id=institution_id,
+            created_at=now, updated_at=now,
         )
         self.definitions.create(definition)
         return definition
@@ -86,6 +94,7 @@ class ExamCommandService:
         revision: ExamRevision,
         policy: ExamPolicy,
         enrolled_uids: list[str],
+        institution_id: Optional[str] = None,
     ) -> ExamRun:
         """Publishing/scheduling a run. Enrollment is captured as an immutable
         snapshot at this moment (see ADR 0008 — stand-in for Prompt 2's
@@ -95,6 +104,7 @@ class ExamCommandService:
             id=uuid4().hex,
             definition_id=definition_id,
             revision_id=revision.id,
+            institution_id=institution_id,
             status=RunStatus.DRAFT,
             version=1,
             policy=policy,
@@ -177,34 +187,28 @@ class ExamCommandService:
 
             return outcome
 
-        return _txn(transaction)
+        outcome = _txn(transaction)
+        if outcome.applied:
+            ExamRunRepository.invalidate(run_id)  # students must see the new status on their very next call
+        return outcome
 
     def grant_time_extension(self, *, run_id: str, uid: str, extra_minutes: int) -> None:
         """Faculty-authored, audited time extension. Adjusts the attempt's
-        deadline directly; does not touch the run's own version/state."""
-        ref = (
-            self._db.collection("exam_runs")
-            .document(run_id)
-            .collection("attempts")
-            .document(uid)
-        )
-        snap = ref.get()
-        if not snap.exists:
-            raise LookupError(f"attempt {uid} not found for run {run_id}")
+        deadline in one transaction (concurrent extensions add up instead of
+        overwriting each other) and only for an attempt that is still live —
+        a submitted/expired/finalized attempt is never reopened."""
+        transaction = self._db.transaction()
 
-        data = snap.to_dict() or {}
-        current_extension = int(data.get("manual_extension_minutes", 0))
-        new_extension = current_extension + extra_minutes
+        @firestore.transactional
+        def _txn(transaction) -> None:
+            attempt = self._attempts.get_in_transaction(transaction, run_id, uid)
+            if attempt is None:
+                raise LookupError(f"attempt {uid} not found for run {run_id}")
+            if attempt.status not in _EXTENDABLE_ATTEMPT_STATUSES:
+                raise PermissionError("attempt_not_extendable")
+            update: dict = {"manual_extension_minutes": attempt.manual_extension_minutes + extra_minutes}
+            if attempt.deadline is not None:
+                update["deadline"] = (attempt.deadline + timedelta(minutes=extra_minutes)).isoformat()
+            self._attempts.update_in_transaction(transaction, run_id, uid, update)
 
-        deadline = data.get("deadline")
-        if deadline:
-            deadline_dt = datetime.fromisoformat(deadline)
-            new_deadline = deadline_dt + timedelta(minutes=extra_minutes)
-            ref.update(
-                {
-                    "manual_extension_minutes": new_extension,
-                    "deadline": new_deadline.isoformat(),
-                }
-            )
-        else:
-            ref.update({"manual_extension_minutes": new_extension})
+        _txn(transaction)

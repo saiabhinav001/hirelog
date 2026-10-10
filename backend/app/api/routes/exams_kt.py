@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Optional
 from uuid import uuid4
 
 import httpx
@@ -16,6 +16,13 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from app.api.exams_dependencies import require_exam_faculty, require_exams_enabled
+from app.api.exams_scope import (
+    assert_faculty_scope_for,
+    kt_upload_institution,
+    make_faculty_scope_guard,
+    resolve_creation_institution,
+    visible_institution_ids,
+)
 from app.core.config import settings
 from app.core.firebase import db
 from app.domain.kt.file_validation import validate_upload_bytes
@@ -39,7 +46,7 @@ logger = logging.getLogger("hirelog.exams.kt")
 router = APIRouter(
     prefix="/api/exams/v1/faculty/kt",
     tags=["exams-kt"],
-    dependencies=[Depends(require_exams_enabled)],
+    dependencies=[Depends(require_exams_enabled), Depends(make_faculty_scope_guard())],
 )
 
 if settings.EXAM_MALWARE_SCANNER_ENDPOINT:
@@ -77,7 +84,10 @@ class ReviewSourceRequest(BaseModel):
 
 
 @router.post("/uploads")
-async def upload_kt_file(file: UploadFile = File(...), user: dict = Depends(require_exam_faculty)) -> dict:
+async def upload_kt_file(
+    file: UploadFile = File(...), institution_id: Optional[str] = None, user: dict = Depends(require_exam_faculty)
+) -> dict:
+    owner_institution = resolve_creation_institution(user, institution_id)
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="file too large")
@@ -91,7 +101,7 @@ async def upload_kt_file(file: UploadFile = File(...), user: dict = Depends(requ
 
     if not result.ok:
         rejected = UploadedSource(
-            id=upload_id, uploaded_by=user["uid"], original_filename=file.filename or "unknown",
+            id=upload_id, uploaded_by=user["uid"], institution_id=owner_institution, original_filename=file.filename or "unknown",
             declared_content_type=declared_type, detected_kind=None, size_bytes=len(content),
             sha256=hashlib.sha256(content).hexdigest(), status=UploadStatus.REJECTED,
             rejection_reason=result.reason, storage_ref=f"kt-uploads/{upload_id}", created_at=now, updated_at=now,
@@ -100,7 +110,7 @@ async def upload_kt_file(file: UploadFile = File(...), user: dict = Depends(requ
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result.reason)
 
     upload = UploadedSource(
-        id=upload_id, uploaded_by=user["uid"], original_filename=file.filename or "unknown",
+        id=upload_id, uploaded_by=user["uid"], institution_id=owner_institution, original_filename=file.filename or "unknown",
         declared_content_type=declared_type, detected_kind=result.detected_kind, size_bytes=len(content),
         sha256=hashlib.sha256(content).hexdigest(), status=UploadStatus.QUARANTINED,
         storage_ref=f"kt-uploads/{upload_id}", created_at=now, updated_at=now,
@@ -146,6 +156,7 @@ def _scanner_reports_infection(scan) -> bool:
 def register_source_from_upload(
     payload: RegisterUploadSourceRequest, user: dict = Depends(require_exam_faculty)
 ) -> dict:
+    assert_faculty_scope_for(user, kt_upload_institution, payload.upload_id)
     upload = _uploads_repo().get(payload.upload_id)
     if upload is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload not found")
@@ -156,7 +167,8 @@ def register_source_from_upload(
         )
     now = datetime.now(timezone.utc)
     source = ApprovedSource(
-        id=uuid4().hex, kind="upload", upload_id=upload.id, review_status=SourceReviewStatus.PENDING,
+        id=uuid4().hex, kind="upload", upload_id=upload.id, institution_id=upload.institution_id,
+        review_status=SourceReviewStatus.PENDING,
         created_at=now, updated_at=now,
     )
     _sources_repo().create(source)
@@ -164,7 +176,10 @@ def register_source_from_upload(
 
 
 @router.post("/sources/from-url")
-def register_source_from_url(payload: RegisterUrlSourceRequest, user: dict = Depends(require_exam_faculty)) -> dict:
+def register_source_from_url(
+    payload: RegisterUrlSourceRequest, institution_id: Optional[str] = None, user: dict = Depends(require_exam_faculty)
+) -> dict:
+    owner_institution = resolve_creation_institution(user, institution_id)
     try:
         validate_url_scheme_and_host(payload.url)
         fetched = fetch_url_safely(payload.url, http_client=httpx.Client())
@@ -177,7 +192,7 @@ def register_source_from_url(payload: RegisterUrlSourceRequest, user: dict = Dep
     # Fetched content is treated as inert data — same quarantine path as a
     # direct upload, never executed/interpreted, never re-served publicly.
     upload = UploadedSource(
-        id=upload_id, uploaded_by=user["uid"], original_filename=fetched.final_url,
+        id=upload_id, uploaded_by=user["uid"], institution_id=owner_institution, original_filename=fetched.final_url,
         declared_content_type=fetched.content_type or "text/plain", detected_kind="txt",
         size_bytes=len(fetched.content), sha256=hashlib.sha256(fetched.content).hexdigest(),
         status=UploadStatus.QUARANTINED, storage_ref=f"kt-uploads/{upload_id}", created_at=now, updated_at=now,
@@ -186,7 +201,7 @@ def register_source_from_url(payload: RegisterUrlSourceRequest, user: dict = Dep
 
     now2 = datetime.now(timezone.utc)
     source = ApprovedSource(
-        id=uuid4().hex, kind="url", upload_id=upload_id, url=fetched.final_url,
+        id=uuid4().hex, kind="url", upload_id=upload_id, url=fetched.final_url, institution_id=owner_institution,
         review_status=SourceReviewStatus.PENDING, created_at=now2, updated_at=now2,
     )
     _sources_repo().create(source)
@@ -195,7 +210,12 @@ def register_source_from_url(payload: RegisterUrlSourceRequest, user: dict = Dep
 
 @router.get("/sources")
 def list_sources(user: dict = Depends(require_exam_faculty)) -> dict:
-    sources = _sources_repo().list_all()
+    repo = _sources_repo()
+    visible = visible_institution_ids(user)
+    if visible is None:  # platform operator
+        sources = repo.list_all()
+    else:
+        sources = [s for institution in sorted(visible) for s in repo.list_for_institution(institution)]
     return {"results": [s.model_dump(mode="json") for s in sources]}
 
 

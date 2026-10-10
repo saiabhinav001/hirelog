@@ -8,14 +8,25 @@ Responses are no-store; the exam API client is expected to pin to one origin
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from app.api.exams_dependencies import get_current_exam_user, require_exams_enabled, require_seb_admission
+from app.api.exams_dependencies import (
+    get_current_exam_user,
+    require_exams_enabled,
+    require_seb_admission,
+    require_student_run_access,
+)
 from app.api.exams_errors import raise_for_conflict_reason, raise_for_domain_error
+from app.api.exams_scope import accessible_institution_ids, run_access
+from app.core import background
+from app.core.config import settings
 from app.core.firebase import db
-from app.domain.exams.commands import ExamCommandService
+from app.core.rate_limit import SlidingWindowLimiter
+from app.domain.exams.repository import ExamDefinitionRepository
 from app.domain.exams.student_service import ExamStudentService
 from app.domain.generation.public_content import build_public_content
 from app.domain.generation.repository import GenerationRepository, VariantAssignmentRepository
@@ -32,9 +43,32 @@ def _set_no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
 
 
+def _cached_revision(run_id: str):
+    """The run's immutable revision, from cache (every student reads the same one)."""
+    access = run_access(run_id)
+    revision = ExamDefinitionRepository(db).get_revision_cached(access.definition_id, access.revision_id)
+    if revision is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Revision not found.")
+    return revision
+
+
 class SaveDraftRequest(BaseModel):
     expected_version: int = Field(ge=0)
     answer: dict = Field(default_factory=dict)
+
+    @field_validator("answer")
+    @classmethod
+    def _bounded_answer(cls, value: dict) -> dict:
+        if len(json.dumps(value, separators=(",", ":"), default=str)) > settings.EXAM_DRAFT_MAX_BYTES:
+            raise ValueError("answer is too large")
+        return value
+
+
+_QUESTION_ID = re.compile(r"^[0-9a-f]{32}:slot:[0-9]{1,3}$")
+
+# Every accepted save is a Firestore write against a shared free-tier quota; the
+# UI autosaves every few seconds at most, so this only ever stops runaway clients.
+_draft_limiter = SlidingWindowLimiter(30, 60, namespace="exam_draft_save")
 
 
 class SubmitRequest(BaseModel):
@@ -55,8 +89,11 @@ def list_my_runs(response: Response, user: dict = Depends(get_current_exam_user)
     _set_no_store(response)
     service = _service()
     runs = service.runs.list_for_student(user["uid"])
+    active = accessible_institution_ids(user["uid"])
     results = []
     for run in runs:
+        if run.institution_id is not None and run.institution_id not in active:
+            continue  # lapsed membership: the exam is no longer visible
         attempt = service.attempts.get(run.id, user["uid"])
         results.append({
             "run_id": run.id,
@@ -71,7 +108,7 @@ def list_my_runs(response: Response, user: dict = Depends(get_current_exam_user)
 
 
 @router.get("/runs/{run_id}/accommodations")
-def get_my_accommodations(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_my_accommodations(run_id: str, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     """Own accommodation window only — never another student's (contract:
     'explicit, faculty-authored, never auto-derived'). `camera_waived`
     lets the client skip requesting camera permission entirely for a
@@ -92,7 +129,7 @@ def get_my_accommodations(run_id: str, response: Response, user: dict = Depends(
 
 
 @router.get("/runs/{run_id}/state")
-def get_state(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_state(run_id: str, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     _set_no_store(response)
     try:
         attempt = _service().get_state(run_id, user["uid"])
@@ -120,20 +157,17 @@ def get_current_question(run_id: str, response: Response, user: dict = Depends(r
     question id, never locked content (contract #3)."""
     _set_no_store(response)
     service = _service()
-    run = service.get_run_or_404(run_id)
-    revision = ExamCommandService(db).definitions.get_revision(run.definition_id, run.revision_id)
-    if revision is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Revision not found.")
+    revision = _cached_revision(run_id)
     try:
         question = service.get_current_question(run_id, user["uid"], revision)
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
 
-    candidate_id = VariantAssignmentRepository(db).get_assignment(
+    candidate_id = VariantAssignmentRepository(db).get_assignment_cached(
         run_id=run_id, uid=user["uid"], slot_index=question.slot_index
     )
-    candidate = GenerationRepository(db).get_candidate(candidate_id) if candidate_id else None
+    candidate = GenerationRepository(db).get_candidate_cached(candidate_id) if candidate_id else None
     if candidate is not None:
         question = question.model_copy(update={"public_content": build_public_content(candidate)})
     return question.model_dump(mode="json")
@@ -146,10 +180,7 @@ def advance_to_next_question(run_id: str, response: Response, user: dict = Depen
     content')."""
     _set_no_store(response)
     service = _service()
-    run = service.get_run_or_404(run_id)
-    revision = ExamCommandService(db).definitions.get_revision(run.definition_id, run.revision_id)
-    if revision is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Revision not found.")
+    revision = _cached_revision(run_id)
     try:
         outcome = service.advance_to_next_question(run_id, user["uid"], revision)
     except Exception as exc:
@@ -169,6 +200,9 @@ def save_draft(
     user: dict = Depends(require_seb_admission),
 ) -> dict:
     _set_no_store(response)
+    if not _QUESTION_ID.match(question_id):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid question id.")
+    _draft_limiter.check(f"{run_id}:{user['uid']}", detail="Saving too quickly. Please slow down.")
     try:
         outcome = _service().save_draft(
             run_id, user["uid"], question_id, expected_version=payload.expected_version, answer=payload.answer
@@ -182,7 +216,7 @@ def save_draft(
 
 
 @router.get("/runs/{run_id}/drafts/{question_id}")
-def get_my_draft(run_id: str, question_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_my_draft(run_id: str, question_id: str, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     """Re-hydrates the editor/answer UI after a refresh — never another
     student's draft (ownership is the verified token's own uid, not a
     path/body-supplied one)."""
@@ -194,7 +228,7 @@ def get_my_draft(run_id: str, question_id: str, response: Response, user: dict =
 
 
 @router.get("/runs/{run_id}/drafts")
-def list_my_draft_versions(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def list_my_draft_versions(run_id: str, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     """Recovery endpoint for a refreshed/reopened tab — rebuilds the local
     `expected_draft_versions` map final-submit needs, without requiring the
     client to have remembered every slot's version across the whole session."""
@@ -223,6 +257,7 @@ def submit(run_id: str, payload: SubmitRequest, response: Response, user: dict =
     updated_attempt = service.attempts.get(run_id, user["uid"])
     if updated_attempt is not None:
         publish_attempt_status_changed(updated_attempt, now=datetime.now(timezone.utc))
+    background.wake("outbox")
     return {"accepted": True, "receipt": outcome.receipt.model_dump(mode="json")}
 
 
@@ -242,11 +277,12 @@ def finish(run_id: str, payload: FinishRequest, response: Response, user: dict =
     updated_attempt = service.attempts.get(run_id, user["uid"])
     if updated_attempt is not None:
         publish_attempt_status_changed(updated_attempt, now=datetime.now(timezone.utc))
+    background.wake("outbox")
     return {"accepted": True, "receipt": outcome.receipt.model_dump(mode="json")}
 
 
 @router.get("/runs/{run_id}/receipt")
-def get_receipt(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_receipt(run_id: str, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     """Works even after the deadline — a committed receipt is always
     reconcilable; it never authorizes new/late work (contract #4)."""
     _set_no_store(response)

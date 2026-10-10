@@ -26,7 +26,8 @@ def can_grant_role(requester_max: RoleScope, requested: RoleScope) -> bool:
 
 
 def _validate_one_row(
-    row_index: int, row: RosterRowInput, *, requester_max_role_scope: RoleScope, seen_keys: set[str]
+    row_index: int, row: RosterRowInput, *, requester_max_role_scope: RoleScope, seen_keys: set[str],
+    existing_identity_keys: frozenset[str] | set[str] = frozenset(),
 ) -> RosterRowResult:
     identity_key = normalize_identity_key(row.identity_key)
 
@@ -37,6 +38,12 @@ def _validate_one_row(
         requested_scope = RoleScope(row.role_scope)
     except ValueError:
         return RosterRowResult(row_index=row_index, identity_key=identity_key, ok=False, error=f"unknown_role_scope:{row.role_scope}")
+
+    # Overwriting an existing member can re-point their contact email (and so
+    # their OTP sign-in, including a linked legacy account) or change their
+    # role — only an institution admin may do that, never a faculty importer.
+    if identity_key in existing_identity_keys and requester_max_role_scope != RoleScope.ADMIN:
+        return RosterRowResult(row_index=row_index, identity_key=identity_key, ok=False, error="existing_membership_requires_admin")
 
     if not can_grant_role(requester_max_role_scope, requested_scope):
         return RosterRowResult(
@@ -58,7 +65,10 @@ def plan_dry_run(
     seen: set[str] = set()
     results: list[RosterRowResult] = []
     for index, row in enumerate(rows):
-        result = _validate_one_row(index, row, requester_max_role_scope=requester_max_role_scope, seen_keys=seen)
+        result = _validate_one_row(
+            index, row, requester_max_role_scope=requester_max_role_scope, seen_keys=seen,
+            existing_identity_keys=existing_identity_keys,
+        )
         if result.ok:
             seen.add(result.identity_key)
             result = result.model_copy(
@@ -89,7 +99,10 @@ def plan_apply_batch(
     results: list[RosterRowResult] = []
     for offset, row in enumerate(slice_rows):
         row_index = cursor + offset
-        result = _validate_one_row(row_index, row, requester_max_role_scope=requester_max_role_scope, seen_keys=seen)
+        result = _validate_one_row(
+            row_index, row, requester_max_role_scope=requester_max_role_scope, seen_keys=seen,
+            existing_identity_keys=existing_identity_keys,
+        )
         if result.ok:
             seen.add(result.identity_key)
             result = result.model_copy(

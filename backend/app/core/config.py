@@ -203,7 +203,9 @@ class Settings(BaseSettings):
     EXAM_PROCTORING_SWEEP_MIN_SECONDS: float = 15.0
     EXAM_PROCTORING_SWEEP_MAX_SECONDS: float = 300.0
     EXAM_HEALTH_CACHE_SECONDS: float = 60.0
-    EXAM_DRAFT_MAX_BYTES: int = 65_536
+    EXAM_RUN_CACHE_TTL_SECONDS: float = 5.0
+    EXAM_ATTEMPT_LIST_CACHE_SECONDS: float = 25.0
+    EXAM_DRAFT_MAX_BYTES: int = 262_144
 
     # ── OTP delivery ─────────────────────────────────────────────────────────
     # With none of these set, OTP challenges fail closed (503) rather than

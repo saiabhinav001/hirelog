@@ -14,8 +14,9 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
-from app.api.exams_dependencies import get_current_exam_user, require_exam_faculty, require_exams_enabled
+from app.api.exams_dependencies import require_exam_faculty, require_exams_enabled, require_student_run_access
 from app.api.exams_errors import raise_for_domain_error
+from app.api.exams_scope import grade_appeal_institution, make_faculty_scope_guard
 from app.api.routes.exams_proctoring import _storage
 from app.core.config import settings
 from app.core.firebase import db
@@ -35,7 +36,10 @@ student_router = APIRouter(
 )
 faculty_router = APIRouter(
     prefix="/api/exams/v1/faculty/gradebook", tags=["exams-gradebook-faculty"],
-    dependencies=[Depends(require_exams_enabled)],
+    dependencies=[
+        Depends(require_exams_enabled),
+        Depends(make_faculty_scope_guard({"appeal_id": grade_appeal_institution})),
+    ],
 )
 
 
@@ -93,7 +97,7 @@ class ExportRequest(BaseModel):
 # ── Student ──────────────────────────────────────────────────────────────────
 
 @student_router.get("/runs/{run_id}/results")
-def get_my_results(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_my_results(run_id: str, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     _set_no_store(response)
     try:
         _require_released(run_id)
@@ -110,7 +114,7 @@ def get_my_results(run_id: str, response: Response, user: dict = Depends(get_cur
 
 
 @student_router.get("/runs/{run_id}/feedback")
-def get_my_feedback(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def get_my_feedback(run_id: str, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     _set_no_store(response)
     try:
         feedback = FeedbackService(db, _feedback_provider()).build_feedback_for_student(run_id, user["uid"])
@@ -121,7 +125,7 @@ def get_my_feedback(run_id: str, response: Response, user: dict = Depends(get_cu
 
 
 @student_router.post("/runs/{run_id}/questions/{question_id}/appeals")
-def submit_grade_appeal(run_id: str, question_id: str, payload: GradeAppealRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def submit_grade_appeal(run_id: str, question_id: str, payload: GradeAppealRequest, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     _set_no_store(response)
     appeal = GradebookReleaseService(db).submit_grade_appeal(
         run_id=run_id, uid=user["uid"], question_id=question_id, student_statement=payload.student_statement
@@ -130,7 +134,7 @@ def submit_grade_appeal(run_id: str, question_id: str, payload: GradeAppealReque
 
 
 @student_router.get("/runs/{run_id}/appeals")
-def list_my_grade_appeals(run_id: str, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
+def list_my_grade_appeals(run_id: str, response: Response, user: dict = Depends(require_student_run_access)) -> dict:
     _set_no_store(response)
     appeals = GradebookReleaseService(db).list_grade_appeals_for_student(run_id, user["uid"])
     return {"results": [a.model_dump(mode="json") for a in appeals]}

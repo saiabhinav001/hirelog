@@ -32,6 +32,8 @@ class LiveTicket(BaseModel):
     run_id: str
     uid: str
     role: LiveRole
+    # True for platform (bootstrap) faculty, who have no membership to re-check.
+    operator: bool = False
     issued_at: datetime
     expires_at: datetime
     consumed: bool = False
