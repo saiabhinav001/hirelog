@@ -99,6 +99,12 @@ class ExamDefinitionRepository:
             {"latest_published_revision_id": revision_id, "updated_at": now.isoformat()},
         )
 
+    def list_revisions(self, definition_id: str) -> list[ExamRevision]:
+        return [
+            ExamRevision.model_validate({**(doc.to_dict() or {}), "id": doc.id})
+            for doc in self._revisions(definition_id).stream()
+        ]
+
     def list_by_owner(self, owner_uid: str) -> list[ExamDefinition]:
         query = self._db.collection(DEFINITIONS_COLLECTION).where(
             filter=firestore.FieldFilter("owner_uid", "==", owner_uid)

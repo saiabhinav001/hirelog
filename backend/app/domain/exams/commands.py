@@ -157,6 +157,7 @@ class ExamCommandService:
         it the legacy `slot_count`-only path is unchanged."""
         snapshot = None
         total_marks = None
+        frozen: dict = {}
         if blueprint_id:
             blueprint, approved, preview = self.preview_publication(
                 definition_id=definition_id, blueprint_id=blueprint_id
@@ -168,6 +169,12 @@ class ExamCommandService:
             slot_count = preview.slot_count
             total_marks = preview.total_marks
             snapshot = snapshot_slots(blueprint, approved)
+            short = [s.slot_index for s in snapshot if len(s.approved_candidate_ids) < s.requested_variant_count]
+            frozen = {
+                "topics": list(blueprint.topics) or None, "shuffle_options": blueprint.shuffle_options,
+                "variant_policy": blueprint.variant_policy,
+                "accepted_shortfall_slots": short or None, "shortfall_reason": blueprint.shortfall_reason if short else None,
+            }
         elif slot_count is None:
             raise ValueError("slot_count or blueprint_id is required")
 
@@ -206,6 +213,7 @@ class ExamCommandService:
                 total_marks=total_marks,
                 slots=snapshot,
                 publish_reason=reason,
+                **frozen,
             )
             self.definitions.create_revision_in_transaction(transaction, revision)
             self.definitions.set_latest_revision_in_transaction(transaction, definition_id, revision.id, now)
@@ -223,7 +231,16 @@ class ExamCommandService:
             )
             return revision
 
-        return _txn(transaction)
+        published = _txn(transaction)
+        if published.slots and blueprint_id:
+            # approved -> published for the frozen candidates; idempotent, a crash here leaves them
+            # `approved`, which is still servable and gradable.
+            from app.domain.generation.commands import GenerationCommandService
+
+            GenerationCommandService(self._db, clock=self._clock).mark_published(
+                [cid for slot in published.slots for cid in slot.approved_candidate_ids], published.id
+            )
+        return published
 
     def create_run(
         self,

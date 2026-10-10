@@ -1,4 +1,4 @@
-"""Independent item review provider — "Backend model prompt B" of the
+﻿"""Independent item review provider — "Backend model prompt B" of the
 implementation pack. A SEPARATE job/provider from question generation
 (`provider.py`): it re-solves a candidate independently and compares against
 the proposed private answer, flagging semantic issues (ambiguity, answer
@@ -20,6 +20,7 @@ from typing import Literal, Optional, Protocol
 from pydantic import BaseModel, Field, ValidationError
 
 from app.domain.generation.models import GenerationCandidate, GenerationRequest, IndependentReviewIssue
+from app.domain.generation.provider_http import HttpCallError, post_json
 
 # Exact system/developer instruction text from "Backend model prompt B" of
 # the implementation pack — the ONLY copy of this text in the codebase.
@@ -167,33 +168,54 @@ class DeterministicFakeReviewProvider:
         )
 
 
+def build_solve_stage_payload(candidate: GenerationCandidate, request: GenerationRequest) -> dict:
+    """Stage 1 of the review: the PUBLIC item and sources only. No proposed answer, rubric,
+    reference solution or tests, so the reviewer solves it blind and can genuinely disagree."""
+    payload = build_independent_review_request_payload(candidate, request)
+    payload.pop("proposed_private_answer", None)
+    payload["stage"] = "solve"
+    return payload
+
+
 class HttpIndependentReviewProviderAdapter:
-    """Configurable real-provider adapter interface.
-
-    NOT wired to any live endpoint in this environment \u2014 no provider
-    endpoint/credentials were supplied. Calling `review` raises until an
-    institution configures `base_url`/`api_key`, consistent with
-    `HttpGenerationProviderAdapter` and every other external-provider
-    adapter in this codebase (Judge0, JPlag): no real endpoint exists here
-    to test a live call against, so none is speculatively written.
-
-    `SYSTEM_PROMPT` and `build_request_payload` are nonetheless fully
-    implemented and tested.
-    """
+    """Provider-neutral JSON-over-HTTPS adapter, two calls per review (ADR 0021): a blind
+    `solve` stage, then a `compare` stage that adds the proposed private answer and the
+    reviewer's own answer. Tested against a mock transport only."""
 
     SYSTEM_PROMPT = GENERATION_SYSTEM_PROMPT_B_V1
 
-    def __init__(self, *, base_url: Optional[str] = None, api_key: Optional[str] = None) -> None:
+    def __init__(
+        self, *, base_url: Optional[str] = None, api_key: Optional[str] = None, timeout: float = 60.0,
+        max_retries: int = 2, client=None, sleep=None,
+    ) -> None:
         self._base_url = base_url
         self._api_key = api_key
+        self._timeout = timeout
+        self._max_retries = max_retries
+        self._client = client
+        self._sleep = sleep
 
     def build_request_payload(self, candidate: GenerationCandidate, request: GenerationRequest) -> dict:
         return build_independent_review_request_payload(candidate, request)
 
+    def _call(self, payload: dict):
+        kwargs = {"timeout": self._timeout, "max_retries": self._max_retries, "client": self._client}
+        if self._sleep is not None:
+            kwargs["sleep"] = self._sleep
+        try:
+            return post_json(self._base_url, self._api_key, {"system_prompt": self.SYSTEM_PROMPT, "input": payload}, **kwargs)
+        except HttpCallError as exc:
+            if exc.kind == "timeout":
+                raise ReviewProviderTimeoutError(str(exc)) from exc
+            raise ReviewProviderError(f"{exc.kind}: {exc}") from exc
+
     def review(self, candidate: GenerationCandidate, request: GenerationRequest) -> IndependentReviewResult:
-        if not self._base_url or not self._api_key:
-            raise ReviewProviderError(
-                "HttpIndependentReviewProviderAdapter is not configured \u2014 set a real "
-                "provider base_url/api_key (see docs/adr/0009 setup requirements)."
-            )
-        raise NotImplementedError("Real review provider HTTP call not implemented \u2014 no provider configured/tested.")
+        solved = self._call(build_solve_stage_payload(candidate, request)).output
+        answer = solved.get("independent_answer")
+        compare = {**build_independent_review_request_payload(candidate, request), "stage": "compare",
+                   "independent_answer": None if answer is None else str(answer)}
+        result = IndependentReviewResult.parse_payload(self._call(compare).output)
+        if result.candidate_id != candidate.id:
+            raise ReviewProviderError("the reviewer answered a different candidate_id")
+        # The blind answer is authoritative: a reviewer cannot rewrite it during the compare stage.
+        return result.model_copy(update={"independent_answer": None if answer is None else str(answer)})

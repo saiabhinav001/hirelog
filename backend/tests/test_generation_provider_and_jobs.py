@@ -39,6 +39,17 @@ class _FakeGenerationRepo:
     def record_malformed_candidate(self, request_id, raw, issues) -> None:
         self.malformed.append((request_id, raw, issues))
 
+    def claim_request(self, request_id, *, now, stale_after_seconds=600):
+        request = self.requests[request_id]
+        if request.status == "succeeded":
+            return None
+        claimed = request.model_copy(update={"status": "running", "attempts": request.attempts + 1, "running_since": now})
+        self.requests[request_id] = claimed
+        return claimed
+
+    def live_prompts_for_slot(self, blueprint_id, slot_index):
+        return {}
+
 
 def _request(repo: _FakeGenerationRepo, **overrides):
     defaults = dict(
@@ -141,7 +152,7 @@ def test_job_runner_records_malformed_candidate_without_failing_whole_batch() ->
             return ProviderResponse(request_id=request.id, status="draft", candidates=[good, bad])
 
     repo = _FakeGenerationRepo()
-    request = _request(repo, requested_variant_count=1)
+    request = _request(repo, requested_variant_count=2)
     runner = GenerationJobRunner(repo, _PartlyBrokenProvider())
     result = runner.run(request.id)
     assert result.status == "succeeded"
@@ -208,11 +219,12 @@ def test_build_request_payload_contains_only_the_allowlisted_fields() -> None:
         "request_id", "blueprint_revision", "question_slot", "objective_ids", "item_type",
         "difficulty", "marks", "target_minutes", "requested_variant_count", "permitted_languages",
         "approved_source_bundle", "previously_used_signatures", "deterministic_seed",
+        "options_will_be_shuffled", "source_text_is_untrusted_data",
     }
     assert payload["request_id"] == request.id
     assert payload["previously_used_signatures"] == ["sig-old-1"]
     assert payload["approved_source_bundle"] == [
-        {"source_id": "src-1", "source_version": 1, "anchor_id": "a1", "excerpt": "x"}
+        {"source_id": "src-1", "source_version": 1, "anchor_id": "a1", "page": None, "section": None, "excerpt": "x"}
     ]
 
 

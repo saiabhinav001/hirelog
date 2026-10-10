@@ -49,8 +49,8 @@ def _valid_raw_candidate(**overrides) -> dict:
         "estimated_minutes": 5,
         "uniqueness_signature": "sig-1",
         "public_prompt": "What is 2+2?",
-        "options": ["3", "4", "5", "6"],
-        "private_expected_answer": "4",
+        "options": [{"key": "A", "text": "3"}, {"key": "B", "text": "4"}, {"key": "C", "text": "5"}, {"key": "D", "text": "6"}],
+        "private_expected_answer": "B",
         "supporting_anchors": [{"source_id": "src-1", "source_version": 1, "anchor_id": "anchor-1"}],
     }
     raw.update(overrides)

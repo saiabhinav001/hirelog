@@ -159,6 +159,12 @@ class Settings(BaseSettings):
     EXAM_KT_URL_ALLOWED_HOSTS: str = ""
     EXAM_GENERATION_PROVIDER_BASE_URL: Optional[str] = None
     EXAM_GENERATION_PROVIDER_API_KEY: Optional[str] = None
+    # Prompt 5 (docs/adr/0021): neutral JSON-over-HTTPS transport limits for the generation and review
+    # adapters, and the default-off gate that keeps coding items unapprovable until the judge has run them.
+    EXAM_GENERATION_HTTP_TIMEOUT_SECONDS: float = 60.0
+    EXAM_GENERATION_HTTP_MAX_RETRIES: int = 2
+    EXAM_GENERATION_MAX_ATTEMPTS: int = 3
+    EXAM_REQUIRE_EXECUTED_CODING_VERIFICATION: bool = False
 
     # ── Independent item review (Backend model prompt B, docs/adr/0009) ─────
     # A separate provider/endpoint from generation above — may be the same

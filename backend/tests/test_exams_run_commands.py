@@ -317,7 +317,7 @@ def test_concurrent_publishes_get_distinct_consecutive_revision_numbers(env) -> 
 def _seed_blueprint(env, *, definition_id=DEF_ID, slots=None, bp_id="bp1"):
     slots = slots or [
         BlueprintSlot(slot_index=0, item_type=ItemType.SINGLE_CHOICE, objective_ids=["o1"], difficulty="easy",
-                      marks=2, target_minutes=5, requested_variant_count=2),
+                      marks=2, target_minutes=5, requested_variant_count=1),
         BlueprintSlot(slot_index=1, item_type=ItemType.CODING, objective_ids=["o2"], difficulty="hard", marks=8,
                       target_minutes=25, permitted_languages=["python3.11"], requested_variant_count=1),
     ]

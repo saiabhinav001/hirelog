@@ -1,4 +1,4 @@
-# Hirelog Exams — requirements traceability (Prompt 0, v1.1)
+﻿# Hirelog Exams — requirements traceability (Prompt 0, v1.1)
 
 Audited 2026-10-09 at `5b0ad3b` (pre-Prompt-1 baseline). Companion documents: [baseline.md](baseline.md),
 [integration-map.md](integration-map.md), [compatibility-and-migration.md](compatibility-and-migration.md), [delta-plan.md](delta-plan.md).
@@ -235,6 +235,49 @@ Defects found in the existing code while implementing (all fixed, none was in th
 | GEN-10 | Post-exam learning feedback (Backend prompt C) | `feedback_service.py` + `TemplateFeedbackProvider` default; `GET /student/gradebook/runs/{id}/feedback` released-only | `test_gradebook_feedback.py` (15) | EXISTS_AND_VERIFIED | — | — |
 | GEN-11 | Prompt-injection resilience | Structural: provider status ignored; envelope schema forbids approval; independent review only downgrades | no injection fixtures | PARTIALLY_EXISTS | Fixtures: instruction-bearing excerpts, forged JSON, fake anchors | P5 |
 
+### 5.1 Status after the Prompt 5 implementation
+
+Implemented as [ADR 0021](../adr/0021-grounded-generation-and-versioned-review.md); migration notes in
+[compatibility-and-migration.md §10](compatibility-and-migration.md). Evidence is unit-, HTTP- and component-level: the in-memory Firestore, a spy/fake provider,
+httpx mock transports and synthetic extracted versions. **No real provider, judge or browser session was used.** Backend suite: 1222 tests passing with
+`EXAMS_ENABLED=false` (1117 before + 105 new / adjusted); `ruff check .` clean; frontend `tsc` and `eslint` clean, 9 new Vitest tests.
+
+| ID | Status after P5 | What changed | Evidence |
+|---|---|---|---|
+| DOM-05 | EXISTS_AND_VERIFIED (unit/HTTP) | `POST …/definitions/{id}/topic-suggestions`: extractive (headings + frequent terms) from approved, parsed sources with page-level evidence; instruction-like passages ignored; nothing stored until the teacher confirms topics on the blueprint | `test_generation_p5_domain.py::test_topic_*`, `test_exams_generation_routes_p5.py::test_topic_*` |
+| GEN-01 | EXISTS_AND_VERIFIED (unit/HTTP) | Blueprint accepts topics (confirmed), duration, language allowlist (checked against the judge registry), option shuffle, variant policy and a compact `spec` (question count, per-type counts, marks, negative marks, difficulty %, languages, variants) expanded deterministically; slot indexes validated at creation | `test_generation_p5_domain.py::test_spec_*`, `test_exams_generation_routes_p5.py::test_*blueprint*` |
+| GEN-02 | EXISTS_AND_VERIFIED (unit/HTTP) | `GET …/capacity` computes requested / generated / valid / approved per slot from stored candidates; publication blocks a short slot unless the shortfall is explicitly accepted (reason, audited); an empty slot always blocks | `test_*capacity*`, `test_publication_is_blocked_by_insufficient_approved_capacity_*`, `test_exams_policy_validation.py::test_a_short_pool_blocks_*` |
+| GEN-03 | EXISTS_AND_VERIFIED (unit/HTTP) | Bundle built from the source's pinned extracted version: real text, exact version/anchor/page/section, relevance-ranked when auto, bundle hash stored; unknown anchors refused before any provider call; no student field exists on the request | `test_bundle_carries_real_text_*`, `test_a_nonexistent_anchor_is_refused_*`, `test_no_student_identity_ever_reaches_the_provider` |
+| GEN-04 | EXISTS_AND_VERIFIED (unit/HTTP) | Also stored: provider class, source versions, bundle hash, attempts, retries, latency, usage / cost estimate, completion time, excluded passages | `test_generation_sends_real_excerpts_*` |
+| GEN-05 | EXISTS_AND_VERIFIED (unit) | Added answer-key consistency, option uniqueness, multi-select canonical order, positional-option blocker under shuffle, rubric-points = marks, coding reference-solution/test structure, near-duplicate detection (batch + live candidates) | `test_generation_p5_domain.py::test_*` (validation block) |
+| GEN-06 | EXISTS_AND_VERIFIED (unit) | The backend now compares the reviewer's blind answer with the key; "agree" with a different or missing answer still pulls the item back | `test_a_reviewer_who_solved_it_differently_*` |
+| GEN-07 | PARTIALLY_EXISTS (D-5) | Reference solutions and hidden tests are now preserved and structurally validated (a provider's hidden tests used to be dropped); **not executed**; `execution_verified` + an optional approval requirement (`EXAM_REQUIRE_EXECUTED_CODING_VERIFICATION`, off) are the seam. **No SQL item type or evaluator exists** | `test_coding_needs_a_reference_solution_*`, `test_coding_approval_can_require_executed_verification` |
+| GEN-08 | EXISTS_AND_VERIFIED (unit/HTTP) | Approve/reject in a transaction with audit; edit endpoint: substantive edit = new version + reset approval + old version `superseded`, minor edit in place; regenerate; `published` set by publication only; published candidates cannot be edited | `test_an_edit_creates_a_new_version_*`, `test_a_minor_edit_*`, `test_only_a_teacher_decision_*`, `test_a_published_candidate_cannot_be_edited` |
+| GEN-09 | EXISTS_AND_VERIFIED (unit/HTTP) | `POST …/runs/{id}/variants/assign` assigns every enrolled student every slot before the attempt from the revision-pinned candidates, create-only, with a seeded option order; nothing on the live path calls a model | `test_every_enrolled_student_gets_a_variant_*`, `test_reassigning_is_idempotent_*`, `test_the_live_exam_path_never_calls_a_model` |
+| GEN-11 | EXISTS_AND_VERIFIED (unit/HTTP) for the named fixtures; detection is heuristic | Source injection withheld + reported; forged JSON / approval claims rejected; fabricated anchors blocked; hostile/oversized/non-JSON provider responses are provider errors | `test_instruction_like_source_text_is_withheld_*`, `test_malformed_or_hostile_provider_responses_*`, `test_a_model_that_claims_approval_*` |
+| ING-09 | EXISTS_AND_VERIFIED (named fixtures) | Closed together with GEN-11 | as GEN-11 |
+| RND-01 | EXISTS_AND_VERIFIED (unit/HTTP) | Per-student seeded option order stored with the assignment and applied by the student question route (key stays with its text); variant policy honoured at assignment | `test_option_order_is_a_stable_permutation_*`, `test_exams_student_service.py` (unchanged green) |
+
+Named test scenarios from the prompt: malformed model JSON, source injection, nonexistent anchors, incorrect answer, duplicate / near-duplicate, insufficient
+source, provider timeout and fewer-than-requested output each have at least one test (see the table above and ADR 0021 §Test evidence).
+
+Defects found in the existing code while implementing (all fixed, none was in the audit baseline except P5-1, which refines GEN-03):
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| P5-1 | High | The model received a placeholder excerpt and an unverified anchor/version, so generated items cited text the model never saw | Grounded bundle from the pinned extracted version |
+| P5-2 | High | The provider's hidden tests were dropped when building the candidate | Preserved and validated |
+| P5-3 | High | A student's variant assignment was overwritten on re-reserve, and the pool was read live | Create-only assignments; assignment from the revision-pinned candidates |
+| P5-4 | Medium | Review was a read-then-write: an approval could race an edit or another review | Compare-and-set transaction + audit |
+| P5-5 | Medium | The generation runner had no atomic claim, retry cap or metadata; the HTTP adapters were stubs | `claim_request`, attempt cap, stored metadata, provider-neutral transport |
+| P5-6 | Medium | No answer-key, duplicate-option, near-duplicate or shuffle-safety check; "duplicate" meant an identical signature string | Added to validation |
+| P5-7 | Medium | A short approved pool was only a publication warning | Blocker unless the shortfall is explicitly accepted |
+| P5-8 | Low | No edit/versioning; `published` was never set | Edit endpoint, versions, `mark_published` |
+| P5-9 | Low | The fake provider's "Option A …" text would be flagged by the new shuffle check | Neutral wording |
+
+Residual: coding execution (D-5) and SQL (no evaluator); multi-select grading format mismatch (frontend array vs grader string, D-8 / Prompt 10); provider adapters
+mock-tested only (D-13); heuristic injection detection; lexical near-duplicate detection.
+
 ## 6. Student attempts, drafts, immutable submit — Prompt 6
 
 | ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
@@ -374,3 +417,4 @@ Defects found in the existing code while implementing (all fixed, none was in th
 | D-10 | History strategy for CI (rebase exam branch onto `origin/main` or add a branch trigger) | P11 |
 | D-11 | Legacy `PLACEMENT_CELL_EMAILS` promotion: verified-email/Google-only policy | outside exams |
 | D-12 | Per-student pause/resume: does the student's clock freeze (deadline shifts by the paused time), who may do it, and how it composes with the proctoring `BLOCKED` state. Not implemented in Prompt 3 | P7/P9 |
+| D-13 | Which generation provider / gateway the institution runs, and a separate one for the independent review (Prompt 5 delivered a provider-neutral https adapter tested against a mock transport only) | P5 (adapter, done) / deployment |

@@ -110,7 +110,7 @@ def test_policy_round_trips_through_json_without_changing_the_schedule() -> None
 
 def _slot(index: int = 0, **overrides) -> BlueprintSlot:
     data = dict(slot_index=index, item_type=ItemType.SINGLE_CHOICE, objective_ids=["o1"], difficulty="easy",
-                marks=2.0, target_minutes=5, permitted_languages=[], requested_variant_count=2)
+                marks=2.0, target_minutes=5, permitted_languages=[], requested_variant_count=1)
     data.update(overrides)
     return BlueprintSlot(**data)
 
@@ -180,10 +180,22 @@ def test_non_approved_candidates_do_not_count() -> None:
     assert not preview.publishable
 
 
-def test_a_short_pool_is_a_warning_not_a_blocker() -> None:
-    preview = build_preview(_blueprint([_slot(0, requested_variant_count=5)]), _approved(("a", 0)))
-    assert preview.publishable
-    assert any("1 approved of 5" in w for w in preview.warnings)
+def test_a_short_pool_blocks_publication_unless_the_shortfall_is_explicitly_accepted() -> None:
+    blueprint = _blueprint([_slot(0, requested_variant_count=5)])
+    preview = build_preview(blueprint, _approved(("a", 0)))
+    assert not preview.publishable
+    assert any("1 approved of 5" in b for b in preview.blockers)
+    assert (preview.requested_variants_total, preview.approved_variants_total) == (5, 1)
+
+    accepted = blueprint.model_copy(update={"shortfall_accepted": True})
+    preview = build_preview(accepted, _approved(("a", 0)))
+    assert preview.publishable and preview.shortfall_accepted
+    assert any("1 approved of 5" in w and "shortfall accepted" in w for w in preview.warnings)
+
+
+def test_a_slot_with_no_approved_candidate_still_blocks_even_with_an_accepted_shortfall() -> None:
+    blueprint = _blueprint([_slot(0)]).model_copy(update={"shortfall_accepted": True})
+    assert not build_preview(blueprint, {}).publishable
 
 
 def test_gaps_and_duplicates_in_slot_indexes_block_publication() -> None:

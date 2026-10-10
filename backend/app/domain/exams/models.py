@@ -114,6 +114,12 @@ class ExamRevision(BaseModel):
     total_marks: Optional[float] = None
     slots: Optional[list[RevisionSlot]] = None
     publish_reason: Optional[str] = None
+    # Prompt 5 (ADR 0021): frozen with the revision so a later blueprint change cannot alter a run.
+    topics: Optional[list[str]] = None
+    shuffle_options: Optional[bool] = None
+    variant_policy: Optional[str] = None
+    accepted_shortfall_slots: Optional[list[int]] = None  # slots published with fewer approved variants than requested
+    shortfall_reason: Optional[str] = None
 
 
 class ExamRun(BaseModel):

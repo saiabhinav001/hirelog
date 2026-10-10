@@ -13,9 +13,10 @@ never the solution source code itself.
 from __future__ import annotations
 
 from app.domain.generation.models import GenerationCandidate, ItemType
+from app.domain.generation.variants import apply_option_order
 
 
-def build_public_content(candidate: GenerationCandidate) -> dict:
+def build_public_content(candidate: GenerationCandidate, option_order: list[str] | None = None) -> dict:
     content: dict = {
         "item_type": candidate.item_type.value,
         "marks": candidate.marks,
@@ -25,7 +26,7 @@ def build_public_content(candidate: GenerationCandidate) -> dict:
         "examples": candidate.public_examples,
     }
     if candidate.item_type in (ItemType.SINGLE_CHOICE, ItemType.MULTIPLE_SELECT):
-        content["options"] = candidate.options
+        content["options"] = apply_option_order(candidate.options, option_order) if option_order else candidate.options
     elif candidate.item_type == ItemType.CODING:
         content["permitted_languages"] = sorted(candidate.reference_solutions.keys())
         content["public_tests"] = candidate.public_tests

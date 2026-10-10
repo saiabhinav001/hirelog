@@ -5,16 +5,12 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
+import { BlueprintPanel } from "@/components/exams/BlueprintPanel";
 import { SourceUploadPanel } from "@/components/exams/SourceUploadPanel";
 import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
 import { examApiFetch } from "@/lib/examsApi";
-import {
-  examEndpoints,
-  type ApprovedSourceSummary,
-  type ExamRunSummary,
-  type GenerationCandidate,
-} from "@/lib/examEndpoints";
+import { examEndpoints, type ApprovedSourceSummary, type ExamRunSummary } from "@/lib/examEndpoints";
 
 type Blueprint = { id: string; title: string; slots: unknown[] };
 
@@ -25,16 +21,17 @@ function DefinitionDetail() {
   const [runs, setRuns] = useState<ExamRunSummary[] | null>(null);
   const [blueprints, setBlueprints] = useState<Blueprint[] | null>(null);
   const [sources, setSources] = useState<ApprovedSourceSummary[] | null>(null);
-  const [candidatesByBlueprint, setCandidatesByBlueprint] = useState<Record<string, GenerationCandidate[]>>({});
   const [error, setError] = useState<string | null>(null);
-
+  const [notice, setNotice] = useState<string | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
   const [blueprintTitle, setBlueprintTitle] = useState("");
   const [blueprintItemType, setBlueprintItemType] = useState<"single_choice" | "multiple_select" | "short_answer" | "coding">("single_choice");
   const [blueprintLanguage, setBlueprintLanguage] = useState("python3.11");
+  const [questionCount, setQuestionCount] = useState(1);
+  const [variantsPerQuestion, setVariantsPerQuestion] = useState(4);
+  const [shuffleOptions, setShuffleOptions] = useState(false);
   const [slotCount, setSlotCount] = useState(1);
   const [enrolledUidsText, setEnrolledUidsText] = useState("");
-  const [generatingBlueprintId, setGeneratingBlueprintId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -47,10 +44,6 @@ function DefinitionDetail() {
       setRuns(runsData.results);
       setBlueprints(blueprintsData.results);
       setSources(sourcesData.results);
-      for (const bp of blueprintsData.results) {
-        const candidates = await examEndpoints.listCandidatesForBlueprint(token, bp.id);
-        setCandidatesByBlueprint((prev) => ({ ...prev, [bp.id]: candidates.results }));
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load exam details.");
     }
@@ -87,18 +80,14 @@ function DefinitionDetail() {
         body: JSON.stringify({
           exam_definition_id: definitionId,
           title: blueprintTitle.trim(),
-          slots: [
-            {
-              slot_index: 0,
-              item_type: blueprintItemType,
-              objective_ids: ["core"],
-              difficulty: "medium",
-              marks: 5,
-              target_minutes: 5,
-              permitted_languages: blueprintItemType === "coding" ? [blueprintLanguage] : [],
-              requested_variant_count: 4,
-            },
-          ],
+          spec: {
+            question_count: questionCount,
+            type_counts: { [blueprintItemType]: questionCount },
+            difficulty_distribution: { medium: 100 },
+            languages: blueprintItemType === "coding" ? [blueprintLanguage] : [],
+            variants_per_slot: variantsPerQuestion,
+          },
+          shuffle_options: shuffleOptions,
         }),
       },
       token
@@ -107,32 +96,18 @@ function DefinitionDetail() {
     await load();
   };
 
-  const handleReviewCandidate = async (candidateId: string, decision: "approve" | "reject") => {
-    const token = await getToken();
-    await examEndpoints.reviewCandidate(token, candidateId, decision, decision === "reject" ? "Needs revision." : undefined);
-    await load();
-  };
-
-  const handleGenerateCandidates = async (blueprintId: string) => {
-    const approvedSources = (sources ?? []).filter((s) => s.review_status === "approved");
-    if (approvedSources.length === 0) {
-      setError("Approve at least one source before generating questions.");
-      return;
-    }
-    setGeneratingBlueprintId(blueprintId);
+  const handleAssignVariants = async (runId: string) => {
     try {
       const token = await getToken();
-      await examEndpoints.createGenerationRequest(token, {
-        blueprint_id: blueprintId,
-        slot_index: 0,
-        source_anchors: approvedSources.map((s) => ({ source_id: s.id, anchor_id: "full-document" })),
-        deterministic_seed: Date.now(),
-      });
-      await load();
+      const report = await examEndpoints.assignRunVariants(token, runId);
+      const blocked = Object.keys(report.blocked_slots).length;
+      setNotice(
+        blocked > 0
+          ? `Assigned ${report.created} question(s); ${blocked} slot(s) could not be assigned: ${Object.values(report.blocked_slots)[0]}.`
+          : `Assigned ${report.created} question(s) before the exam starts (${report.already_assigned} were already assigned).`
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not generate questions.");
-    } finally {
-      setGeneratingBlueprintId(null);
+      setNotice(err instanceof Error ? err.message : "Could not assign variants.");
     }
   };
 
@@ -178,6 +153,7 @@ function DefinitionDetail() {
   return (
     <div className="page-container py-10">
       <h1 className="text-2xl font-semibold">Exam workspace</h1>
+      {notice && <p role="status" className="mt-2 text-sm">{notice}</p>}
 
       <section className="card mt-6 p-5">
         <h2 className="text-lg font-semibold">Reference materials</h2>
@@ -238,43 +214,26 @@ function DefinitionDetail() {
               <option value="cpp17">C++ (GCC 17)</option>
             </select>
           )}
-          <button className="btn-secondary" type="submit">Create blueprint (1 slot)</button>
+          <button className="btn-secondary" type="submit">Create blueprint</button>
         </form>
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+          <label className="flex items-center gap-2">
+            Questions
+            <input type="number" min={1} max={200} className="input-field w-20" aria-label="Number of questions" value={questionCount} onChange={(e) => setQuestionCount(Math.max(1, Number(e.target.value) || 1))} />
+          </label>
+          <label className="flex items-center gap-2">
+            Variants per question
+            <input type="number" min={1} max={50} className="input-field w-20" aria-label="Variants per question" value={variantsPerQuestion} onChange={(e) => setVariantsPerQuestion(Math.max(1, Number(e.target.value) || 1))} />
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={shuffleOptions} onChange={(e) => setShuffleOptions(e.target.checked)} />
+            Shuffle answer options per student
+          </label>
+        </div>
         <div className="mt-4 space-y-4">
           {blueprints.length === 0 && <p className="text-sm text-[var(--text-muted)]">No blueprints yet.</p>}
           {blueprints.map((bp) => (
-            <div key={bp.id} className="rounded-md border border-[var(--border)] p-3">
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold">{bp.title}</h3>
-                <button
-                  className="btn-secondary"
-                  disabled={generatingBlueprintId === bp.id}
-                  onClick={() => handleGenerateCandidates(bp.id)}
-                >
-                  {generatingBlueprintId === bp.id ? "Generating…" : "Generate questions"}
-                </button>
-              </div>
-              <div className="mt-2 space-y-2">
-                {(candidatesByBlueprint[bp.id] ?? []).map((c) => (
-                  <div key={c.id} className="flex items-center justify-between rounded-md bg-[var(--surface-muted)] p-2 text-sm">
-                    <div>
-                      <span className="badge mr-2">{c.item_type}</span>
-                      <span className="badge mr-2">{c.status}</span>
-                      <span className="text-[var(--text-muted)]">{c.public_prompt.slice(0, 80)}</span>
-                    </div>
-                    {c.status === "ready_for_human_review" && (
-                      <div className="flex gap-2">
-                        <button className="btn-secondary" onClick={() => handleReviewCandidate(c.id, "approve")}>Approve</button>
-                        <button className="btn-secondary" onClick={() => handleReviewCandidate(c.id, "reject")}>Reject</button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-                {(candidatesByBlueprint[bp.id] ?? []).length === 0 && (
-                  <p className="text-xs text-[var(--text-muted)]">No questions generated for this blueprint yet.</p>
-                )}
-              </div>
-            </div>
+            <BlueprintPanel key={bp.id} definitionId={definitionId} blueprint={bp} sources={sources} getToken={getToken} onChanged={load} />
           ))}
         </div>
       </section>
@@ -318,6 +277,7 @@ function DefinitionDetail() {
                 <span className="text-[var(--text-muted)]">v{run.version} · {run.enrolled_uids.length} enrolled</span>
               </div>
               <div className="flex gap-2">
+                <button className="btn-secondary" onClick={() => handleAssignVariants(run.id)}>Assign variants</button>
                 <Link className="btn-secondary" href={`/exams/faculty/${definitionId}/runs/${run.id}/lobby`}>Lobby</Link>
                 <Link className="btn-secondary" href={`/exams/faculty/${definitionId}/runs/${run.id}/control`}>Live control</Link>
                 <Link className="btn-secondary" href={`/exams/faculty/${definitionId}/runs/${run.id}/results`}>Results</Link>

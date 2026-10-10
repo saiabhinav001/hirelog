@@ -27,15 +27,23 @@ def decide_review_candidate(
     reviewer: str,
     now: datetime,
     rejection_reason: Optional[str] = None,
+    require_execution_verified: bool = False,
 ) -> ReviewOutcome:
     if candidate.status == CandidateStatus.PUBLISHED:
         return ReviewOutcome(False, None, reason="cannot review an already-published candidate")
+    if candidate.status == CandidateStatus.SUPERSEDED:
+        return ReviewOutcome(False, None, reason="this version was replaced by an edited version; review that one")
 
     if decision == "approve":
         if candidate.status != CandidateStatus.READY_FOR_HUMAN_REVIEW:
             return ReviewOutcome(
                 False, None,
                 reason=f"cannot approve a candidate in status={candidate.status.value} — it must clear validation first",
+            )
+        if require_execution_verified and candidate.item_type.value == "coding" and not candidate.execution_verified:
+            return ReviewOutcome(
+                False, None,
+                reason="a coding item cannot be approved until its reference solution and tests have run in the isolated judge",
             )
         updated = candidate.model_copy(
             update={"status": CandidateStatus.APPROVED, "reviewed_by": reviewer, "reviewed_at": now}

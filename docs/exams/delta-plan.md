@@ -184,3 +184,37 @@ egress proxy for URL fetches (Phase 11), prompt-injection fixtures against the g
 - [x] Duplicate, multiple, replaced and deleted uploads are tested; an unread source can no longer be approved.
 - [x] Full backend suite (`EXAMS_ENABLED=false`: 1117 passed), ruff, frontend `tsc` and Vitest pass (one unrelated timeout under full-suite load, passes alone).
 - [x] Migration notes and ADR 0020 written; no production data touched; no secrets or addresses added. *(Real ClamAV/bucket, POSIX memory limit, composite-index behavior and real network not verified.)*
+
+## 8. Phase 5 — blueprint and grounded generation (implemented, ADR 0021)
+
+Phase 5 needed no new institutional decision to ship the pipeline; the provider endpoint (D-13), judge execution (D-5) and scoring semantics (D-8) stay open and are not claimed.
+
+| Area | Change |
+|---|---|
+| `backend/app/domain/generation/grounding.py` (new) | Bundle from the pinned extracted version: real excerpts, exact version/anchor/page/section, relevance ranking, budget, injection withholding, bundle hash |
+| `backend/app/domain/generation/provider_http.py` (new), `provider.py`, `independent_review_provider.py` | Provider-neutral https transport (timeout, backoff retries, size cap); real adapters for generation and the two-stage independent review; payload adds page/section/untrusted-data marker |
+| `backend/app/domain/generation/jobs.py`, `repository.py` | Atomic `claim_request`, attempt cap, stored provider/latency/usage/bundle hash/source versions, candidate cap, near-duplicate inputs; create-only variant assignments with option order |
+| `backend/app/domain/generation/validation.py`, `independent_review.py` | Answer-key, option, rubric, coding-structure, shuffle-safety and near-duplicate checks; backend-side comparison of the reviewer's blind answer |
+| `backend/app/domain/generation/edit.py`, `commands.py`, `review.py`, `models.py` (new / changed) | Versioned edit, transactional review, shortfall acceptance, `mark_published`, pre-attempt `assign_run_variants`, `execution_verified` seam, `superseded` status |
+| `backend/app/domain/generation/blueprint_spec.py`, `capacity.py`, `topics.py` (new) | Spec expansion, per-slot capacity, extractive topic suggestions |
+| `backend/app/domain/exams/publication.py`, `commands.py`, `models.py` | Short pool blocks unless accepted; allowlist check; preview totals; revision freezes topics/shuffle/variant policy/accepted shortfall; publish marks candidates published |
+| `backend/app/api/routes/exams_generation.py`, `exams_student.py` | Grounded generation, `blueprints/{id}/generate`, `capacity`, `shortfall`, `generation-requests/{id}/retry`, `candidates/{id}/edit` and `regenerate`, `runs/{id}/variants/assign`, `definitions/{id}/topic-suggestions`; student question route applies the stored option order |
+| Config | `EXAM_GENERATION_HTTP_TIMEOUT_SECONDS`, `EXAM_GENERATION_HTTP_MAX_RETRIES`, `EXAM_GENERATION_MAX_ATTEMPTS`, `EXAM_REQUIRE_EXECUTED_CODING_VERIFICATION` (default off) |
+| Frontend | `BlueprintPanel` (counts, generate, review, edit with reset warning, shortfall acceptance with reason, publish with blockers), blueprint form with question/variant counts and shuffle, "Assign variants" per session |
+| Tests | New backend: `test_generation_p5_domain.py`, `test_exams_generation_routes_p5.py`; adjusted: policy / run-command / generation / independent-review tests for the deliberate behavior changes; `FakeFirestore.add`; new frontend: `BlueprintPanel.test.tsx` |
+| Docs | ADR 0021 (+ index), compat §10, traceability §5.1, integration map |
+
+Out of Phase 5 on purpose: executing reference solutions in the judge and SQL items (D-5, Phase 8), multi-select / negative-marking scoring (D-8, Phase 10), a real provider endpoint (D-13), paraphrase-level duplicate detection, bulk pre-generation per run.
+
+### Phase 5 acceptance checklist
+
+- [x] Blueprint captures topics (confirmed), count, types, marks, negative marks, difficulty distribution, duration, language allowlist, shuffle and variant policy; invalid specs and languages are refused.
+- [x] Requested / generated / valid / approved are computed from stored candidates; publication blocks short or empty slots unless an explicit, audited shortfall acceptance covers a short (not empty) slot.
+- [x] The provider receives only approved, parsed, pinned-version excerpts with exact anchors; unknown anchors are refused; instruction-like passages are withheld and reported; no student data can be sent.
+- [x] Provider, model, prompt version, source versions, job id, attempts, latency, usage and status are stored; claims are atomic; retries are capped.
+- [x] Output is schema- and rule-validated; the model cannot approve or publish; an independent review can only pull an item back and its answer is checked by the backend.
+- [x] Substantive edit = new version + approval reset; minor edit keeps approval; published candidates are immutable; reject and regenerate exist.
+- [x] Variants and option orders are assigned before the attempt, create-only, from the revision-pinned candidates; no model call exists on the live path.
+- [x] Named scenarios tested: malformed model JSON, source injection, nonexistent anchors, incorrect answer, duplicate/near-duplicate, insufficient source, provider timeout, fewer-than-requested output.
+- [x] Full backend suite (`EXAMS_ENABLED=false`: 1222 passed), ruff, frontend `tsc`, eslint and Vitest pass (the known `submit/page.test.tsx` timeout under full-suite load passes alone).
+- [x] Migration notes and ADR 0021 written; no production data touched; no secrets or addresses added. *(No real provider, judge or Firestore emulator was used.)*

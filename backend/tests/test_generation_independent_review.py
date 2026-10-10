@@ -47,6 +47,17 @@ class _FakeRepo:
     def record_malformed_candidate(self, request_id, raw, issues) -> None:
         self.malformed.append((request_id, raw, issues))
 
+    def claim_request(self, request_id, *, now, stale_after_seconds=600):
+        request = self.requests[request_id]
+        if request.status == "succeeded":
+            return None
+        claimed = request.model_copy(update={"status": "running", "attempts": request.attempts + 1, "running_since": now})
+        self.requests[request_id] = claimed
+        return claimed
+
+    def live_prompts_for_slot(self, blueprint_id, slot_index):
+        return {}
+
 
 def _request(repo: _FakeRepo, **overrides):
     defaults = dict(
@@ -146,7 +157,10 @@ def test_job_runner_downgrades_ready_candidate_on_disagreement() -> None:
     updated = repo.get_candidate(candidate.id)
     assert updated.status == CandidateStatus.NEEDS_REVISION
     assert updated.independent_review_agreement == "disagree"
-    assert len(updated.independent_review_issues) == 1
+    # the provider's own issue plus the deterministic answer-key override (Prompt 5) that explains the downgrade
+    reasons = [i.reason for i in updated.independent_review_issues]
+    assert "forced disagreement for test" in reasons
+    assert len(reasons) == 2
 
 
 def test_job_runner_never_advances_status_beyond_ready_for_human_review() -> None:

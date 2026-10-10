@@ -347,3 +347,53 @@ uploads created meanwhile keep their stored bytes and rows (the previous code ig
 
 A real ClamAV daemon, a real bucket, the POSIX memory limit, Firestore behavior of the equality + `in` outbox query, parser behavior on real-world (not synthetic) documents, and any browser flow
 against a running API. OCR and table/image extraction are not implemented.
+
+## 10. Prompt 5 migration notes
+
+Implemented as [ADR 0021](../adr/0021-grounded-generation-and-versioned-review.md). **No data migration or backfill is needed or performed**; no secrets or addresses were added.
+
+### 10.1 Configuration
+
+| Setting (exam API environment) | Default | Action |
+|---|---|---|
+| `EXAM_GENERATION_PROVIDER_BASE_URL` / `EXAM_GENERATION_PROVIDER_API_KEY` | unset | Both set = the real adapter (https JSON gateway you run, see `.env.example`); otherwise the deterministic fake (development only). Same for `EXAM_REVIEW_PROVIDER_*` (use a different provider/endpoint for the review) |
+| `EXAM_GENERATION_HTTP_TIMEOUT_SECONDS` / `EXAM_GENERATION_HTTP_MAX_RETRIES` | `60` / `2` | Per call timeout and transport retries (timeout, 408/425/429/5xx) |
+| `EXAM_GENERATION_MAX_ATTEMPTS` | `3` | Attempts per generation request before it stays failed |
+| `EXAM_REQUIRE_EXECUTED_CODING_VERIFICATION` | `false` | Leave off: the judge-backed verification step (D-5) does not exist yet; on, no coding item could be approved |
+
+### 10.2 Behavior changes teachers and operators will see
+
+| Area | Before | Now |
+|---|---|---|
+| Generation input | Placeholder excerpt, any anchor id | Real excerpts from the approved, parsed source; `422 unknown_anchor` / `no_sources` / `no_usable_passages`; `409` for an unapproved or unparsed source |
+| Short approved pool | Publication warning | Publication **blocker**; `POST …/blueprints/{id}/shortfall` (reason) accepts a short, non-empty slot. Existing blueprints with `requested_variant_count` above what was approved will now need approval of more variants or an accepted shortfall before the next publish |
+| Choice options | Bare strings tolerated | `{key, text}` objects with an answer key naming a key; candidates already stored are unaffected (validation runs on new/edited ones) |
+| Review | Last write wins | Compare-and-set; a superseded or already-decided candidate returns `409` |
+| `published` status | Never set | Set when a revision containing the candidate is published |
+| Variant assignment | Re-reserve overwrote | Create-only; use `POST …/runs/{id}/variants/assign` before the session starts |
+| Student question | Option order as authored | Stored per-student order when the blueprint shuffles; otherwise unchanged |
+
+### 10.3 New or changed routes (all under `/api/exams/v1/faculty`, behind the exam flag and resource scope)
+
+| Route | Purpose |
+|---|---|
+| `POST /blueprints` | Now also accepts `spec`, `topics` (+`topics_confirmed`), `duration_minutes`, `language_allowlist`, `shuffle_options`, `variant_policy` |
+| `GET /blueprints/{id}/capacity`, `POST /blueprints/{id}/generate`, `POST /blueprints/{id}/shortfall` | Counts, bounded multi-slot generation (5 slots per call), accepted shortfall |
+| `POST /generation-requests` (changed), `POST /generation-requests/{id}/retry` | Grounded generation with `source_ids` and/or `source_anchors` (anchor optional); retry a failed request |
+| `POST /candidates/{id}/edit`, `POST /candidates/{id}/regenerate` | Versioned edit; fresh candidates re-grounded on the same sources |
+| `POST /runs/{id}/variants/assign` | Pre-attempt assignment from the revision's frozen candidates (`allow_balanced_reuse`) |
+| `POST /definitions/{id}/topic-suggestions` | Extractive suggestions; nothing stored |
+
+### 10.4 Data and schema
+
+- **Additive optional fields:** `ExamBlueprint.topics/topics_confirmed_by/duration_minutes/language_allowlist/shuffle_options/variant_policy/shortfall_*`; `GenerationRequest` provider/latency/retries/bundle hash/source versions/excluded anchors/usage/completed_at/running_since/regenerates_candidate_id; `GenerationCandidate.version/previous_version_id/superseded_by_id/edited_by/edited_at/published_revision_id/execution_verified`; `ExamRevision.topics/shuffle_options/variant_policy/accepted_shortfall_slots/shortfall_reason`; new candidate status `superseded`; assignments gain `option_order`.
+- No new collections or indexes (queries stay equality / `in` on single fields).
+- Audit events reuse `exam_authz_audit`: `exam_candidate_reviewed`, `exam_candidate_edited`, `exam_shortfall_accepted|withdrawn`, `exam_variants_assigned`.
+
+### 10.5 Operator procedures
+
+- **Turn on a real provider:** run an https gateway that accepts `{system_prompt, prompt_version, input}` and returns one JSON object, set both generation variables (and the review pair, preferably a different provider), restart. Start with one slot and read the stored request (provider, latency, usage, bundle hash).
+- **A request failed:** capacity shows the last error per slot; **Retry** (up to the attempt cap) or generate again.
+- **Publishing is blocked:** the preview lists each blocker; approve more variants, or accept the shortfall with a reason. An empty slot cannot be waived.
+- **Before a session:** publish, schedule, then **Assign variants**; re-running only fills gaps.
+- **Rollback:** the new fields are optional; reverting the code leaves them ignored. Candidates in `superseded` or `published` would be unknown statuses to the old code, so roll back before editing/publishing, or treat both as not servable.

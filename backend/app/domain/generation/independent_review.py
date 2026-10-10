@@ -1,4 +1,4 @@
-"""Pure decision logic for applying an independent review result to a
+﻿"""Pure decision logic for applying an independent review result to a
 candidate. Separate from `review.py` (faculty approve/reject) — this can
 only move a candidate from READY_FOR_HUMAN_REVIEW back to NEEDS_REVISION; it
 can never approve, reject or publish (contract: "never published or
@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional
 
 from app.domain.generation.independent_review_provider import IndependentReviewResult
-from app.domain.generation.models import CandidateStatus, GenerationCandidate, SourceAnchorRef
+from app.domain.generation.models import CandidateStatus, GenerationCandidate, IndependentReviewIssue, ItemType, SourceAnchorRef
 
 
 @dataclass(frozen=True)
@@ -50,19 +50,47 @@ def apply_independent_review(
                 issue = issue.model_copy(update={"source_anchor": None})
         sanitized_issues.append(issue)
 
+    # Deterministic answer-key check for choice items: the backend compares the reviewer's BLIND
+    # answer with the key itself, so a provider that says "agree" while answering differently
+    # (or not answering) cannot wave an item through.
+    agreement = result.agreement
+    force_downgrade = False
+    if candidate.item_type in (ItemType.SINGLE_CHOICE, ItemType.MULTIPLE_SELECT):
+        expected = _key_set(candidate.private_expected_answer)
+        given = _key_set(result.independent_answer)
+        if not given:
+            sanitized_issues.append(IndependentReviewIssue(
+                severity="blocker", field="independent_answer",
+                reason="the reviewer gave no answer, so the answer key could not be verified"))
+            agreement, force_downgrade = "uncertain", True
+        elif given != expected:
+            sanitized_issues.append(IndependentReviewIssue(
+                severity="blocker", field="private_expected_answer",
+                reason=f"the reviewer solved it independently as {sorted(given)} but the key says {sorted(expected)}",
+                counterexample=f"independent answer: {result.independent_answer}"))
+            agreement, force_downgrade = "disagree", True
+
     # Never upgrades: a candidate not currently READY_FOR_HUMAN_REVIEW is
     # left exactly as-is (e.g. already NEEDS_REVISION, APPROVED, REJECTED,
-    # PUBLISHED) — this review can only ever pull a ready candidate back.
+    # PUBLISHED) - this review can only ever pull a ready candidate back.
     new_status = candidate.status
-    if candidate.status == CandidateStatus.READY_FOR_HUMAN_REVIEW and result.recommended_status == "needs_revision":
+    pulls_back = (
+        result.recommended_status == "needs_revision" or force_downgrade
+        or any(issue.severity == "blocker" for issue in sanitized_issues)
+    )
+    if candidate.status == CandidateStatus.READY_FOR_HUMAN_REVIEW and pulls_back:
         new_status = CandidateStatus.NEEDS_REVISION
 
     updated = candidate.model_copy(
         update={
             "status": new_status,
-            "independent_review_agreement": result.agreement,
+            "independent_review_agreement": agreement,
             "independent_review_issues": sanitized_issues,
             "independent_review_completed_at": now,
         }
     )
     return IndependentReviewApplication(candidate=updated, fabricated_anchor_warnings=fabricated_warnings)
+
+
+def _key_set(value: Optional[str]) -> set[str]:
+    return {part.strip() for part in (value or "").split(",") if part.strip()}

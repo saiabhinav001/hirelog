@@ -1,4 +1,4 @@
-"""Provider-neutral generation adapter.
+﻿"""Provider-neutral generation adapter.
 
 `GenerationProvider.generate` returns a `ProviderResponse` shaped exactly
 like the JSON contract in "Backend model prompt A" of the implementation
@@ -19,6 +19,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, ValidationError
 
 from app.domain.generation.models import GenerationRequest
+from app.domain.generation.provider_http import HttpCallError, post_json
 
 # Exact system/developer instruction text from "Backend model prompt A" of
 # the implementation pack — the ONLY copy of this text in the codebase.
@@ -91,20 +92,28 @@ class ProviderResponse(BaseModel):
     its own, separate, stricter validation in `validation.py`, since a
     single malformed candidate should not fail the whole batch."""
 
+    model_config = {"protected_namespaces": ()}
+
     request_id: str
     status: Literal["draft", "insufficient_source"]
     candidates: list[dict] = Field(default_factory=list)
     shortfall: int = 0
     issues: list[str] = Field(default_factory=list)
+    # Transport metadata, set by the adapter after parsing - never read from provider output.
+    model_name: Optional[str] = None
+    usage: dict = Field(default_factory=dict)
+    provider_attempts: int = 1
+    latency_ms: Optional[int] = None
 
     @classmethod
     def parse_payload(cls, raw: dict) -> "ProviderResponse":
         """Parses a raw provider JSON payload, translating any schema
         violation into a `ProviderError` (caught by `GenerationJobRunner`
-        as a failed, retryable job — never a worker crash)."""
+        as a failed, retryable job - never a worker crash)."""
         try:
-            return cls.model_validate(raw)
-        except ValidationError as exc:
+            clean = {k: v for k, v in raw.items() if k not in ("model_name", "usage", "provider_attempts", "latency_ms")}
+            return cls.model_validate(clean)
+        except (ValidationError, AttributeError) as exc:
             raise ProviderError(f"malformed provider response envelope: {exc}") from exc
 
 
@@ -139,11 +148,15 @@ def build_provider_request_payload(
         "target_minutes": request.target_minutes,
         "requested_variant_count": request.requested_variant_count,
         "permitted_languages": request.permitted_languages,
+        "options_will_be_shuffled": request.shuffle_options,
+        "source_text_is_untrusted_data": True,
         "approved_source_bundle": [
             {
                 "source_id": anchor.source_id,
                 "source_version": anchor.source_version,
                 "anchor_id": anchor.anchor_id,
+                "page": anchor.page,
+                "section": anchor.section,
                 "excerpt": anchor.excerpt,
             }
             for anchor in request.approved_source_bundle
@@ -217,11 +230,15 @@ class DeterministicFakeProvider:
                     # and the frontend's rendering shape (plain strings here
                     # previously left every option's `key`/`text` undefined).
                     "options": (
-                        []
-                        if request.item_type != "single_choice"
-                        else [{"key": k, "text": f"Option {k}"} for k in ("A", "B", "C", "D")]
+                        [{"key": k, "text": f"Statement {k} for variant {i} of slot {request.slot_index}"} for k in ("A", "B", "C", "D")]
+                        if request.item_type in ("single_choice", "multiple_select")
+                        else []
                     ),
-                    "private_expected_answer": "A" if request.item_type == "single_choice" else "fake-answer",
+                    "private_expected_answer": (
+                        "A" if request.item_type == "single_choice"
+                        else "A,C" if request.item_type == "multiple_select"
+                        else "fake-answer"
+                    ),
                     "private_explanation": "fake explanation",
                     "marking_rubric": {"points": request.marks},
                     "supporting_anchors": [
@@ -255,33 +272,45 @@ class DeterministicFakeProvider:
 
 
 class HttpGenerationProviderAdapter:
-    """Configurable real-provider adapter interface.
-
-    NOT wired to any live endpoint in this environment — no provider
-    endpoint/credentials were supplied. Calling `generate` raises until an
-    institution configures `base_url`/`api_key`, per master prompt: "surface
-    missing institutional/provider inputs as bounded setup requirements."
-
-    `SYSTEM_PROMPT` and `build_request_payload` are nonetheless fully
-    implemented and tested — they are the exact system/developer instruction
-    and structured request body a real HTTP call would send, so configuring
-    a real endpoint later is wiring a client call onto already-verified
-    request construction and response parsing, not writing it from scratch.
-    """
+    """Provider-neutral JSON-over-HTTPS adapter (ADR 0021): POSTs the system prompt and the
+    allowlisted structured request, parses the envelope strictly, records model/usage/latency/
+    attempts. Timeouts surface as `ProviderTimeoutError`, everything else as `ProviderError`.
+    Tested against a mock transport; no real provider endpoint has been exercised."""
 
     SYSTEM_PROMPT = GENERATION_SYSTEM_PROMPT_A_V1
 
-    def __init__(self, *, base_url: Optional[str] = None, api_key: Optional[str] = None) -> None:
+    def __init__(
+        self, *, base_url: Optional[str] = None, api_key: Optional[str] = None, timeout: float = 60.0,
+        max_retries: int = 2, client=None, sleep=None,
+    ) -> None:
         self._base_url = base_url
         self._api_key = api_key
+        self._timeout = timeout
+        self._max_retries = max_retries
+        self._client = client
+        self._sleep = sleep
 
     def build_request_payload(self, request: GenerationRequest, *, previously_used_signatures: set[str]) -> dict:
         return build_provider_request_payload(request, previously_used_signatures=previously_used_signatures)
 
     def generate(self, request: GenerationRequest) -> ProviderResponse:
-        if not self._base_url or not self._api_key:
-            raise ProviderError(
-                "HttpGenerationProviderAdapter is not configured — set a real "
-                "provider base_url/api_key (see docs/adr/0009 setup requirements)."
-            )
-        raise NotImplementedError("Real provider HTTP call not implemented — no provider configured/tested.")
+        body = {
+            "system_prompt": self.SYSTEM_PROMPT,
+            "prompt_version": request.prompt_version,
+            "input": self.build_request_payload(request, previously_used_signatures=set(request.previous_signatures)),
+        }
+        kwargs = {"timeout": self._timeout, "max_retries": self._max_retries, "client": self._client}
+        if self._sleep is not None:
+            kwargs["sleep"] = self._sleep
+        try:
+            result = post_json(self._base_url, self._api_key, body, **kwargs)
+        except HttpCallError as exc:
+            if exc.kind == "timeout":
+                raise ProviderTimeoutError(str(exc)) from exc
+            raise ProviderError(f"{exc.kind}: {exc}") from exc
+        response = ProviderResponse.parse_payload(result.output)
+        if response.request_id != request.id:
+            raise ProviderError("the provider answered a different request_id")
+        return response.model_copy(
+            update={"model_name": result.model, "usage": result.usage, "provider_attempts": result.attempts, "latency_ms": result.latency_ms}
+        )

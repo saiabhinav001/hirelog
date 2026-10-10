@@ -82,6 +82,70 @@ export type GenerationCandidate = {
   public_prompt: string;
   status: string;
   marks: number;
+  slot_index?: number;
+  version?: number;
+  validation_issues?: { severity: "blocker" | "major" | "minor"; field: string; reason: string }[];
+  independent_review_agreement?: "agree" | "disagree" | "uncertain" | null;
+  supporting_anchors?: { source_id: string; source_version: number; anchor_id: string }[];
+};
+
+export type SlotCapacity = {
+  slot_index: number;
+  item_type: string;
+  requested: number;
+  generated: number;
+  valid: number;
+  approved: number;
+  pending_review: number;
+  needs_revision: number;
+  rejected: number;
+  failed_requests: number;
+  last_error: string | null;
+  shortfall: number;
+};
+
+export type BlueprintCapacity = {
+  blueprint_id: string;
+  slots: SlotCapacity[];
+  totals: Record<"requested" | "generated" | "valid" | "approved" | "pending_review" | "needs_revision" | "rejected" | "shortfall", number>;
+  empty_slots: number[];
+  short_slots: number[];
+  meets_requirement: boolean;
+  shortfall_accepted: boolean;
+  publishable: boolean;
+};
+
+export type PublicationPreview = {
+  blueprint_id: string;
+  slot_count: number;
+  total_marks: number;
+  requested_variants_total: number;
+  approved_variants_total: number;
+  shortfall_accepted: boolean;
+  blockers: string[];
+  warnings: string[];
+  publishable: boolean;
+};
+
+export type GenerateForBlueprintResult = {
+  results: {
+    slot_index: number;
+    status: string;
+    ready_count: number;
+    shortfall: number;
+    error: string | null;
+    excluded_anchors: { source_id: string; anchor_id: string; reason: string }[];
+  }[];
+  remaining_slots: number[];
+};
+
+export type BlueprintSpecPayload = {
+  question_count: number;
+  type_counts: Partial<Record<"single_choice" | "multiple_select" | "short_answer" | "coding", number>>;
+  difficulty_distribution?: Record<string, number>;
+  languages?: string[];
+  variants_per_slot?: number;
+  topics?: string[];
 };
 
 export type ApprovedSourceSummary = {
@@ -297,12 +361,57 @@ export const examEndpoints = {
     authed<{ results: GenerationCandidate[] }>(`/api/exams/v1/faculty/blueprints/${blueprintId}/candidates`, token),
   createGenerationRequest: (
     token: string | undefined,
-    payload: { blueprint_id: string; slot_index: number; source_anchors: { source_id: string; anchor_id: string }[]; deterministic_seed: number }
+    payload: {
+      blueprint_id: string;
+      slot_index: number;
+      source_anchors?: { source_id: string; anchor_id?: string }[];
+      source_ids?: string[];
+      deterministic_seed: number;
+    }
   ) =>
     authed<{ status: string; ready_count: number; needs_revision_count: number; shortfall: number; error: string | null }>(
       "/api/exams/v1/faculty/generation-requests",
       token,
       { method: "POST", body: JSON.stringify(payload) }
+    ),
+  getBlueprintCapacity: (token: string | undefined, blueprintId: string) =>
+    authed<BlueprintCapacity>(`/api/exams/v1/faculty/blueprints/${blueprintId}/capacity`, token),
+  generateForBlueprint: (token: string | undefined, blueprintId: string, sourceIds: string[]) =>
+    authed<GenerateForBlueprintResult>(`/api/exams/v1/faculty/blueprints/${blueprintId}/generate`, token, {
+      method: "POST",
+      body: JSON.stringify({ source_ids: sourceIds }),
+    }),
+  setBlueprintShortfall: (token: string | undefined, blueprintId: string, accepted: boolean, reason?: string) =>
+    authed<{ blueprint_id: string; shortfall_accepted: boolean }>(`/api/exams/v1/faculty/blueprints/${blueprintId}/shortfall`, token, {
+      method: "POST",
+      body: JSON.stringify({ accepted, reason: reason ?? null }),
+    }),
+  getPublishPreview: (token: string | undefined, definitionId: string, blueprintId: string) =>
+    authed<PublicationPreview>(
+      `/api/exams/v1/faculty/definitions/${definitionId}/publish-preview?blueprint_id=${encodeURIComponent(blueprintId)}`,
+      token
+    ),
+  publishBlueprint: (token: string | undefined, definitionId: string, blueprintId: string, reason?: string) =>
+    authed<{ id: string; revision_number: number }>(`/api/exams/v1/faculty/definitions/${definitionId}/publish`, token, {
+      method: "POST",
+      body: JSON.stringify({ blueprint_id: blueprintId, reason: reason ?? null, idempotency_key: `${blueprintId}-${Date.now()}` }),
+    }),
+  editCandidate: (token: string | undefined, candidateId: string, changes: Record<string, unknown>) =>
+    authed<{ kind: "unchanged" | "minor" | "new_version"; candidate: GenerationCandidate }>(
+      `/api/exams/v1/faculty/candidates/${candidateId}/edit`,
+      token,
+      { method: "POST", body: JSON.stringify({ changes }) }
+    ),
+  regenerateCandidate: (token: string | undefined, candidateId: string) =>
+    authed<{ status: string; ready_count: number }>(`/api/exams/v1/faculty/candidates/${candidateId}/regenerate`, token, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  assignRunVariants: (token: string | undefined, runId: string, allowBalancedReuse = false) =>
+    authed<{ created: number; already_assigned: number; blocked_slots: Record<string, string> }>(
+      `/api/exams/v1/faculty/runs/${runId}/variants/assign`,
+      token,
+      { method: "POST", body: JSON.stringify({ allow_balanced_reuse: allowBalancedReuse }) }
     ),
   reserveVariantsForSlot: (
     token: string | undefined,

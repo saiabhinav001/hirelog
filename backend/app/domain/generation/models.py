@@ -33,9 +33,11 @@ class CandidateStatus(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     PUBLISHED = "published"  # terminal, immutable
+    # Prompt 5 (ADR 0021): replaced by a newer edited version; kept for history, never served.
+    SUPERSEDED = "superseded"
 
 
-TERMINAL_CANDIDATE_STATUSES = frozenset({CandidateStatus.PUBLISHED, CandidateStatus.REJECTED})
+TERMINAL_CANDIDATE_STATUSES = frozenset({CandidateStatus.PUBLISHED, CandidateStatus.REJECTED, CandidateStatus.SUPERSEDED})
 
 
 class BlueprintSlot(BaseModel):
@@ -70,6 +72,18 @@ class ExamBlueprint(BaseModel):
     created_by: str
     created_at: datetime
     updated_at: datetime
+    # Prompt 5 (ADR 0021) - all optional; defaults reproduce the earlier behavior.
+    topics: list[str] = Field(default_factory=list, max_length=50)  # teacher-confirmed, never auto-applied
+    topics_confirmed_by: Optional[str] = None
+    duration_minutes: Optional[int] = Field(default=None, ge=1, le=24 * 60)
+    language_allowlist: list[str] = Field(default_factory=list)  # narrows the server registry; empty = registry
+    shuffle_options: bool = False  # per-student seeded option order for choice items
+    variant_policy: Literal["unique", "balanced_reuse"] = "unique"
+    # An explicit, audited acceptance of fewer approved variants than requested.
+    shortfall_accepted: bool = False
+    shortfall_accepted_by: Optional[str] = None
+    shortfall_accepted_at: Optional[datetime] = None
+    shortfall_reason: Optional[str] = None
 
 
 class SourceAnchorRef(BaseModel):
@@ -80,6 +94,10 @@ class SourceAnchorRef(BaseModel):
 
 class SourceAnchorWithExcerpt(SourceAnchorRef):
     excerpt: str = Field(max_length=4000)
+    # Prompt 5: where the passage sits and whether it looks like it is giving instructions.
+    page: Optional[int] = None
+    section: Optional[str] = None
+    injection_flags: list[str] = Field(default_factory=list)
 
 
 class GenerationRequest(BaseModel):
@@ -105,6 +123,21 @@ class GenerationRequest(BaseModel):
     model_name: Optional[str] = None
     prompt_version: str = "generation-prompt-a-v1"
     cost_estimate: Optional[float] = None
+    # Prompt 5 (ADR 0021): provider metadata, set after the call (the job id is `id`).
+    provider_name: Optional[str] = None
+    latency_ms: Optional[int] = None
+    retries: int = 0
+    bundle_sha256: Optional[str] = None  # hash of the exact excerpts that were sent
+    regenerates_candidate_id: Optional[str] = None
+    accepted_shortfall: Optional[int] = None  # variants the provider said it could not supply
+    shuffle_options: bool = False  # copied from the blueprint: validation must reject position-dependent options
+    # Signatures already used in this blueprint, shown to the provider so it avoids them. Never persisted.
+    previous_signatures: list[str] = Field(default_factory=list, exclude=True)
+    source_versions: dict[str, int] = Field(default_factory=dict)  # source_id -> extracted version number sent
+    excluded_anchors: list[dict] = Field(default_factory=list)  # {source_id, anchor_id, reason} withheld from the provider
+    usage: dict = Field(default_factory=dict)  # provider-reported tokens/cost, opaque
+    completed_at: Optional[datetime] = None
+    running_since: Optional[datetime] = None  # set while a worker holds the request; a stale hold can be taken over
 
 
 class ValidationIssue(BaseModel):
@@ -176,3 +209,12 @@ class GenerationCandidate(BaseModel):
     independent_review_agreement: Optional[Literal["agree", "disagree", "uncertain"]] = None
     independent_review_issues: list[IndependentReviewIssue] = Field(default_factory=list)
     independent_review_completed_at: Optional[datetime] = None
+    # Prompt 5 (ADR 0021): an edit never mutates a candidate; it creates the next version.
+    version: int = 1
+    previous_version_id: Optional[str] = None
+    superseded_by_id: Optional[str] = None
+    edited_by: Optional[str] = None
+    edited_at: Optional[datetime] = None
+    published_revision_id: Optional[str] = None
+    # True only when the reference solution and tests were executed in the isolated judge (decision D-5).
+    execution_verified: bool = False

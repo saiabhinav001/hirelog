@@ -48,6 +48,11 @@ class PublicationPreview:
     slots: list[SlotPreview] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    requested_variants_total: int = 0
+    approved_variants_total: int = 0
+    shortfall_accepted: bool = False
+    topics: list[str] = field(default_factory=list)
+    shuffle_options: bool = False
 
     @property
     def publishable(self) -> bool:
@@ -55,6 +60,11 @@ class PublicationPreview:
 
     def to_dict(self) -> dict:
         return {
+            "requested_variants_total": self.requested_variants_total,
+            "approved_variants_total": self.approved_variants_total,
+            "shortfall_accepted": self.shortfall_accepted,
+            "topics": self.topics,
+            "shuffle_options": self.shuffle_options,
             "blueprint_id": self.blueprint_id,
             "slot_count": self.slot_count,
             "total_marks": self.total_marks,
@@ -79,7 +89,7 @@ def _round_marks(value: float) -> float:
 def group_approved_by_slot(candidates: Iterable[GenerationCandidate]) -> dict[int, list[GenerationCandidate]]:
     grouped: dict[int, list[GenerationCandidate]] = {}
     for candidate in candidates:
-        if candidate.status == CandidateStatus.APPROVED:
+        if candidate.status in (CandidateStatus.APPROVED, CandidateStatus.PUBLISHED):
             grouped.setdefault(candidate.slot_index, []).append(candidate)
     for items in grouped.values():
         items.sort(key=lambda c: c.id)  # deterministic order for the snapshot
@@ -142,9 +152,11 @@ def build_preview(
         if not approved:
             blockers.append(f"{label}: no approved candidate (nothing can be assigned to students)")
         elif len(approved) < slot.requested_variant_count:
-            warnings.append(
-                f"{label}: {len(approved)} approved of {slot.requested_variant_count} requested variants"
-            )
+            message = f"{label}: {len(approved)} approved of {slot.requested_variant_count} requested variants"
+            if blueprint.shortfall_accepted:
+                warnings.append(message + " (shortfall accepted)")
+            else:
+                blockers.append(message + " - approve more, or explicitly accept the shortfall to publish anyway")
         if negative > slot.marks:
             blockers.append(f"{label}: negative_marks ({negative}) exceed marks ({slot.marks})")
         if negative > 0 and not negative_marking_enabled:
@@ -157,13 +169,23 @@ def build_preview(
         if slot.difficulty.strip().lower() not in KNOWN_DIFFICULTIES:
             warnings.append(f"{label}: unrecognised difficulty {slot.difficulty!r}")
 
+    if duration_minutes is None:
+        duration_minutes = blueprint.duration_minutes
     if duration_minutes is not None and total_minutes > duration_minutes:
         warnings.append(
             f"sum of slot target minutes ({total_minutes}) exceeds the exam duration ({duration_minutes})"
         )
+    unlisted = sorted(set(languages) - set(blueprint.language_allowlist)) if blueprint.language_allowlist else []
+    if unlisted:
+        blockers.append(f"languages outside the blueprint's allowlist: {unlisted}")
 
     return PublicationPreview(
         blueprint_id=blueprint.id,
+        requested_variants_total=sum(s.requested_variant_count for s in slots),
+        approved_variants_total=sum(len(approved_by_slot.get(s.slot_index, [])) for s in slots),
+        shortfall_accepted=blueprint.shortfall_accepted,
+        topics=list(blueprint.topics),
+        shuffle_options=blueprint.shuffle_options,
         slot_count=len(slots),
         total_marks=_round_marks(total_marks),
         max_negative_marks=_round_marks(total_negative),

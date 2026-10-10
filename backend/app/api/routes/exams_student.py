@@ -143,12 +143,14 @@ def get_current_question(run_id: str, response: Response, user: dict = Depends(r
         raise_for_domain_error(exc)
         raise
 
-    candidate_id = VariantAssignmentRepository(db).get_assignment(
-        run_id=run_id, uid=user["uid"], slot_index=question.slot_index
-    )
+    assignments = VariantAssignmentRepository(db)
+    detail = assignments.get_assignment_detail(run_id=run_id, uid=user["uid"], slot_index=question.slot_index)
+    candidate_id = (detail or {}).get("candidate_id")
     candidate = GenerationRepository(db).get_candidate(candidate_id) if candidate_id else None
     if candidate is not None:
-        question = question.model_copy(update={"public_content": build_public_content(candidate)})
+        question = question.model_copy(
+            update={"public_content": build_public_content(candidate, (detail or {}).get("option_order"))}
+        )
     return question.model_dump(mode="json")
 
 

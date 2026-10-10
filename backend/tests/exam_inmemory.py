@@ -149,6 +149,14 @@ class _CollRef(_Query):
             raise NotImplementedError("auto-ids are not used by the exam repositories")
         return _DocRef(self._db, self._path + (doc_id,))
 
+    def add(self, data: dict) -> tuple[None, _DocRef]:
+        """Auto-id insert (used by `record_malformed_candidate`)."""
+        import uuid
+
+        ref = _DocRef(self._db, self._path + (uuid.uuid4().hex,))
+        ref.set(data)
+        return None, ref
+
 
 class FakeTransaction:
     def __init__(self, db: "FakeFirestore") -> None:
