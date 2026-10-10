@@ -37,7 +37,7 @@ function BlockedContent() {
     refresh();
   }, [refresh]);
 
-  useLiveSocket({ runId, getToken, onReconcile: refresh });
+  useLiveSocket({ runId, getToken, onReconcile: refresh, throttleMs: 3000 });
 
   const handleSubmitAppeal = async (event: React.FormEvent) => {
     event.preventDefault();

@@ -10,6 +10,7 @@ export type ExamDefinition = {
   id: string;
   title: string;
   owner_uid: string;
+  institution_id?: string | null;
   latest_published_revision_id: string | null;
 };
 
@@ -243,11 +244,68 @@ async function authed<T>(path: string, token: string | undefined, init: RequestI
   return examApiFetch<T>(path, init, token);
 }
 
+export type InstitutionSummary = { id: string; name: string; can_administer: boolean };
+export type InstitutionList = { is_platform_operator: boolean; results: InstitutionSummary[] };
+export type InstitutionMember = {
+  identity_key: string;
+  role_scope: string;
+  status: string;
+  linked: boolean;
+  contact_email?: string;
+};
+export type RosterRowInput = { identity_key: string; contact_email: string; role_scope: string };
+export type RosterRowResult = {
+  row_index: number;
+  identity_key: string;
+  ok: boolean;
+  action: string;
+  error: string | null;
+};
+export type RosterJob = {
+  id: string;
+  institution_id: string;
+  status: string;
+  total_rows: number;
+  applied_cursor: number;
+  row_results: RosterRowResult[];
+};
+
+const institutionPath = (institutionId: string) => `/api/exams/v1/faculty/institutions/${encodeURIComponent(institutionId)}`;
+
 export const examEndpoints = {
   // ── Faculty ──────────────────────────────────────────────────────────────
   listMyDefinitions: (token?: string) => authed<{ results: ExamDefinition[] }>("/api/exams/v1/faculty/definitions", token),
-  createDefinition: (token: string | undefined, title: string) =>
-    authed<ExamDefinition>("/api/exams/v1/faculty/definitions", token, { method: "POST", body: JSON.stringify({ title }) }),
+  createDefinition: (token: string | undefined, title: string, institutionId?: string) =>
+    authed<ExamDefinition>("/api/exams/v1/faculty/definitions", token, {
+      method: "POST",
+      body: JSON.stringify(institutionId ? { title, institution_id: institutionId } : { title }),
+    }),
+
+  // Institutions and rosters (faculty)
+  listInstitutions: (token?: string) => authed<InstitutionList>("/api/exams/v1/faculty/institutions", token),
+  createInstitution: (token: string | undefined, name: string) =>
+    authed<{ id: string; name: string }>("/api/exams/v1/faculty/institutions", token, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  listInstitutionMembers: (token: string | undefined, institutionId: string) =>
+    authed<{ results: InstitutionMember[] }>(`${institutionPath(institutionId)}/members`, token),
+  rosterDryRun: (token: string | undefined, institutionId: string, rows: RosterRowInput[]) =>
+    authed<RosterJob>(`${institutionPath(institutionId)}/roster/dry-run`, token, {
+      method: "POST",
+      body: JSON.stringify({ rows }),
+    }),
+  rosterApply: (token: string | undefined, institutionId: string, jobId: string, rows: RosterRowInput[]) =>
+    authed<RosterJob>(`${institutionPath(institutionId)}/roster/${encodeURIComponent(jobId)}/apply`, token, {
+      method: "POST",
+      body: JSON.stringify({ rows }),
+    }),
+  revokeMembership: (token: string | undefined, institutionId: string, identityKey: string) =>
+    authed(`${institutionPath(institutionId)}/memberships/revoke`, token, {
+      method: "POST",
+      body: JSON.stringify({ identity_key: identityKey }),
+    }),
+
   listRunsForDefinition: (token: string | undefined, definitionId: string) =>
     authed<{ results: ExamRunSummary[] }>(`/api/exams/v1/faculty/definitions/${definitionId}/runs`, token),
   listBlueprintsForDefinition: (token: string | undefined, definitionId: string) =>

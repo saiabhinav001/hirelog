@@ -11,6 +11,7 @@ import { examApiFetch } from "@/lib/examsApi";
 import {
   examEndpoints,
   type ApprovedSourceSummary,
+  type ExamDefinition,
   type ExamRunSummary,
   type GenerationCandidate,
 } from "@/lib/examEndpoints";
@@ -21,6 +22,7 @@ function DefinitionDetail() {
   const { definitionId } = useParams<{ definitionId: string }>();
   const { getToken } = useExamAuth();
 
+  const [definition, setDefinition] = useState<ExamDefinition | null>(null);
   const [runs, setRuns] = useState<ExamRunSummary[] | null>(null);
   const [blueprints, setBlueprints] = useState<Blueprint[] | null>(null);
   const [sources, setSources] = useState<ApprovedSourceSummary[] | null>(null);
@@ -32,17 +34,22 @@ function DefinitionDetail() {
   const [blueprintItemType, setBlueprintItemType] = useState<"single_choice" | "multiple_select" | "short_answer" | "coding">("single_choice");
   const [blueprintLanguage, setBlueprintLanguage] = useState("python3.11");
   const [slotCount, setSlotCount] = useState(1);
-  const [enrolledUidsText, setEnrolledUidsText] = useState("");
+  const [enrolledText, setEnrolledText] = useState("");
+  const [enrollWholeRoster, setEnrollWholeRoster] = useState(false);
+  const [durationMinutes, setDurationMinutes] = useState(60);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [generatingBlueprintId, setGeneratingBlueprintId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const token = await getToken();
-      const [runsData, blueprintsData, sourcesData] = await Promise.all([
+      const [runsData, blueprintsData, sourcesData, definitionsData] = await Promise.all([
         examEndpoints.listRunsForDefinition(token, definitionId),
         examEndpoints.listBlueprintsForDefinition(token, definitionId),
         examEndpoints.listSources(token),
+        examEndpoints.listMyDefinitions(token),
       ]);
+      setDefinition(definitionsData.results.find((d) => d.id === definitionId) ?? null);
       setRuns(runsData.results);
       setBlueprints(blueprintsData.results);
       setSources(sourcesData.results);
@@ -146,29 +153,42 @@ function DefinitionDetail() {
 
   const handleScheduleRun = async (event: React.FormEvent) => {
     event.preventDefault();
-    const token = await getToken();
-    const enrolledUids = enrolledUidsText.split(",").map((s) => s.trim()).filter(Boolean);
-    const definitionsResp = await examEndpoints.listMyDefinitions(token);
-    const def = definitionsResp.results.find((d) => d.id === definitionId);
-    if (!def?.latest_published_revision_id) {
-      setError("Publish a revision before scheduling a run.");
+    setScheduleError(null);
+    if (!definition?.latest_published_revision_id) {
+      setScheduleError("Publish a revision before scheduling a session.");
       return;
     }
-    await examApiFetch(
-      "/api/exams/v1/faculty/runs",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          definition_id: definitionId,
-          revision_id: def.latest_published_revision_id,
-          policy: { duration_minutes: 60, warning_threshold: 3 },
-          enrolled_uids: enrolledUids,
-        }),
-      },
-      token
-    );
-    setEnrolledUidsText("");
-    await load();
+    // Institution exams enrol by college ID (or the whole active roster); pilot
+    // exams have no roster, so they enrol raw account UIDs.
+    const entries = enrolledText.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+    const enrolment = definition.institution_id
+      ? { enrolled_identity_keys: entries, enroll_all_institution_students: enrollWholeRoster }
+      : { enrolled_uids: entries };
+    if (!enrollWholeRoster && entries.length === 0) {
+      setScheduleError("Enrol at least one student.");
+      return;
+    }
+    try {
+      const token = await getToken();
+      await examApiFetch(
+        "/api/exams/v1/faculty/runs",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            definition_id: definitionId,
+            revision_id: definition.latest_published_revision_id,
+            policy: { duration_minutes: durationMinutes, warning_threshold: 3 },
+            ...enrolment,
+          }),
+        },
+        token
+      );
+      setEnrolledText("");
+      setEnrollWholeRoster(false);
+      await load();
+    } catch (err) {
+      setScheduleError(err instanceof Error ? err.message : "Could not schedule the session.");
+    }
   };
 
   if (error) return <ErrorState title="Something went wrong" description={error} />;
@@ -290,13 +310,42 @@ function DefinitionDetail() {
           <button className="btn-secondary" onClick={handlePublishRevision}>Publish revision</button>
         </div>
 
-        <form onSubmit={handleScheduleRun} className="mt-4 flex gap-3">
-          <input
-            className="input-field flex-1"
-            placeholder="Enrolled student UIDs, comma-separated"
-            value={enrolledUidsText}
-            onChange={(e) => setEnrolledUidsText(e.target.value)}
+        <form onSubmit={handleScheduleRun} className="mt-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <label htmlFor="duration-minutes" className="label mb-0">Duration (minutes)</label>
+            <input
+              id="duration-minutes"
+              type="number"
+              min={5}
+              max={480}
+              className="input-field w-28"
+              value={durationMinutes}
+              onChange={(e) => setDurationMinutes(Number(e.target.value))}
+            />
+          </div>
+          {definition?.institution_id && (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={enrollWholeRoster} onChange={(e) => setEnrollWholeRoster(e.target.checked)} />
+              Enrol every active student on the institution roster
+            </label>
+          )}
+          <textarea
+            className="input-field w-full"
+            rows={3}
+            aria-label={definition?.institution_id ? "Student college IDs" : "Enrolled student UIDs"}
+            placeholder={
+              definition?.institution_id
+                ? "Or list specific college IDs \u2014 separated by commas, spaces or new lines"
+                : "Enrolled student UIDs, comma-separated"
+            }
+            value={enrolledText}
+            onChange={(e) => setEnrolledText(e.target.value)}
           />
+          {scheduleError && (
+            <p role="alert" className="text-sm text-[var(--error)]">
+              {scheduleError}
+            </p>
+          )}
           <button className="btn-primary" type="submit">Schedule session</button>
         </form>
       </section>

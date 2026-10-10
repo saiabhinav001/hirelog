@@ -55,7 +55,7 @@ function ControlRoomContent() {
     loadPage(cursor);
   }, [cursor, loadPage]);
 
-  const { health } = useLiveSocket({ runId, getToken, onReconcile: () => loadPage(cursor) });
+  const { health } = useLiveSocket({ runId, getToken, onReconcile: () => loadPage(cursor), throttleMs: 20000 });
 
   const runCommand = async (command: "pause" | "resume" | "close" | "end") => {
     if (!run) return;

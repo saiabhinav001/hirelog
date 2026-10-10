@@ -7,11 +7,15 @@
  * routing is based on server capabilities").
  */
 
-import { onAuthStateChanged, type User } from "firebase/auth";
+import { onAuthStateChanged, signOut as firebaseSignOut, type User } from "firebase/auth";
+import { useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { auth } from "@/lib/firebase";
-import { examApiFetch } from "@/lib/examsApi";
+import { EXAM_SESSION_INVALID_EVENT, examApiFetch } from "@/lib/examsApi";
+
+/** Read (and cleared) by the login page to explain an automatic sign-out. */
+export const EXAM_SESSION_NOTICE_KEY = "exam_session_notice";
 
 export type ExamMembership = {
   institution_id: string;
@@ -23,6 +27,7 @@ export type ExamMembership = {
 export type ExamCapabilities = {
   uid: string;
   email: string | null;
+  email_verified?: boolean;
   is_bootstrap_faculty: boolean;
   memberships: ExamMembership[];
   has_any_exam_membership: boolean;
@@ -41,9 +46,27 @@ type ExamAuthContextValue = {
 const ExamAuthContext = createContext<ExamAuthContextValue | null>(null);
 
 export function ExamAuthProvider({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [capabilities, setCapabilities] = useState<ExamCapabilities | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // The server rejected the session itself (revoked membership / out-of-date
+  // authorization): end it here instead of leaving a half-working page.
+  useEffect(() => {
+    const onSessionInvalid = (event: Event) => {
+      const message =
+        (event as CustomEvent<{ message?: string }>).detail?.message ?? "Your session has ended. Please sign in again.";
+      try {
+        window.sessionStorage.setItem(EXAM_SESSION_NOTICE_KEY, message);
+      } catch {
+        // Storage unavailable (private mode) — the redirect still happens.
+      }
+      void firebaseSignOut(auth).finally(() => router.replace("/exams/login"));
+    };
+    window.addEventListener(EXAM_SESSION_INVALID_EVENT, onSessionInvalid);
+    return () => window.removeEventListener(EXAM_SESSION_INVALID_EVENT, onSessionInvalid);
+  }, [router]);
 
   const getToken = useCallback(async () => {
     return auth.currentUser?.getIdToken();

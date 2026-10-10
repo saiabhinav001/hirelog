@@ -14,7 +14,9 @@ import { useProctoringObservations } from "@/lib/proctoringObservations";
 import { useCameraCapture } from "@/lib/useCameraCapture";
 import { useExamServiceWorker } from "@/lib/useExamServiceWorker";
 
-const AUTOSAVE_DEBOUNCE_MS = 1200;
+// Every accepted autosave is a Firestore write against a shared free-tier
+// quota, so wait for a real pause in typing and never re-save identical content.
+const AUTOSAVE_DEBOUNCE_MS = 3000;
 
 // Visible, on-screen feedback for detections the backend already logs
 // silently — the ledger/warning counter existed before, but nothing told
@@ -49,6 +51,7 @@ function ExamContent() {
   const [fullscreenActive, setFullscreenActive] = useState(false);
 
   const draftVersionsRef = useRef<Record<string, number>>({});
+  const lastSavedRef = useRef<string>("");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const redirectedRef = useRef(false);
   const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -60,6 +63,7 @@ function ExamContent() {
     const existing = await examEndpoints.getMyDraft(token, runId, q.question_id);
     setDraftVersion(existing.version);
     const existingAnswer = existing.answer ?? {};
+    lastSavedRef.current = JSON.stringify(existing.answer ?? {});
     // The language <select> only fires onChange when the student actually
     // picks a DIFFERENT option — with just one permitted language (the
     // common case) there is nothing to change, so answer.language never
@@ -97,6 +101,21 @@ function ExamContent() {
     refresh();
   }, [refresh]);
 
+  // A live event only needs the attempt's own state, not a reload of the
+  // question and every draft; a full refresh happens only when the slot moved.
+  const reconcileState = useCallback(async () => {
+    try {
+      const token = await getToken();
+      const state = await examEndpoints.getState(token, runId);
+      setAttempt(state);
+      if (state.status === "in_progress" && question && state.current_slot_index !== question.slot_index) {
+        await refresh();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load your exam state.");
+    }
+  }, [getToken, question, refresh, runId]);
+
   useEffect(() => {
     getToken()
       .then((token) => examEndpoints.getMyAccommodations(token, runId))
@@ -104,7 +123,7 @@ function ExamContent() {
       .catch(() => undefined); // accommodations are an enhancement, never a blocker
   }, [getToken, runId]);
 
-  const { health } = useLiveSocket({ runId, getToken, onReconcile: refresh });
+  const { health } = useLiveSocket({ runId, getToken, onReconcile: reconcileState, throttleMs: 3000 });
 
   const handleObservation = useCallback((kind: string) => {
     const message = LIVE_WARNING_MESSAGES[kind];
@@ -174,9 +193,12 @@ function ExamContent() {
   const persistDraft = useCallback(
     async (nextAnswer: Record<string, unknown>) => {
       if (!question) return;
+      const serialized = JSON.stringify(nextAnswer);
+      if (serialized === lastSavedRef.current) return;
       try {
         const token = await getToken();
         const result = await examEndpoints.saveDraft(token, runId, question.question_id, draftVersion, nextAnswer);
+        lastSavedRef.current = serialized;
         setDraftVersion(result.version);
         draftVersionsRef.current[question.question_id] = result.version;
         setSaveReceipt({ savedAt: new Date().toISOString(), version: result.version });
@@ -221,7 +243,7 @@ function ExamContent() {
       if (result.status === "succeeded") {
         setPublicRunResults(result.results);
       } else {
-        setTimeout(() => poll(attemptsLeft - 1), 1500);
+        setTimeout(() => poll(attemptsLeft - 1), 2500);
       }
     };
     poll(10);

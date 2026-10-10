@@ -40,7 +40,7 @@ function LobbyContent() {
     refresh();
   }, [refresh]);
 
-  const { health } = useLiveSocket({ runId, getToken, onReconcile: refresh });
+  const { health } = useLiveSocket({ runId, getToken, onReconcile: refresh, throttleMs: 20000 });
 
   const handlePublish = async () => {
     if (!run) return;

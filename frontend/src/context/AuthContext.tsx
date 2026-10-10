@@ -14,6 +14,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 
 import { auth } from "@/lib/firebase";
 import { apiFetch } from "@/lib/api";
+import { EXAMS_STAGING } from "@/lib/deployment";
 import {
   E2E_AUTH_BYPASS,
   type E2ESession,
@@ -94,6 +95,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (!auth.currentUser) {
+      setProfile(null);
+      return;
+    }
+    if (EXAMS_STAGING) {
+      // Exams-only deployment: no legacy backend, no legacy profile document.
       setProfile(null);
       return;
     }

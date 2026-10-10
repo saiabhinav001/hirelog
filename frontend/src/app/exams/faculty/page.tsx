@@ -6,11 +6,13 @@ import { useCallback, useEffect, useState } from "react";
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
-import { examEndpoints, type ExamDefinition } from "@/lib/examEndpoints";
+import { examEndpoints, type ExamDefinition, type InstitutionList } from "@/lib/examEndpoints";
 
 function FacultyHome() {
   const { getToken } = useExamAuth();
   const [definitions, setDefinitions] = useState<ExamDefinition[] | null>(null);
+  const [institutions, setInstitutions] = useState<InstitutionList | null>(null);
+  const [institutionId, setInstitutionId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [creating, setCreating] = useState(false);
@@ -18,8 +20,13 @@ function FacultyHome() {
   const load = useCallback(async () => {
     try {
       const token = await getToken();
-      const data = await examEndpoints.listMyDefinitions(token);
+      const [data, institutionData] = await Promise.all([
+        examEndpoints.listMyDefinitions(token),
+        examEndpoints.listInstitutions(token),
+      ]);
       setDefinitions(data.results);
+      setInstitutions(institutionData);
+      setInstitutionId((current) => current || (institutionData.results.length === 1 ? institutionData.results[0].id : ""));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load your courses.");
     }
@@ -35,7 +42,7 @@ function FacultyHome() {
     setCreating(true);
     try {
       const token = await getToken();
-      await examEndpoints.createDefinition(token, title.trim());
+      await examEndpoints.createDefinition(token, title.trim(), institutionId || undefined);
       setTitle("");
       await load();
     } catch (err) {
@@ -50,11 +57,35 @@ function FacultyHome() {
 
   return (
     <div className="page-container py-10">
-      <h1 className="text-2xl font-semibold">Your exam courses</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">Your exam courses</h1>
+        {institutions && institutions.results.length > 0 && (
+          <Link href="/exams/faculty/institution" className="btn-secondary">
+            Institution &amp; roster
+          </Link>
+        )}
+      </div>
 
-      <form onSubmit={handleCreate} className="card mt-6 flex gap-3 p-4">
+      <form onSubmit={handleCreate} className="card mt-6 flex flex-wrap gap-3 p-4">
+        {institutions && institutions.results.length > 0 && (
+          <select
+            className="input-field"
+            aria-label="Institution for the new exam"
+            value={institutionId}
+            onChange={(e) => setInstitutionId(e.target.value)}
+            required={!institutions.is_platform_operator}
+          >
+            {institutions.is_platform_operator && <option value="">No institution (pilot exam)</option>}
+            {!institutions.is_platform_operator && institutionId === "" && <option value="">Choose an institution</option>}
+            {institutions.results.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        )}
         <input
-          className="input-field flex-1"
+          className="input-field min-w-[16rem] flex-1"
           placeholder="New exam title, e.g. Midterm — Data Structures"
           value={title}
           onChange={(e) => setTitle(e.target.value)}

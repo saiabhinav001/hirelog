@@ -7,6 +7,7 @@ import { ToastProvider } from "@/context/ToastContext";
 import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { EXAMS_STAGING } from "@/lib/deployment";
 
 const primarySans = IBM_Plex_Sans({
   subsets: ["latin"],
@@ -42,7 +43,14 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-        <link rel="preconnect" href={process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"} />
+        <link
+          rel="preconnect"
+          href={
+            EXAMS_STAGING
+              ? process.env.NEXT_PUBLIC_EXAMS_API_BASE_URL || "http://localhost:8020"
+              : process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
+          }
+        />
         <script
           dangerouslySetInnerHTML={{
             __html: `

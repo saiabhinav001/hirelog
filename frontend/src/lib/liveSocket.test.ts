@@ -128,6 +128,28 @@ describe("useLiveSocket", () => {
     expect(onReconcile).not.toHaveBeenCalled();
   });
 
+  it("throttles reconciles: the first runs immediately, the rest of a burst collapses into one trailing call", async () => {
+    const onReconcile = vi.fn();
+    renderHook(() =>
+      useLiveSocket({ runId: "run-1", getToken: async () => undefined, onReconcile, throttleMs: 5000 })
+    );
+    await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    act(() => latestSocket().emitOpen());
+
+    vi.useFakeTimers();
+    act(() => latestSocket().emitMessage({ seq: 1, kind: "snapshot", state_version: 1, payload: {} }));
+    expect(onReconcile).toHaveBeenCalledTimes(1);
+
+    act(() => latestSocket().emitMessage({ seq: 2, kind: "run_state_changed", state_version: 1, payload: {} }));
+    act(() => latestSocket().emitMessage({ seq: 3, kind: "run_state_changed", state_version: 1, payload: {} }));
+    expect(onReconcile).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(onReconcile).toHaveBeenCalledTimes(2);
+  });
+
   it("does not open a socket when runId is null", () => {
     renderHook(() => useLiveSocket({ runId: null, getToken: async () => undefined, onReconcile: vi.fn() }));
     expect(FakeWebSocket.instances.length).toBe(0);

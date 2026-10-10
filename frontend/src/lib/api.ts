@@ -1,6 +1,10 @@
-const rawBase = process.env.NEXT_PUBLIC_API_BASE_URL;
-const PROD_FALLBACK_API_BASE = "https://rockstar00-hirelog-backend.hf.space";
-const DEV_FALLBACK_API_BASE = "http://localhost:8000";
+import { EXAMS_STAGING } from "@/lib/deployment";
+
+// In the exams-only deployment there is deliberately NO legacy backend: no env
+// base, no production failover, no localhost fallback.
+const rawBase = EXAMS_STAGING ? undefined : process.env.NEXT_PUBLIC_API_BASE_URL;
+const PROD_FALLBACK_API_BASE = EXAMS_STAGING ? "" : "https://rockstar00-hirelog-backend.hf.space";
+const DEV_FALLBACK_API_BASE = EXAMS_STAGING ? "" : "http://localhost:8000";
 const API_BASE_STORAGE_KEY = "hirelog_preferred_api_base";
 
 let preferredApiBaseMemory: string | null = null;
@@ -126,10 +130,10 @@ function apiBaseCandidates(): string[] {
     candidates.push(DEV_FALLBACK_API_BASE);
   }
 
-  return [...new Set(candidates)];
+  return [...new Set(candidates)].filter(Boolean);
 }
 
-export const API_BASE = apiBaseCandidates()[0];
+export const API_BASE = apiBaseCandidates()[0] ?? "";
 
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 500;
@@ -143,6 +147,9 @@ export async function apiFetch<T>(
   options: RequestInit,
   token?: string
 ): Promise<T> {
+  if (EXAMS_STAGING) {
+    throw new Error("This feature is not available in the HireLog Exams deployment.");
+  }
   const method = (options.method ?? "GET").toUpperCase();
 
   const headers = new Headers(options.headers || {});

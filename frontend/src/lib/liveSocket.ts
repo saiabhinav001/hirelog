@@ -25,7 +25,9 @@ type LiveEventMessage = {
 const BASE_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 const ATTEMPTS_BEFORE_POLLING_FALLBACK = 5;
-const DEFAULT_POLL_INTERVAL_MS = 10000;
+// Every REST reconcile is billed Firestore reads against a shared free-tier
+// quota, so the fallback poll is deliberately slow.
+const DEFAULT_POLL_INTERVAL_MS = 30000;
 
 function wsUrlFromApiBase(apiBase: string): string {
   return apiBase.replace(/^http/, "ws").replace(/\/+$/, "");
@@ -43,8 +45,13 @@ export function useLiveSocket(options: {
   onReconcile: () => void;
   apiBase?: string;
   pollIntervalMs?: number;
+  /**
+   * Minimum gap between `onReconcile` calls (leading edge immediate, extra events
+   * coalesced into one trailing call). 0 = reconcile on every event.
+   */
+  throttleMs?: number;
 }): { health: ConnectionHealth; lastEventAt: number | null } {
-  const { runId, getToken, onReconcile, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS } = options;
+  const { runId, getToken, onReconcile, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, throttleMs = 0 } = options;
   const apiBase = options.apiBase ?? process.env.NEXT_PUBLIC_EXAMS_API_BASE_URL ?? "http://localhost:8020";
 
   const [health, setHealth] = useState<ConnectionHealth>("connecting");
@@ -58,6 +65,29 @@ export function useLiveSocket(options: {
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onReconcileRef = useRef(onReconcile);
   onReconcileRef.current = onReconcile;
+  const throttleMsRef = useRef(throttleMs);
+  throttleMsRef.current = throttleMs;
+  const lastReconcileRef = useRef(0);
+  const trailingReconcileRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconcile = useRef(() => {
+    const wait = throttleMsRef.current;
+    if (wait <= 0) {
+      onReconcileRef.current();
+      return;
+    }
+    const elapsed = Date.now() - lastReconcileRef.current;
+    if (elapsed >= wait) {
+      lastReconcileRef.current = Date.now();
+      onReconcileRef.current();
+      return;
+    }
+    if (trailingReconcileRef.current) return; // a trailing call is already queued
+    trailingReconcileRef.current = setTimeout(() => {
+      trailingReconcileRef.current = null;
+      lastReconcileRef.current = Date.now();
+      onReconcileRef.current();
+    }, wait - elapsed);
+  }).current;
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -75,7 +105,7 @@ export function useLiveSocket(options: {
     const startPollingFallback = () => {
       if (pollTimerRef.current) return;
       setHealth("polling");
-      pollTimerRef.current = setInterval(() => onReconcileRef.current(), pollIntervalMs);
+      pollTimerRef.current = setInterval(() => reconcile(), pollIntervalMs);
     };
 
     const scheduleReconnect = () => {
@@ -124,7 +154,7 @@ export function useLiveSocket(options: {
 
           if (parsed.kind === "snapshot") {
             lastSeqRef.current = parsed.seq;
-            onReconcileRef.current();
+            reconcile();
             return;
           }
           if (parsed.seq <= lastSeqRef.current) {
@@ -135,7 +165,7 @@ export function useLiveSocket(options: {
           // payload. The dedupe value above is in NOT re-reconciling for
           // messages we've already seen.
           lastSeqRef.current = parsed.seq;
-          onReconcileRef.current();
+          reconcile();
         };
 
         socket.onerror = () => {
@@ -163,6 +193,10 @@ export function useLiveSocket(options: {
       unmountedRef.current = true;
       stopPolling();
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (trailingReconcileRef.current) {
+        clearTimeout(trailingReconcileRef.current);
+        trailingReconcileRef.current = null;
+      }
       socketRef.current?.close();
       socketRef.current = null;
     };

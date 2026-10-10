@@ -32,7 +32,7 @@ function WaitingRoomContent() {
     refresh();
   }, [refresh]);
 
-  const { health } = useLiveSocket({ runId, getToken, onReconcile: refresh });
+  const { health } = useLiveSocket({ runId, getToken, onReconcile: refresh, throttleMs: 3000 });
 
   useEffect(() => {
     if (attempt?.status === "in_progress" && !redirectedRef.current) {

@@ -55,7 +55,7 @@ function CandidateDetailContent() {
     refresh();
   }, [refresh]);
 
-  useLiveSocket({ runId, getToken, onReconcile: refresh });
+  useLiveSocket({ runId, getToken, onReconcile: refresh, throttleMs: 20000 });
 
   const handleGrantExtension = async () => {
     setGranting(true);

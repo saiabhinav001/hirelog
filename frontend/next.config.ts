@@ -9,14 +9,22 @@ const PROD_FALLBACK_API_BASE = "https://rockstar00-hirelog-backend.hf.space";
 const DEV_FALLBACK_API_BASE = "http://localhost:8000";
 const isDev = process.env.NODE_ENV !== "production";
 
+// Exams-only deployment (see src/lib/deployment.ts): the legacy backend, and in
+// particular the production failover, must not be reachable at all.
+const examsStaging = process.env.NEXT_PUBLIC_EXAMS_STAGING === "true";
+
 // connect-src must allow every base api.ts may fail over to, or a backend
 // hiccup that trips failover becomes a hard CSP-blocked client error. Mirror
 // api.ts's candidate set (env base + prod fallback, plus dev fallback in dev).
-const apiConnectSrc = [
-  process.env.NEXT_PUBLIC_API_BASE_URL,
-  PROD_FALLBACK_API_BASE,
-  isDev ? DEV_FALLBACK_API_BASE : null,
-]
+const apiConnectSrc = (
+  examsStaging
+    ? []
+    : [
+        process.env.NEXT_PUBLIC_API_BASE_URL,
+        PROD_FALLBACK_API_BASE,
+        isDev ? DEV_FALLBACK_API_BASE : null,
+      ]
+)
   .filter((b): b is string => Boolean(b))
   .map((b) => b.replace(/\/+$/, ""));
 
@@ -125,9 +133,10 @@ const nextConfig: NextConfig = {
     ];
   },
 
-  // Redirect www → apex (optional — Vercel handles this too)
+  // The exams-only deployment opens on the institutional login; every other
+  // deployment (including production HireLog) keeps its own landing page.
   async redirects() {
-    return [];
+    return examsStaging ? [{ source: "/", destination: "/exams/login", permanent: false }] : [];
   },
 };
 
