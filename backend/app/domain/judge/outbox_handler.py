@@ -17,9 +17,10 @@ from app.domain.judge.service import JudgeService
 logger = logging.getLogger("hirelog.judge.outbox")
 
 
-def _parse_slot_index(question_id: str) -> int:
+def _parse_slot_index(question_id: str) -> int | None:
     # question_id format from student_service.py: f"{revision_id}:slot:{index}"
-    return int(question_id.rsplit(":slot:", 1)[1])
+    tail = question_id.rsplit(":slot:", 1)[-1]
+    return int(tail) if ":slot:" in question_id and tail.isdigit() else None
 
 
 class GradingTriggerOutboxHandler:
@@ -49,6 +50,9 @@ class GradingTriggerOutboxHandler:
 
     def _grade_one_question(self, run_id: str, uid: str, question_id: str) -> None:
         slot_index = _parse_slot_index(question_id)
+        if slot_index is None:
+            logger.warning("draft id %r is not a slot id — skipping grading", question_id)
+            return
         candidate_id = self._assignments.get_assignment(run_id=run_id, uid=uid, slot_index=slot_index)
         if not candidate_id:
             logger.warning("no variant assignment for run=%s uid=%s question=%s — skipping grading", run_id, uid, question_id)

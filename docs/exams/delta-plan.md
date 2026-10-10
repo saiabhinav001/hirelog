@@ -218,3 +218,33 @@ Out of Phase 5 on purpose: executing reference solutions in the judge and SQL it
 - [x] Named scenarios tested: malformed model JSON, source injection, nonexistent anchors, incorrect answer, duplicate/near-duplicate, insufficient source, provider timeout, fewer-than-requested output.
 - [x] Full backend suite (`EXAMS_ENABLED=false`: 1222 passed), ruff, frontend `tsc`, eslint and Vitest pass (the known `submit/page.test.tsx` timeout under full-suite load passes alone).
 - [x] Migration notes and ADR 0021 written; no production data touched; no secrets or addresses added. *(No real provider, judge or Firestore emulator was used.)*
+
+## 9. Phase 6 — student attempts, drafts and immutable submit (implemented, ADR 0022)
+
+Phase 6 needed no new institutional decision to ship; D-3 (navigation policy) is a default-off flag and the real-Firestore interleaving check stays a Phase 11 gate.
+
+| Area | Change |
+|---|---|
+| `backend/app/domain/exams/decisions.py` | `resolve_released_slot`; `decide_submit` answers from the receipt in every resolved state, request hash; `decide_save_draft` replay by `client_save_id`, optional epoch; `submit_request_hash`, `draft_content_hash` |
+| `backend/app/domain/exams/student_service.py` | Released-slot validation on draft save/read; `get_question_for_slot`, `list_released_slots`, `authorize_released_question`; submit/finish read drafts in the transaction; size cap, mark-for-review |
+| `backend/app/domain/exams/repository.py`, `finalization.py`, `commands.py` | `DraftRepository.all_versions_in_transaction` / `list_all`; sweeper seal and faculty terminate use the in-transaction read |
+| `backend/app/domain/exams/models.py` | Additive optional fields: `SubmitReceipt.request_hash`; `Draft.marked_for_review/last_save_id/last_content_hash` |
+| `backend/app/api/routes/exams_student.py`, `exams_errors.py` | `GET …/slots`, `GET …/questions/{n}`; draft save accepts `client_save_id/client_epoch/marked_for_review`; draft read validated; new conflict codes and status mapping |
+| `backend/app/api/routes/exams_judge.py`, `domain/judge/outbox_handler.py` | Public run / poll validate the question id and attempt; grading skips a non-slot draft id |
+| Config | `EXAM_STUDENT_REVISIT_RELEASED_SLOTS` (default off), `EXAM_DRAFT_MAX_BYTES` (100 000) |
+| Frontend | `saveDraft` sends `clientSaveId` / `clientEpoch`, retried once with the same id; `listReleasedSlots`, `getReleasedQuestion` client methods (UI is Phase 7) |
+| Tests | New `test_exams_student_attempts_p6.py`; `exam_inmemory.py` models query reads; one new Vitest test |
+| Docs | ADR 0022 (+ index), compat §11, traceability §6.1, integration map |
+
+Out of Phase 6 on purpose: the navigator / timer UI (Phase 7), an advancing epoch fence and a two-tab takeover policy, a sealed copy of the answers for grading, real-Firestore and burst verification (Phase 11).
+
+### Phase 6 acceptance checklist
+
+- [x] A student can read or write only slots already shown to them in their own run; guessed, malformed, foreign-revision and future ids are refused and create nothing; the public test run follows the same rule.
+- [x] Membership, ownership, run state, window, deadline and attempt state are enforced per request; a stale epoch is refused when supplied.
+- [x] Draft saves are versioned; a retried save is idempotent by id; a stale or second-tab save is an explicit conflict; oversized answers are refused.
+- [x] Submit is a separate command: identical retry returns the same receipt (also after the deadline); a reused key with another payload conflicts; a lost response is recoverable by receipt lookup without late work.
+- [x] Submit / terminate / expiry produce one outcome; the receipt lists exactly the drafts that exist at sealing; a crashed seal leaves nothing and is retried once.
+- [x] Authenticated student responses are `no-store`; no private marker appears in any student response or live event payload tested.
+- [x] Full backend suite (`EXAMS_ENABLED=false`: 1271 passed), ruff, frontend `tsc` and `eslint` pass.
+- [x] Migration notes and ADR 0022 written; no production data touched; no secrets or addresses added. *(No real Firestore, browser or socket was used.)*

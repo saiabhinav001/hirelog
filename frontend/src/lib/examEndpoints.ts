@@ -76,6 +76,14 @@ export type LockdownAdmissionLogEntry = {
   at: string;
 };
 
+export type ReleasedSlots = {
+  current_slot_index: number;
+  total_slots: number;
+  locked_count: number;
+  revisit_enabled: boolean;
+  slots: { slot_index: number; question_id: string; answered: boolean; marked_for_review: boolean; version: number }[];
+};
+
 export type GenerationCandidate = {
   id: string;
   item_type: "single_choice" | "multiple_select" | "short_answer" | "coding";
@@ -508,15 +516,36 @@ export const examEndpoints = {
     authed<{ accepted: boolean; slot_index: number }>(`/api/exams/v1/student/runs/${runId}/next-question`, token, {
       method: "POST",
     }),
-  saveDraft: (token: string | undefined, runId: string, questionId: string, expectedVersion: number, answer: Record<string, unknown>) =>
-    authed<{ accepted: boolean; version: number }>(`/api/exams/v1/student/runs/${runId}/drafts/${encodeURIComponent(questionId)}`, token, {
-      method: "PATCH",
-      body: JSON.stringify({ expected_version: expectedVersion, answer }),
-    }),
+  saveDraft: (
+    token: string | undefined,
+    runId: string,
+    questionId: string,
+    expectedVersion: number,
+    answer: Record<string, unknown>,
+    options: { clientEpoch?: number; clientSaveId?: string; markedForReview?: boolean } = {}
+  ) =>
+    authed<{ accepted: boolean; version: number; replayed?: boolean }>(
+      `/api/exams/v1/student/runs/${runId}/drafts/${encodeURIComponent(questionId)}`,
+      token,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          expected_version: expectedVersion,
+          answer,
+          client_epoch: options.clientEpoch,
+          client_save_id: options.clientSaveId,
+          marked_for_review: options.markedForReview,
+        }),
+      }
+    ),
+  listReleasedSlots: (token: string | undefined, runId: string) =>
+    authed<ReleasedSlots>(`/api/exams/v1/student/runs/${runId}/slots`, token),
+  getReleasedQuestion: (token: string | undefined, runId: string, slotIndex: number) =>
+    authed<PublicQuestion>(`/api/exams/v1/student/runs/${runId}/questions/${slotIndex}`, token),
   listMyDraftVersions: (token: string | undefined, runId: string) =>
     authed<{ versions: Record<string, number> }>(`/api/exams/v1/student/runs/${runId}/drafts`, token),
   getMyDraft: (token: string | undefined, runId: string, questionId: string) =>
-    authed<{ version: number; answer: Record<string, unknown> | null }>(
+    authed<{ version: number; answer: Record<string, unknown> | null; marked_for_review?: boolean }>(
       `/api/exams/v1/student/runs/${runId}/drafts/${encodeURIComponent(questionId)}`,
       token
     ),

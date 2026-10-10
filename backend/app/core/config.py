@@ -165,6 +165,9 @@ class Settings(BaseSettings):
     EXAM_GENERATION_HTTP_MAX_RETRIES: int = 2
     EXAM_GENERATION_MAX_ATTEMPTS: int = 3
     EXAM_REQUIRE_EXECUTED_CODING_VERIFICATION: bool = False
+    # Prompt 6 (ADR 0022): let a student re-open questions they were already shown (default off: current slot only).
+    EXAM_STUDENT_REVISIT_RELEASED_SLOTS: bool = False
+    EXAM_DRAFT_MAX_BYTES: int = 100_000
 
     # ── Independent item review (Backend model prompt B, docs/adr/0009) ─────
     # A separate provider/endpoint from generation above — may be the same

@@ -22,6 +22,7 @@ from app.api.exams_scope import (
     require_submission_scope,
 )
 from app.core.firebase import db
+from app.domain.exams.student_service import ExamStudentService
 from app.domain.generation.repository import GenerationRepository, VariantAssignmentRepository
 from app.domain.judge.converters import to_test_groups
 from app.domain.judge.grading import public_test_result_dto, sealed_grade_summary_dto
@@ -65,8 +66,17 @@ class McqRegradeRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
-def _candidate_for_question(run_id: str, uid: str, question_id: str):
-    slot_index = int(question_id.rsplit(":slot:", 1)[1])
+def _released_slot(run_id: str, uid: str, question_id: str, *, require_active: bool) -> int:
+    """A guessed, malformed or not-yet-released question id is refused before any lookup."""
+    try:
+        return ExamStudentService(db).authorize_released_question(run_id, uid, question_id, require_active=require_active)
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
+
+
+def _candidate_for_question(run_id: str, uid: str, question_id: str, *, require_active: bool):
+    slot_index = _released_slot(run_id, uid, question_id, require_active=require_active)
     candidate_id = VariantAssignmentRepository(db).get_assignment(run_id=run_id, uid=uid, slot_index=slot_index)
     if not candidate_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No variant assigned for this question.")
@@ -80,7 +90,7 @@ def _candidate_for_question(run_id: str, uid: str, question_id: str):
 def public_run(payload: PublicRunRequest, response: Response, user: dict = Depends(get_current_exam_user)) -> dict:
     response.headers["Cache-Control"] = "no-store"
     authorize_student_for_run(user, payload.run_id)
-    candidate = _candidate_for_question(payload.run_id, user["uid"], payload.question_id)
+    candidate = _candidate_for_question(payload.run_id, user["uid"], payload.question_id, require_active=True)
     service = JudgeService(db, _judge_provider_for_request())
     # Quota (HTTP 429) is enforced inside `run_public_test` by `SlidingWindowLimiter.check`,
     # which raises `HTTPException` directly — no translation needed here.
@@ -100,7 +110,7 @@ def public_run(payload: PublicRunRequest, response: Response, user: dict = Depen
 @student_router.get("/public-run/{submission_id}")
 def get_public_run(submission_id: str, run_id: str, question_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     response.headers["Cache-Control"] = "no-store"
-    candidate = _candidate_for_question(run_id, user["uid"], question_id)
+    candidate = _candidate_for_question(run_id, user["uid"], question_id, require_active=False)
     service = JudgeService(db, _judge_provider_for_request())
     submission = service.poll_public_run(submission_id, public_tests=to_test_groups(candidate.public_tests))
     if submission is None or submission.uid != user["uid"]:

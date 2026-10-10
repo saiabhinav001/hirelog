@@ -121,23 +121,32 @@ class _Query:
     def start_after(self, values: dict) -> "_Query":
         return _Query(self._db, self._path, self._filters, self._order, self._limit, values)
 
-    def stream(self):
+    def stream(self, transaction: Optional["FakeTransaction"] = None):
         with self._db.lock:
-            rows = []
-            for path, record in self._db.docs.items():
-                if len(path) != len(self._path) + 1 or path[:-1] != self._path:
-                    continue
-                data = record["data"]
-                if all(_matches(data, f, op, v) for f, op, v in self._filters):
-                    rows.append((path, data))
-            if self._order:
-                rows.sort(key=lambda item: item[1].get(self._order))
-                if self._after is not None:
-                    cutoff = self._after[self._order]
-                    rows = [item for item in rows if item[1].get(self._order) > cutoff]
-            if self._limit is not None:
-                rows = rows[: self._limit]
-            return [_Snapshot(_DocRef(self._db, path), data) for path, data in rows]
+            snapshots = self._rows()
+            if transaction is not None:
+                # Serializable: the whole result set (membership AND revisions) must be unchanged at commit.
+                transaction.query_reads.append((self, {s.reference.path: self._db.docs[s.reference.path]["rev"] for s in snapshots}))
+        if transaction is not None and self._db.jitter:
+            time.sleep(random.uniform(0, self._db.jitter))
+        return snapshots
+
+    def _rows(self):
+        rows = []
+        for path, record in self._db.docs.items():
+            if len(path) != len(self._path) + 1 or path[:-1] != self._path:
+                continue
+            data = record["data"]
+            if all(_matches(data, f, op, v) for f, op, v in self._filters):
+                rows.append((path, data))
+        if self._order:
+            rows.sort(key=lambda item: item[1].get(self._order))
+            if self._after is not None:
+                cutoff = self._after[self._order]
+                rows = [item for item in rows if item[1].get(self._order) > cutoff]
+        if self._limit is not None:
+            rows = rows[: self._limit]
+        return [_Snapshot(_DocRef(self._db, path), data) for path, data in rows]
 
 
 class _CollRef(_Query):
@@ -162,10 +171,12 @@ class FakeTransaction:
     def __init__(self, db: "FakeFirestore") -> None:
         self._db = db
         self.reads: dict[tuple[str, ...], int] = {}
+        self.query_reads: list[tuple[_Query, dict[tuple[str, ...], int]]] = []
         self.writes: list[tuple[str, _DocRef, Optional[dict]]] = []
 
     def reset(self) -> None:
         self.reads = {}
+        self.query_reads = []
         self.writes = []
 
     def set(self, ref: _DocRef, data: dict) -> None:
@@ -188,6 +199,10 @@ class FakeTransaction:
             for path, rev in self.reads.items():
                 record = self._db.docs.get(path)
                 if (record["rev"] if record else 0) != rev:
+                    return False
+            for query, seen in self.query_reads:
+                now = {s.reference.path: self._db.docs[s.reference.path]["rev"] for s in query._rows()}
+                if now != seen:
                     return False
             self._db.apply_locked(self.writes)
             return True

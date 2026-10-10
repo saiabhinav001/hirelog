@@ -151,6 +151,8 @@ class SubmitReceipt(BaseModel):
     finalized_at: datetime
     sealed_draft_versions: dict[str, int] = Field(default_factory=dict)
     receipt_id: str
+    # Prompt 6 (ADR 0022): hash of the request that created it, so a reused key with a different payload is a conflict.
+    request_hash: Optional[str] = None
 
 
 class Attempt(BaseModel):
@@ -182,6 +184,10 @@ class Draft(BaseModel):
     version: int = 0
     answer: Optional[dict] = None
     updated_at: Optional[datetime] = None
+    # Prompt 6 (ADR 0022): navigator flag, and the id/hash of the latest save so a lost-response retry can be recognised.
+    marked_for_review: bool = False
+    last_save_id: Optional[str] = None
+    last_content_hash: Optional[str] = None
 
 
 class CommandReceipt(BaseModel):

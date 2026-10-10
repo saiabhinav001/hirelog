@@ -11,6 +11,7 @@ const getCurrentQuestionMock = vi.fn();
 const getMyDraftMock = vi.fn();
 const listMyDraftVersionsMock = vi.fn();
 const submitMock = vi.fn();
+const saveDraftMock = vi.fn();
 const getMyAccommodationsMock = vi.fn().mockResolvedValue({ extra_minutes: 0, camera_waived: false });
 
 vi.mock("next/navigation", () => ({
@@ -39,6 +40,7 @@ vi.mock("@/lib/examEndpoints", () => ({
     getMyDraft: (...args: unknown[]) => getMyDraftMock(...args),
     listMyDraftVersions: (...args: unknown[]) => listMyDraftVersionsMock(...args),
     submit: (...args: unknown[]) => submitMock(...args),
+    saveDraft: (...args: unknown[]) => saveDraftMock(...args),
     getMyAccommodations: (...args: unknown[]) => getMyAccommodationsMock(...args),
   },
 }));
@@ -64,6 +66,7 @@ describe("Student exam page — submit confirmation", () => {
     getCurrentQuestionMock.mockReset();
     getMyDraftMock.mockReset();
     listMyDraftVersionsMock.mockReset();
+    saveDraftMock.mockReset();
     submitMock.mockReset();
     getMyAccommodationsMock.mockReset().mockResolvedValue({ extra_minutes: 0, camera_waived: false });
   });
@@ -89,6 +92,20 @@ describe("Student exam page — submit confirmation", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Yes, submit" }));
 
     await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("retries a failed autosave once with the same save id and sends the attempt epoch", async () => {
+    mockLastSlotShortAnswer();
+    saveDraftMock.mockRejectedValueOnce(new Error("network")).mockResolvedValueOnce({ accepted: true, version: 1 });
+    render(<ExamPage />);
+
+    await userEvent.type(await screen.findByRole("textbox", { name: "Your answer" }), "x");
+
+    await waitFor(() => expect(saveDraftMock).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    const [first, second] = saveDraftMock.mock.calls;
+    expect(first[5].clientSaveId).toBeTruthy();
+    expect(second[5]).toEqual(first[5]);
+    expect(first[5].clientEpoch).toBe(1);
   });
 
   it("fetches the student's own accommodations (never another student's)", async () => {

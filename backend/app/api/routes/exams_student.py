@@ -42,6 +42,9 @@ def _set_no_store(response: Response) -> None:
 class SaveDraftRequest(BaseModel):
     expected_version: int = Field(ge=0)
     answer: dict = Field(default_factory=dict)
+    marked_for_review: bool | None = None  # None keeps the stored flag
+    client_epoch: int | None = Field(default=None, ge=0)
+    client_save_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class SubmitRequest(BaseModel):
@@ -132,19 +135,51 @@ def get_current_question(run_id: str, response: Response, user: dict = Depends(r
     """Only the CURRENT slot is ever constructed — never a guessed/future
     question id, never locked content (contract #3)."""
     _set_no_store(response)
+    return _question_response(run_id, user["uid"], None)
+
+
+@router.get("/runs/{run_id}/questions/{slot_index}")
+def get_released_question(run_id: str, slot_index: int, response: Response, user: dict = Depends(require_seb_admission)) -> dict:
+    """A slot the student was already shown. The current slot always works; an earlier one only when
+    `EXAM_STUDENT_REVISIT_RELEASED_SLOTS` is on; a later one never (403 slot_not_released)."""
+    _set_no_store(response)
+    return _question_response(run_id, user["uid"], slot_index)
+
+
+@router.get("/runs/{run_id}/slots")
+def list_released_slots(run_id: str, response: Response, user: dict = Depends(require_seb_admission)) -> dict:
+    """Navigator data: released slots with answered / marked-for-review state and the count still locked.
+    No question content."""
+    _set_no_store(response)
     service = _service()
     run = service.get_run_or_404(run_id)
+    revision = _revision_or_404(run)
+    try:
+        return service.list_released_slots(run_id, user["uid"], revision)
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
+
+
+def _revision_or_404(run):
     revision = ExamCommandService(db).definitions.get_revision(run.definition_id, run.revision_id)
     if revision is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Revision not found.")
+    return revision
+
+
+def _question_response(run_id: str, uid: str, slot_index: int | None) -> dict:
+    service = _service()
+    run = service.get_run_or_404(run_id)
+    revision = _revision_or_404(run)
     try:
-        question = service.get_current_question(run_id, user["uid"], revision)
+        question = service.get_question_for_slot(run_id, uid, revision, slot_index)
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
 
     assignments = VariantAssignmentRepository(db)
-    detail = assignments.get_assignment_detail(run_id=run_id, uid=user["uid"], slot_index=question.slot_index)
+    detail = assignments.get_assignment_detail(run_id=run_id, uid=uid, slot_index=question.slot_index)
     candidate_id = (detail or {}).get("candidate_id")
     candidate = GenerationRepository(db).get_candidate(candidate_id) if candidate_id else None
     if candidate is not None:
@@ -186,26 +221,32 @@ def save_draft(
     _set_no_store(response)
     try:
         outcome = _service().save_draft(
-            run_id, user["uid"], question_id, expected_version=payload.expected_version, answer=payload.answer
+            run_id, user["uid"], question_id, expected_version=payload.expected_version, answer=payload.answer,
+            marked_for_review=payload.marked_for_review, client_epoch=payload.client_epoch,
+            client_save_id=payload.client_save_id,
         )
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
     if not outcome.accepted:
         raise_for_conflict_reason(outcome.conflict_reason or "draft_version_conflict")
-    return {"accepted": True, "version": outcome.new_version}
+    return {"accepted": True, "version": outcome.new_version, "replayed": outcome.replayed}
 
 
 @router.get("/runs/{run_id}/drafts/{question_id}")
 def get_my_draft(run_id: str, question_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     """Re-hydrates the editor/answer UI after a refresh — never another
     student's draft (ownership is the verified token's own uid, not a
-    path/body-supplied one)."""
+    path/body-supplied one) and only for a slot the student has been shown."""
     _set_no_store(response)
-    draft = _service().drafts.get(run_id, user["uid"], question_id)
+    try:
+        draft = _service().get_draft(run_id, user["uid"], question_id)
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
     if draft is None:
-        return {"version": 0, "answer": None}
-    return {"version": draft.version, "answer": draft.answer}
+        return {"version": 0, "answer": None, "marked_for_review": False}
+    return {"version": draft.version, "answer": draft.answer, "marked_for_review": draft.marked_for_review}
 
 
 @router.get("/runs/{run_id}/drafts")

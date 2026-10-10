@@ -291,6 +291,40 @@ mock-tested only (D-13); heuristic injection detection; lexical near-duplicate d
 | ATT-07 | Authenticated attempt/question/result APIs not cacheable; unsent answers in memory only; no offline final submit | `_set_no_store` on every student route + app-level `no-store` middleware; frontend never persists answers (no `localStorage/sessionStorage/IndexedDB` use for exam data) | grep audit; `fe:exam/page.test.tsx` | EXISTS_AND_VERIFIED | — | — |
 | ATT-08 | Hidden-content leakage inspection of API/socket/page/cache payloads | DTO-level tests only; no socket/page/cache payload inspection | `test_judge_grading.py` (DTO) | PARTIALLY_EXISTS | End-to-end payload inspection | P6 / P11 |
 
+### 6.1 Status after the Prompt 6 implementation
+
+Implemented as [ADR 0022](../adr/0022-student-attempts-gating-and-idempotent-submit.md); migration notes in
+[compatibility-and-migration.md §11](compatibility-and-migration.md). Evidence is HTTP- and service-level against the in-memory Firestore with optimistic
+transactions (`exam_inmemory.py`, now also modelling query reads); **no real Firestore, browser session or socket was used.** The student routes had no
+HTTP-level tests before this phase, and exercising them showed that three rows rated `EXISTS_AND_VERIFIED` at the audit were not. Backend suite: 1271 tests
+passing with `EXAMS_ENABLED=false` (1222 before + 49 new); `ruff check .` clean; frontend `tsc` and `eslint` clean, 1 new Vitest test.
+
+| ID | Status after P6 | What changed | Evidence |
+|---|---|---|---|
+| ATT-01 | EXISTS_AND_VERIFIED | Unchanged; now also checked over HTTP with private markers planted in every private field | `test_no_student_response_carries_private_content_*` |
+| ATT-02 | EXISTS_AND_VERIFIED (unit/HTTP) | `question_id` ↔ released-slot validation on draft save/read, question read and the judge public run; navigator `GET …/slots`; earlier released slots readable behind `EXAM_STUDENT_REVISIT_RELEASED_SLOTS` (default off, decision D-3); future slots never; membership/ownership/run/deadline/state enforced per request. **Epoch** is checked on draft saves and submit but is a constant 1 (nothing advances it) | `test_a_guessed_or_future_question_id_*`, `test_only_the_current_slot_*`, `test_direct_calls_by_a_student_who_is_not_enrolled_*`, `test_the_public_test_run_refuses_*` |
+| ATT-03 | EXISTS_AND_VERIFIED (was defective in practice) | A lost-response retry was a conflict. `client_save_id` makes it idempotent; same id + different content conflicts; size cap; mark-for-review flag | `test_a_lost_save_response_is_recovered_*`, `test_a_save_retried_with_its_own_id_*`, `test_an_oversized_answer_*` |
+| ATT-04 | EXISTS_AND_VERIFIED (was defective) | The receipt is returned for the same key in **every** resolved state (`SUBMITTED` was missed); request hash on the receipt; reused key with another payload or command conflicts | `test_a_retry_with_the_same_key_*`, `test_the_same_key_with_a_different_payload_*`, `test_a_double_click_submit_*` |
+| ATT-05 | EXISTS_AND_VERIFIED (was defective) | Recovery by retry or `GET …/receipt` works after the deadline and never permits late work (a new key, a draft save and a finish all conflict) | `test_a_lost_submit_response_is_recovered_after_the_deadline_*` |
+| ATT-06 | EXISTS_AND_VERIFIED (fake store) / UNVERIFIED (real Firestore) | Draft versions are read inside the seal transaction in submit/finish, the sweeper and terminate; submit/terminate/expiry serialize on the attempt; expiry seals the last acknowledged draft or blank once; a crashed seal leaves nothing | `test_concurrent_submit_and_faculty_terminate_*`, `test_a_draft_saved_between_the_read_and_the_commit_*`, `test_the_receipt_always_lists_exactly_*`, `test_a_sweeper_that_crashes_mid_seal_*`, `test_expiry_seals_*` |
+| ATT-07 | EXISTS_AND_VERIFIED | Unchanged; regression tests assert `no-store` on every student route and on a full set of responses; the service worker still never intercepts `/api/` | `test_every_student_route_sets_no_store`, `test_no_student_response_carries_private_content_*` |
+| ATT-08 | PARTIALLY_EXISTS | HTTP responses (16 calls) and live event payloads are inspected for planted private markers. Browser page / DOM / HTTP cache / socket frames in a real browser are not inspected (Prompt 10/11) | `test_no_student_response_*`, `test_live_events_carry_no_question_or_answer_material` |
+
+Defects found in the existing code while implementing (all fixed):
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| P6-1 | High | A submit retry after commit returned `attempt_not_in_progress` instead of the receipt (state `SUBMITTED` was not handled; the unit test used `FINALIZED`) | Receipt answers in all resolved states |
+| P6-2 | Medium | A reused key with a different payload was not detected | Request hash on the receipt |
+| P6-3 | Medium | A draft save retried after a lost response was a conflict | `client_save_id` replay |
+| P6-4 | High | Draft routes accepted any question id: unbounded documents of unbounded size, and a draft id that was not a slot id crashed grading | Released-slot validation, size cap, grading skips non-slot ids |
+| P6-5 | High | The public test run accepted guessed and future question ids (public tests of an unreleased slot could be run), returned 500 on a malformed id, and worked before admission and after sealing | Released-slot + active-attempt checks |
+| P6-6 | High | Submit/finish, the sweeper and terminate read draft versions outside their transaction | In-transaction read |
+
+Residual: real-Firestore verification of the transactional query read and a synchronized submit burst (Prompt 11); `epoch` is not an advancing fence (a two-tab
+takeover policy is a product choice); decision D-3 (sequential release with review of released slots) is a flag until the institution decides; grading reads
+the current draft, not a sealed copy.
+
 ## 7. UI: timer, navigator, themes, control room — Prompt 7
 
 | ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |
@@ -407,7 +441,7 @@ mock-tested only (D-13); heuristic injection detection; lexical near-duplicate d
 |---|---|---|
 | D-1 | Final bootstrap super-admin list: the master prompt names three addresses, Prompt 1's text says "four" (the v1.0 fourth was removed) | P1 deployment config |
 | D-2 | **Resolved in Prompt 2: "definition = course"** (co-instructors on an exam definition, assigned by a super-admin or the institution's ADMIN). Still open: finer capabilities inside a course (e.g. a proctor-only assistant) and any separate Course entity | P2 (done) |
-| D-3 | Slot-release / navigation policy: v1.0 contract = forward-only sequential release; v1.1 requires Previous/Next + navigator over released slots | P6/P7 |
+| D-3 | Slot-release / navigation policy: v1.0 contract = forward-only sequential release; v1.1 requires Previous/Next + navigator over released slots. **Prompt 6 delivered the mechanism behind `EXAM_STUDENT_REVISIT_RELEASED_SLOTS` (default off = forward-only); the institution still chooses** | P6 (mechanism, done) / P7 (UI) |
 | D-4 | Malware scanner, private object storage and retention for uploads. **Prompt 4 delivered the clamd adapter, the storage seam and teacher delete; still open: provisioning a real ClamAV and bucket, and a retention window for uploaded sources (only evidence has a retention sweeper)** | P4 (adapter, done) / deployment |
 | D-5 | Judge architecture/provider approval, language set (C, JS/TS), SQL runner qualification | P8 |
 | D-6 | Institution SSO vs verified-email OTP; OTP delivery provider. Prompt 2 delivered the adapter contract, the selection setting and the fail-closed production behavior; **no real provider exists until this is decided** | P2 (provider) |

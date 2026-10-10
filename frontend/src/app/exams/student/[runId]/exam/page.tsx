@@ -174,19 +174,29 @@ function ExamContent() {
   const persistDraft = useCallback(
     async (nextAnswer: Record<string, unknown>) => {
       if (!question) return;
-      try {
-        const token = await getToken();
-        const result = await examEndpoints.saveDraft(token, runId, question.question_id, draftVersion, nextAnswer);
-        setDraftVersion(result.version);
-        draftVersionsRef.current[question.question_id] = result.version;
-        setSaveReceipt({ savedAt: new Date().toISOString(), version: result.version });
-      } catch {
-        // A stale-version conflict here means another tab/device saved more
-        // recently — reconcile from the server rather than overwrite it.
-        await loadQuestion();
+      // One id per save: if the response is lost the retry below is recognised by the server and
+      // acknowledged without creating another version.
+      const clientSaveId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+      for (let attemptNo = 0; attemptNo < 2; attemptNo += 1) {
+        try {
+          const token = await getToken();
+          const result = await examEndpoints.saveDraft(token, runId, question.question_id, draftVersion, nextAnswer, {
+            clientEpoch: attempt?.epoch,
+            clientSaveId,
+          });
+          setDraftVersion(result.version);
+          draftVersionsRef.current[question.question_id] = result.version;
+          setSaveReceipt({ savedAt: new Date().toISOString(), version: result.version });
+          return;
+        } catch {
+          // fall through: retry once with the same id, then reconcile
+        }
       }
+      // A stale-version conflict here means another tab/device saved more
+      // recently — reconcile from the server rather than overwrite it.
+      await loadQuestion();
     },
-    [draftVersion, getToken, loadQuestion, question, runId]
+    [attempt?.epoch, draftVersion, getToken, loadQuestion, question, runId]
   );
 
   const updateAnswer = useCallback(

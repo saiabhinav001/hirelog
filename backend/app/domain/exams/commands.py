@@ -484,7 +484,7 @@ class ExamCommandService:
 
             decision = decide_terminate_attempt(
                 attempt=attempt, now=now, idempotency_key=idempotency_key,
-                current_draft_versions=self._drafts.all_versions(run_id, uid),
+                current_draft_versions=self._drafts.all_versions_in_transaction(transaction, run_id, uid),
             )
             self._attempts.update_in_transaction(
                 transaction, run_id, uid,

@@ -5,6 +5,7 @@ conflict/idempotency/deadline logic lives in `decisions.py`.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
@@ -20,7 +21,10 @@ from app.domain.exams.decisions import (
     decide_advance_slot,
     decide_save_draft,
     decide_submit,
+    draft_content_hash,
     is_content_reachable,
+    resolve_released_slot,
+    submit_request_hash,
 )
 from app.domain.exams.errors import NotEnrolledError
 from app.domain.exams.models import (
@@ -130,26 +134,88 @@ class ExamStudentService:
     # ── question delivery (allowlisted DTO only) ──────────────────────────
 
     def get_current_question(self, run_id: str, uid: str, revision: ExamRevision) -> PublicQuestionRef:
+        return self.get_question_for_slot(run_id, uid, revision, None)
+
+    def _reachable_attempt(self, run_id: str, uid: str):
         run = self.get_run_or_404(run_id)
         self._require_enrolled(run, uid)
         attempt = self.attempts.get(run_id, uid)
         if attempt is None:
             raise NotEnrolledError("attempt not admitted yet")
-
-        now = self._clock.now()
-        reason = is_content_reachable(run=run, attempt=attempt, now=now)
+        reason = is_content_reachable(run=run, attempt=attempt, now=self._clock.now())
         if reason is not None:
             raise PermissionError(reason)
+        return run, attempt
 
-        # Only the CURRENT slot is ever constructed/returned — no prefetching
-        # of future slots, no locked content.
-        index = attempt.current_slot_index
-        question_id = f"{revision.id}:slot:{index}"
+    def get_question_for_slot(
+        self, run_id: str, uid: str, revision: ExamRevision, slot_index: Optional[int]
+    ) -> PublicQuestionRef:
+        """`slot_index=None` is the current slot. Only slots the student has already been shown can be
+        built: the current one always, earlier ones only when revisiting is enabled. Future slots never."""
+        _, attempt = self._reachable_attempt(run_id, uid)
+        current = attempt.current_slot_index
+        index = current if slot_index is None else slot_index
+        if index < 0 or index >= revision.slot_count:
+            raise LookupError("question not found")
+        if index > current:
+            raise PermissionError("slot_not_released")
+        if index < current and not settings.EXAM_STUDENT_REVISIT_RELEASED_SLOTS:
+            raise PermissionError("slot_revisit_disabled")
         return PublicQuestionRef(
-            question_id=question_id,
+            question_id=f"{revision.id}:slot:{index}",
             slot_index=index,
             total_slots=revision.slot_count,
         )
+
+    def list_released_slots(self, run_id: str, uid: str, revision: ExamRevision) -> dict:
+        """Navigator data for released slots only - ids and answer state, never content."""
+        _, attempt = self._reachable_attempt(run_id, uid)
+        drafts = {d.question_id: d for d in self.drafts.list_all(run_id, uid)}
+        slots = []
+        for index in range(0, attempt.current_slot_index + 1):
+            question_id = f"{revision.id}:slot:{index}"
+            draft = drafts.get(question_id)
+            slots.append({
+                "slot_index": index,
+                "question_id": question_id,
+                "answered": bool(draft and draft.answer),
+                "marked_for_review": bool(draft and draft.marked_for_review),
+                "version": draft.version if draft else 0,
+            })
+        return {
+            "current_slot_index": attempt.current_slot_index,
+            "total_slots": revision.slot_count,
+            "locked_count": max(0, revision.slot_count - (attempt.current_slot_index + 1)),
+            "revisit_enabled": settings.EXAM_STUDENT_REVISIT_RELEASED_SLOTS,
+            "slots": slots,
+        }
+
+    def authorize_released_question(self, run_id: str, uid: str, question_id: str, *, require_active: bool) -> int:
+        """For routes that take a client-supplied question id (e.g. the public test run): returns the slot
+        index only when the id belongs to this run's revision and the student has already been shown that
+        slot. `require_active` also requires an attempt that can still be worked on."""
+        run = self.get_run_or_404(run_id)
+        self._require_enrolled(run, uid)
+        attempt = self.attempts.get(run_id, uid)
+        if attempt is None:
+            raise NotEnrolledError("attempt not admitted yet")
+        if require_active:
+            reason = is_content_reachable(run=run, attempt=attempt, now=self._clock.now())
+            if reason is not None:
+                raise PermissionError(reason)
+        resolution = resolve_released_slot(
+            revision_id=run.revision_id, question_id=question_id, current_slot_index=attempt.current_slot_index
+        )
+        if resolution.conflict_reason == "question_not_in_run":
+            raise LookupError("question not found")
+        if resolution.conflict_reason is not None:
+            raise PermissionError(resolution.conflict_reason)
+        return resolution.slot_index
+
+    def get_draft(self, run_id: str, uid: str, question_id: str) -> Optional[Draft]:
+        """Own draft of a slot the student has been shown (also after sealing, for the receipt view)."""
+        self.authorize_released_question(run_id, uid, question_id, require_active=False)
+        return self.drafts.get(run_id, uid, question_id)
 
     def advance_to_next_question(self, run_id: str, uid: str, revision: ExamRevision) -> AdvanceSlotOutcome:
         """Forward-only slot advance — see `decide_advance_slot` docstring.
@@ -180,8 +246,19 @@ class ExamStudentService:
     # ── drafts ─────────────────────────────────────────────────────────────
 
     def save_draft(
-        self, run_id: str, uid: str, question_id: str, *, expected_version: int, answer: dict
+        self,
+        run_id: str,
+        uid: str,
+        question_id: str,
+        *,
+        expected_version: int,
+        answer: dict,
+        marked_for_review: Optional[bool] = None,
+        client_epoch: Optional[int] = None,
+        client_save_id: Optional[str] = None,
     ) -> DraftSaveOutcome:
+        if len(json.dumps(answer, separators=(",", ":"), default=str).encode("utf-8")) > settings.EXAM_DRAFT_MAX_BYTES:
+            return DraftSaveOutcome(False, conflict_reason="answer_too_large")
         transaction = self._db.transaction()
 
         @firestore.transactional
@@ -195,8 +272,17 @@ class ExamStudentService:
             if attempt is None:
                 raise NotEnrolledError("attempt not admitted yet")
 
+            # A guessed or future question id must not create a draft document.
+            resolution = resolve_released_slot(
+                revision_id=run.revision_id, question_id=question_id, current_slot_index=attempt.current_slot_index
+            )
+            if resolution.conflict_reason is not None:
+                return DraftSaveOutcome(False, conflict_reason=resolution.conflict_reason)
+
             existing = self.drafts.get_in_transaction(transaction, run_id, uid, question_id)
             current_version = existing.version if existing else 0
+            marked = marked_for_review if marked_for_review is not None else bool(existing and existing.marked_for_review)
+            content_hash = draft_content_hash(answer, marked)
 
             outcome = decide_save_draft(
                 attempt=attempt,
@@ -204,9 +290,17 @@ class ExamStudentService:
                 now=now,
                 expected_version=expected_version,
                 current_version=current_version,
+                client_epoch=client_epoch,
+                client_save_id=client_save_id,
+                content_hash=content_hash,
+                last_save_id=existing.last_save_id if existing else None,
+                last_content_hash=existing.last_content_hash if existing else None,
             )
-            if outcome.accepted:
-                draft = Draft(question_id=question_id, version=outcome.new_version, answer=answer, updated_at=now)
+            if outcome.accepted and not outcome.replayed:
+                draft = Draft(
+                    question_id=question_id, version=outcome.new_version, answer=answer, updated_at=now,
+                    marked_for_review=marked, last_save_id=client_save_id, last_content_hash=content_hash,
+                )
                 self.drafts.set_in_transaction(transaction, run_id, uid, draft)
             return outcome
 
@@ -237,15 +331,10 @@ class ExamStudentService:
             if attempt is None:
                 raise NotEnrolledError("attempt not admitted yet")
 
-            current_versions = self.drafts.all_versions(run_id, uid)
-            # NOTE: this is a plain (non-transactional) collection read, not
-            # part of this transaction's snapshot — see docs/adr/0008 "Known
-            # limitations". A concurrent draft-save landing between this read
-            # and the transaction's commit is a real race this phase does not
-            # fully close; only a live Firestore transaction/emulator run can
-            # validate the exact interleaving, per contract ("Validate
-            # transaction races in real staging Firestore before claiming
-            # production correctness").
+            current_versions = self.drafts.all_versions_in_transaction(transaction, run_id, uid)
+            # Read inside this transaction: a draft saved (or first created) concurrently makes the
+            # commit fail and this callback re-run against the new state, so the receipt always
+            # lists exactly the versions that exist at the instant of sealing.
             expected = expected_draft_versions if expected_draft_versions is not None else current_versions
 
             outcome = decide_submit(
@@ -256,6 +345,7 @@ class ExamStudentService:
                 client_epoch=client_epoch,
                 expected_draft_versions=expected,
                 current_draft_versions=current_versions,
+                request_hash=submit_request_hash("finish" if expected_draft_versions is None else "submit", expected_draft_versions),
             )
 
             if outcome.accepted and not outcome.reused_existing_receipt:

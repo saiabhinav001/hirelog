@@ -298,6 +298,18 @@ class DraftRepository:
         docs = self._collection(run_id, uid).stream()
         return {doc.id: int((doc.to_dict() or {}).get("version", 0)) for doc in docs}
 
+    def all_versions_in_transaction(self, transaction, run_id: str, uid: str) -> dict[str, int]:
+        """Part of the caller's transaction, so a draft saved between this read and the commit
+        (including the first save of a slot) aborts and re-runs the seal instead of being missed."""
+        docs = self._collection(run_id, uid).stream(transaction=transaction)
+        return {doc.id: int((doc.to_dict() or {}).get("version", 0)) for doc in docs}
+
+    def list_all(self, run_id: str, uid: str) -> list[Draft]:
+        return [
+            Draft.model_validate({**(doc.to_dict() or {}), "question_id": doc.id})
+            for doc in self._collection(run_id, uid).stream()
+        ]
+
     def set_in_transaction(self, transaction, run_id: str, uid: str, draft: Draft) -> None:
         ref = self._collection(run_id, uid).document(draft.question_id)
         transaction.set(ref, _model_dict(draft))

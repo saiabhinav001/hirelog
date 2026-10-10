@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+import hashlib
+import json
 from typing import Optional
 from uuid import uuid4
 
@@ -129,14 +131,24 @@ def decide_submit(
     client_epoch: int,
     expected_draft_versions: dict[str, int],
     current_draft_versions: dict[str, int],
+    request_hash: Optional[str] = None,
 ) -> SubmitOutcome:
-    # Immutability: a finalized attempt is never reopened, by anyone,
-    # including faculty preview/navigation (contract #4).
-    if attempt.status == AttemptStatus.FINALIZED:
+    # Immutability: a sealed attempt is never reopened, by anyone, including
+    # faculty preview/navigation (contract #4). A student submit leaves the
+    # attempt SUBMITTED (grading moves it to FINALIZED later), so a retry after a
+    # lost response must be answered from the receipt in every resolved state.
+    if attempt.status in RESOLVED_ATTEMPT_STATUSES:
         existing = attempt.submit_receipt
         if existing is not None and existing.idempotency_key == idempotency_key:
+            if request_hash is not None and existing.request_hash is not None and existing.request_hash != request_hash:
+                return SubmitOutcome(False, None, conflict_reason="idempotency_key_reused")
             return SubmitOutcome(True, existing, reused_existing_receipt=True)
-        return SubmitOutcome(False, None, conflict_reason="already_finalized")
+        reason = {
+            AttemptStatus.FINALIZED: "already_finalized",
+            AttemptStatus.SUBMITTED: "already_submitted",
+            AttemptStatus.EXPIRED: "attempt_expired",
+        }[attempt.status]
+        return SubmitOutcome(False, None, conflict_reason=reason)
 
     if attempt.status == AttemptStatus.BLOCKED:
         return SubmitOutcome(False, None, conflict_reason="attempt_blocked")
@@ -165,8 +177,20 @@ def decide_submit(
         finalized_at=now,
         sealed_draft_versions=dict(current_draft_versions),
         receipt_id=uuid4().hex,
+        request_hash=request_hash,
     )
     return SubmitOutcome(True, receipt)
+
+
+def submit_request_hash(kind: str, expected_draft_versions: Optional[dict[str, int]]) -> str:
+    """Stable fingerprint of what the client asked for (`submit` with these versions, or `finish`)."""
+    canonical = json.dumps({"kind": kind, "expected": expected_draft_versions}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def draft_content_hash(answer: Optional[dict], marked_for_review: bool) -> str:
+    canonical = json.dumps({"answer": answer, "marked": marked_for_review}, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -174,6 +198,7 @@ class DraftSaveOutcome:
     accepted: bool
     new_version: int = 0
     conflict_reason: Optional[str] = None
+    replayed: bool = False
 
 
 def decide_save_draft(
@@ -183,10 +208,20 @@ def decide_save_draft(
     now: datetime,
     expected_version: int,
     current_version: int,
+    client_epoch: Optional[int] = None,
+    client_save_id: Optional[str] = None,
+    content_hash: Optional[str] = None,
+    last_save_id: Optional[str] = None,
+    last_content_hash: Optional[str] = None,
 ) -> DraftSaveOutcome:
     """Same conflict vocabulary as `decide_submit` so the API layer maps both
     to consistent HTTP responses. A stale autosave (expected_version behind
-    current_version) is an explicit conflict, never a silent overwrite."""
+    current_version) is an explicit conflict, never a silent overwrite.
+
+    A client that sends `client_save_id` can safely retry after a lost response:
+    the latest save is remembered, so the same id with the same content is
+    acknowledged again (no new version) and the same id with different content
+    is a conflict."""
 
     if attempt.status == AttemptStatus.BLOCKED:
         return DraftSaveOutcome(False, conflict_reason="attempt_blocked")
@@ -198,9 +233,39 @@ def decide_save_draft(
         return DraftSaveOutcome(False, conflict_reason="run_paused")
     if attempt.deadline is not None and now > attempt.deadline:
         return DraftSaveOutcome(False, conflict_reason="deadline_passed")
+    if client_epoch is not None and client_epoch != attempt.epoch:
+        return DraftSaveOutcome(False, conflict_reason="stale_epoch")
+    if client_save_id and client_save_id == last_save_id:
+        if content_hash is not None and content_hash == last_content_hash:
+            return DraftSaveOutcome(True, new_version=current_version, replayed=True)
+        return DraftSaveOutcome(False, conflict_reason="idempotency_key_reused")
     if expected_version != current_version:
         return DraftSaveOutcome(False, conflict_reason="draft_version_conflict")
     return DraftSaveOutcome(True, new_version=current_version + 1)
+
+
+@dataclass(frozen=True)
+class SlotResolution:
+    slot_index: Optional[int] = None
+    conflict_reason: Optional[str] = None
+
+
+def resolve_released_slot(*, revision_id: str, question_id: str, current_slot_index: int) -> SlotResolution:
+    """Maps a client-supplied question id to a slot the student has actually been
+    shown. A guessed id (other revision, malformed, non-canonical) is
+    `question_not_in_run`; a well-formed id beyond the current slot is
+    `slot_not_released`. Release only ever advances, so every slot up to the
+    current one counts as released."""
+    prefix = f"{revision_id}:slot:"
+    if not question_id.startswith(prefix):
+        return SlotResolution(conflict_reason="question_not_in_run")
+    tail = question_id[len(prefix):]
+    if not tail.isdigit() or len(tail) > 4 or str(int(tail)) != tail:
+        return SlotResolution(conflict_reason="question_not_in_run")
+    index = int(tail)
+    if index > current_slot_index:
+        return SlotResolution(conflict_reason="slot_not_released")
+    return SlotResolution(slot_index=index)
 
 
 def is_content_reachable(*, run: ExamRun, attempt: Attempt, now: datetime) -> Optional[str]:

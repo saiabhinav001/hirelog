@@ -397,3 +397,47 @@ Implemented as [ADR 0021](../adr/0021-grounded-generation-and-versioned-review.m
 - **Publishing is blocked:** the preview lists each blocker; approve more variants, or accept the shortfall with a reason. An empty slot cannot be waived.
 - **Before a session:** publish, schedule, then **Assign variants**; re-running only fills gaps.
 - **Rollback:** the new fields are optional; reverting the code leaves them ignored. Candidates in `superseded` or `published` would be unknown statuses to the old code, so roll back before editing/publishing, or treat both as not servable.
+
+## 11. Prompt 6 migration notes
+
+Implemented as [ADR 0022](../adr/0022-student-attempts-gating-and-idempotent-submit.md). **No data migration or backfill is needed or performed**; no secrets or addresses were added.
+
+### 11.1 Configuration
+
+| Setting (exam API environment) | Default | Action |
+|---|---|---|
+| `EXAM_STUDENT_REVISIT_RELEASED_SLOTS` | `false` | On = a student may re-open questions they were already shown (`GET …/questions/{n}`); off keeps current-slot-only. Decide with the institution (D-3) before Prompt 7's navigator is used |
+| `EXAM_DRAFT_MAX_BYTES` | `100000` | Largest stored answer (`413 answer_too_large`); source-code answers are the largest in practice |
+
+### 11.2 Behavior changes teachers, students and integrators will see
+
+| Area | Before | Now |
+|---|---|---|
+| Submit retried after it committed | `409 attempt_not_in_progress` | `200` with the same receipt (same key); `409 already_submitted` (other key) |
+| Same key, different request | Not detected | `409 idempotency_key_reused` |
+| `PATCH …/drafts/{question_id}` with an unknown / future id | Created a draft | `404 question_not_in_run` / `403 slot_not_released` |
+| `GET …/drafts/{question_id}` with an unknown id | Empty draft | `404` / `403` |
+| `PATCH …/drafts/…` response | `{accepted, version}` | adds `replayed`; body accepts optional `client_save_id`, `client_epoch`, `marked_for_review` |
+| `GET …/drafts/{id}` response | `{version, answer}` | adds `marked_for_review` |
+| Public test run with an unknown / future id, or after sealing | Accepted (500 on a malformed id) | `404` / `403` |
+| Oversized answer | Stored (or 500 at the document limit) | `413` |
+
+Existing clients keep working: every new request field is optional. A client that has never sent `client_save_id` keeps the old "stale save = conflict" behavior.
+
+### 11.3 New routes (all under `/api/exams/v1/student`, behind the exam flag, student run scope, `no-store`)
+
+| Route | Purpose |
+|---|---|
+| `GET /runs/{id}/slots` | Navigator data for released slots (ids, answered, marked, version, locked count); no content |
+| `GET /runs/{id}/questions/{n}` | A released slot's question; earlier slots only with the flag; later slots `403 slot_not_released` |
+
+### 11.4 Data and schema
+
+- **Additive optional fields:** `SubmitReceipt.request_hash`; `Draft.marked_for_review`, `Draft.last_save_id`, `Draft.last_content_hash`. Old documents read as before (receipts without a hash are matched by key only).
+- No new collections or indexes. Seals now read the draft subcollection inside the transaction (a collection read, no new index).
+
+### 11.5 Operator procedures
+
+- **A student reports "submit failed":** ask them to reload; the page shows the receipt if the first submit committed. Support can read the receipt with the same key; a new key will answer `already_submitted`.
+- **Grading skipped a draft:** a draft id that is not a slot id is logged and skipped (`draft id … is not a slot id`); drafts written before this change under an invalid id are left in place.
+- **Rollback:** the new fields are optional and ignored by the previous code; reverting restores the old (weaker) retry and slot behavior. Do not roll back mid-exam: the old code answers a retried submit with a conflict.

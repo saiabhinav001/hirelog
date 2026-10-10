@@ -72,11 +72,12 @@ def raise_for_domain_error(exc: Exception) -> None:
 def raise_for_conflict_reason(reason: str) -> None:
     """Maps a `decisions.py` conflict_reason string (submit/draft-save/content
     gating) to an HTTP response."""
-    not_found_like = {"attempt_not_in_progress", "attempt_not_active"}
-    forbidden_like = {"attempt_blocked", "run_not_released"}
+    forbidden_like = {"attempt_blocked", "run_not_released", "slot_not_released"}
     status_code = status.HTTP_409_CONFLICT
     if reason in forbidden_like:
         status_code = status.HTTP_403_FORBIDDEN
-    elif reason in not_found_like:
-        status_code = status.HTTP_409_CONFLICT
+    elif reason == "question_not_in_run":
+        status_code = status.HTTP_404_NOT_FOUND
+    elif reason == "answer_too_large":
+        status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
     raise HTTPException(status_code=status_code, detail={"code": reason})

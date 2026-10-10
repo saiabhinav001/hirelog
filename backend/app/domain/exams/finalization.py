@@ -114,7 +114,7 @@ class ExamFinalizationSweeper:
             if attempt is None:
                 return False
 
-            versions = self._drafts.all_versions(run_id, uid)
+            versions = self._drafts.all_versions_in_transaction(transaction, run_id, uid)
             decision = decide_seal_on_expiry(attempt=attempt, now=now, current_draft_versions=versions)
             if decision is None:
                 return False
