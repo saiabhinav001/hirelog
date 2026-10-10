@@ -289,7 +289,7 @@ def _run_generation(
         item_type=slot.item_type, difficulty=slot.difficulty, marks=slot.marks, target_minutes=slot.target_minutes,
         requested_variant_count=slot.requested_variant_count, permitted_languages=slot.permitted_languages,
         approved_source_bundle=[a.model_dump(mode="json") for a in bundle.anchors], deterministic_seed=seed,
-        created_by=user["uid"], now=now,
+        created_by=user["uid"], now=now, family_constraints=slot.family_constraints,
     ).model_copy(update={
         "source_versions": bundle.source_versions, "excluded_anchors": bundle.excluded, "bundle_sha256": bundle.sha256,
         "shuffle_options": blueprint.shuffle_options, "regenerates_candidate_id": regenerates_candidate_id,

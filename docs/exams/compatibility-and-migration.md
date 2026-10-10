@@ -592,3 +592,18 @@ The student client already retries draft saves with the same save id; with the 5
 
 ### 16.3 Rollback
 Revert the commit: the handlers and the ops route are additive. `next` can be returned to 16.2.10 through `package.json` / the lockfile, but that reintroduces two critical advisories — do not do so on a Windows-hosted server.
+
+## 17. Backend prompt A (generation prompt v2) migration notes
+
+No ADR (a prompt revision plus additive optional fields). **No data migration, backfill, collection or index change.**
+
+| Area | Before | Now |
+|---|---|---|
+| System prompt | `generation-prompt-a-v1` | `generation-prompt-a-v2` is the default for new requests. It follows the pack's current wording and pins the exact field shapes `validation.py` reads (option objects, comma-separated multi-select key, short-answer rubric total, coding per-language solutions and test-group shape, envelope with `shortfall`/`issues`). V1 stays in the code; the HTTP adapter sends the text matching `request.prompt_version` and refuses an unknown version before calling the provider |
+| Stored requests | `prompt_version` v1 | Unchanged; they keep v1 provenance and replay with the v1 text |
+| Blueprint slot | no family limits | Optional `family_constraints` (`required_techniques` ≤10, `forbidden_topics` ≤20, `input_bounds`, `expected_complexity`, `parameter_ranges` ≤20, text bounded, unknown keys rejected). Absent = earlier behaviour. Sent to the provider only when set; `forbidden_topics` is also checked locally (major issue when the prompt or an option mentions one) |
+| Candidate | provider notes dropped | `variant_parameters`, `assumptions`, `provider_concerns` stored for the reviewer. Concerns also appear as `minor` issues. They never block, never change status and never reach students (verified by test). Old candidates read with empty defaults |
+| Coding candidate | no check of the contract | `minor` note when `constraints` lacks `input_output_spec` or `complexity`. `constraints` is student-visible, so boundary cases are asked for as hidden test groups and the resource rationale as `private_explanation` |
+| SQL items | n/a | Still unsupported (`ItemType` has no SQL value; decision D-5). A provider returning `item_type: "sql"` is recorded as a malformed candidate |
+
+Client guidance: the blueprint API accepts `family_constraints` on explicit slots; the faculty blueprint screen does not expose it yet. Rollback: revert the commit. `BlueprintSlot` forbids unknown keys, so older code cannot read a blueprint whose slot carries `family_constraints`; before reverting, recreate any such blueprint without them (candidate fields are tolerated as extra keys only if the reader ignores them, which the current models do not guarantee, so treat candidates generated under v2 the same way).

@@ -216,6 +216,7 @@ def new_generation_request(
     deterministic_seed: int,
     created_by: str,
     now: datetime,
+    family_constraints=None,
 ) -> GenerationRequest:
     return GenerationRequest(
         id=uuid4().hex,
@@ -228,6 +229,7 @@ def new_generation_request(
         target_minutes=target_minutes,
         requested_variant_count=requested_variant_count,
         permitted_languages=permitted_languages,
+        family_constraints=family_constraints,
         approved_source_bundle=approved_source_bundle,
         deterministic_seed=deterministic_seed,
         created_by=created_by,

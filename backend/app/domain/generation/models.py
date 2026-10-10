@@ -40,6 +40,31 @@ class CandidateStatus(str, Enum):
 TERMINAL_CANDIDATE_STATUSES = frozenset({CandidateStatus.PUBLISHED, CandidateStatus.REJECTED, CandidateStatus.SUPERSEDED})
 
 
+class FamilyConstraints(BaseModel):
+    """Faculty-authored limits on a slot's question family (Backend prompt A inputs).
+
+    Optional and bounded. Sent to the provider as constraints (not as source
+    text); `forbidden_topics` is also enforced locally on every candidate.
+    """
+
+    required_techniques: list[str] = Field(default_factory=list, max_length=10)
+    forbidden_topics: list[str] = Field(default_factory=list, max_length=20)
+    input_bounds: Optional[str] = Field(default=None, max_length=500)
+    expected_complexity: Optional[str] = Field(default=None, max_length=200)
+    parameter_ranges: dict[str, str] = Field(default_factory=dict, max_length=20)
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _bounded_text(self):
+        for label, values in (("required_techniques", self.required_techniques), ("forbidden_topics", self.forbidden_topics)):
+            if any((not isinstance(v, str)) or not v.strip() or len(v) > 200 for v in values):
+                raise ValueError(f"{label} entries must be non-empty text of at most 200 characters")
+        if any(len(str(k)) > 60 or len(str(v)) > 200 for k, v in self.parameter_ranges.items()):
+            raise ValueError("parameter_ranges keys must be at most 60 and values at most 200 characters")
+        return self
+
+
 class BlueprintSlot(BaseModel):
     slot_index: int = Field(ge=0)
     item_type: ItemType
@@ -54,6 +79,8 @@ class BlueprintSlot(BaseModel):
     # EXAM_NEGATIVE_MARKING_ENABLED is set, because grading does not apply them
     # until the scoring semantics are decided.
     negative_marks: float = Field(default=0, ge=0)
+    # Backend prompt A: optional family limits; None reproduces earlier behaviour.
+    family_constraints: Optional[FamilyConstraints] = None
 
     model_config = {"extra": "forbid"}
 
@@ -113,6 +140,7 @@ class GenerationRequest(BaseModel):
     target_minutes: int
     requested_variant_count: int = Field(ge=1, le=50)
     permitted_languages: list[str] = Field(default_factory=list)
+    family_constraints: Optional[FamilyConstraints] = None
     approved_source_bundle: list[SourceAnchorWithExcerpt] = Field(default_factory=list)
     deterministic_seed: int
     created_by: str
@@ -121,7 +149,7 @@ class GenerationRequest(BaseModel):
     attempts: int = 0
     last_error: Optional[str] = None
     model_name: Optional[str] = None
-    prompt_version: str = "generation-prompt-a-v1"
+    prompt_version: str = "generation-prompt-a-v2"  # v1 requests already stored keep their provenance
     cost_estimate: Optional[float] = None
     # Prompt 5 (ADR 0021): provider metadata, set after the call (the job id is `id`).
     provider_name: Optional[str] = None
@@ -194,6 +222,11 @@ class GenerationCandidate(BaseModel):
     hidden_test_groups: list = Field(default_factory=list)
     supporting_anchors: list[SourceAnchorRef] = Field(default_factory=list)
     equivalence_rationale: str = ""
+    # Backend prompt A: provider-reported notes for the reviewer. Informational only - never
+    # served to students and never able to change status. Concerns also appear as minor issues.
+    variant_parameters: dict = Field(default_factory=dict)
+    assumptions: list[str] = Field(default_factory=list)
+    provider_concerns: list[str] = Field(default_factory=list)
     status: CandidateStatus = CandidateStatus.DRAFT
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
     created_at: datetime

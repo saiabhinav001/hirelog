@@ -49,6 +49,10 @@ def _major(field: str, reason: str) -> ValidationIssue:
     return ValidationIssue(severity="major", field=field, reason=reason)
 
 
+def _minor(field: str, reason: str) -> ValidationIssue:
+    return ValidationIssue(severity="minor", field=field, reason=reason)
+
+
 # -- text similarity ---------------------------------------------------------------------------
 
 def prompt_shingles(text: str, size: int = 3) -> frozenset[str]:
@@ -98,6 +102,27 @@ def _option_problems(options: list) -> tuple[list[ValidationIssue], list[str]]:
 
 def _parse_expected_keys(expected: Optional[str]) -> list[str]:
     return [part.strip() for part in (expected or "").split(",") if part.strip()]
+
+
+_MAX_NOTES = 20
+_MAX_NOTE_CHARS = 500
+_CODING_CONTRACT_KEYS = ("input_output_spec", "complexity")  # `constraints` is student-visible: no boundary cases here
+
+
+def _text_list(value) -> list[str]:
+    """Provider-reported notes: a bounded list of short strings; anything else is ignored."""
+    if not isinstance(value, list):
+        return []
+    return [str(v).strip()[:_MAX_NOTE_CHARS] for v in value if isinstance(v, (str, int, float)) and str(v).strip()][:_MAX_NOTES]
+
+
+def _forbidden_topic_hits(candidate: GenerationCandidate, request: GenerationRequest) -> list[str]:
+    constraints = request.family_constraints
+    if constraints is None or not constraints.forbidden_topics:
+        return []
+    option_text = " ".join(str(o.get("text", "")) for o in candidate.options if isinstance(o, dict))
+    haystack = f"{candidate.public_prompt} {option_text}".lower()
+    return [topic for topic in constraints.forbidden_topics if topic.strip().lower() in haystack]
 
 
 def _test_group_problems(field: str, groups: list) -> list[ValidationIssue]:
@@ -184,6 +209,9 @@ def check_item_consistency(candidate: GenerationCandidate, request: GenerationRe
             issues.append(_major("hidden_test_groups", "no hidden test groups supplied; grading would only see the public tests"))
         issues += _test_group_problems("public_tests", candidate.public_tests)
         issues += _test_group_problems("hidden_test_groups", candidate.hidden_test_groups)
+        missing = [key for key in _CODING_CONTRACT_KEYS if not candidate.constraints.get(key)]
+        if missing:
+            issues.append(_minor("constraints", f"coding contract is missing {missing}"))
     return issues, normalised
 
 
@@ -233,6 +261,12 @@ def validate_candidate(
         issues.append(_major("marks", f"expected {request.marks}, got {candidate.marks}"))
     if candidate.item_type.value != request.item_type.value:
         issues.append(_blocker("item_type", "does not match the requested item type"))
+
+    # Faculty-set family limits and provider-reported doubts (informational: they never block by themselves).
+    for topic in _forbidden_topic_hits(candidate, request):
+        issues.append(_major("public_prompt", f"mentions the forbidden topic {topic!r}"))
+    for concern in candidate.provider_concerns:
+        issues.append(_minor("provider_concern", concern))
 
     # Structural only: nothing here executes code. Execution belongs to the isolated judge (decision D-5).
     item_issues, normalised = check_item_consistency(candidate, request)
@@ -299,6 +333,9 @@ def validate_candidate_dict(
                 for a in (raw.get("supporting_anchors") or [])
             ],
             equivalence_rationale=str(raw.get("equivalence_rationale", "")),
+            variant_parameters=raw.get("variant_parameters") if isinstance(raw.get("variant_parameters"), dict) else {},
+            assumptions=_text_list(raw.get("assumptions")),
+            provider_concerns=_text_list(raw.get("validation_concerns")),
             status=CandidateStatus.DRAFT,  # NEVER read from `raw` - see module docstring
             created_at=now,
         )

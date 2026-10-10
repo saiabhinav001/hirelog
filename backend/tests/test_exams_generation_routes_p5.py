@@ -156,6 +156,36 @@ def test_explicit_slots_must_have_contiguous_indexes(api) -> None:
     assert response.status_code == 422 and response.json()["detail"]["code"] == "slot_indexes"
 
 
+def _explicit_slot(**extra) -> dict:
+    return {"slot_index": 0, "item_type": "single_choice", "objective_ids": ["o"], "difficulty": "easy", "marks": 1,
+            "target_minutes": 2, "requested_variant_count": 1, **extra}
+
+
+def test_slot_family_constraints_are_stored_and_reach_the_provider_request(api) -> None:
+    _seed_source(api)
+    constraints = {"required_techniques": ["definition recall"], "forbidden_topics": ["chlorophyll b"], "input_bounds": "one sentence"}
+    created = api.client.post(f"{BASE}/blueprints", json={
+        "exam_definition_id": _definition(api), "title": "t", "slots": [_explicit_slot(family_constraints=constraints)],
+    })
+    assert created.status_code == 200, created.text
+    blueprint_id = created.json()["id"]
+    assert created.json()["slots"][0]["family_constraints"]["forbidden_topics"] == ["chlorophyll b"]
+
+    assert _generate(api, blueprint_id).status_code == 200
+    sent = api.provider.requests[-1]
+    assert sent.family_constraints is not None and sent.family_constraints.required_techniques == ["definition recall"]
+    stored = api.repo.get_request(api.repo.list_candidates_by_blueprint(blueprint_id)[0].request_id)
+    assert stored.family_constraints.forbidden_topics == ["chlorophyll b"] and stored.prompt_version == "generation-prompt-a-v2"
+
+
+def test_slot_family_constraints_reject_unknown_or_oversized_values(api) -> None:
+    for bad in ({"surprise": 1}, {"forbidden_topics": ["x" * 201]}, {"required_techniques": ["t"] * 11}):
+        response = api.client.post(f"{BASE}/blueprints", json={
+            "exam_definition_id": _definition(api), "title": "t", "slots": [_explicit_slot(family_constraints=bad)],
+        })
+        assert response.status_code == 422, bad
+
+
 # -- grounded generation ------------------------------------------------------------------------
 
 def test_generation_sends_real_excerpts_with_exact_anchors_and_records_everything(api) -> None:

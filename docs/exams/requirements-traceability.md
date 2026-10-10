@@ -615,7 +615,7 @@ Defects found while implementing: P11-1 .. P11-5 in the report (§4).
 
 | Prompt | Where implemented | Status |
 |---|---|---|
-| A — structured question generation | `generation/provider.py` (`GENERATION_SYSTEM_PROMPT_A_V1`, `DeterministicFakeProvider`, `HttpGenerationProviderAdapter`) | PARTIALLY_EXISTS — see GEN-03 (placeholder excerpts), GEN-05, GEN-07 |
+| A — structured question generation | `generation/provider.py` (`GENERATION_SYSTEM_PROMPT_A_V2` default, V1 retained; `DeterministicFakeProvider`, `HttpGenerationProviderAdapter`), `FamilyConstraints` on `BlueprintSlot`, provider notes on `GenerationCandidate`, `generation/validation.py` | PARTIALLY_EXISTS — v2 prompt, family constraints (API only, no faculty UI) and reviewer notes done (compat §17); SQL items unsupported (D-5); no real provider exercised; see GEN-03, GEN-05, GEN-07 |
 | B — independent review | `generation/independent_review*.py` | EXISTS_AND_VERIFIED (GEN-06) |
 | C — learning feedback | `gradebook/feedback_*.py` | EXISTS_AND_VERIFIED (GEN-10) |
 
