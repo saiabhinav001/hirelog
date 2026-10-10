@@ -17,15 +17,25 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.domain.gradebook.errors import ResultsNotReleasedError
 from app.domain.gradebook.feedback_provider import (
+    MAX_GAPS,
+    MAX_MISSING_MATERIAL,
+    MAX_PRACTICE_STEPS,
+    MAX_STRENGTHS,
     FeedbackProvider,
     FeedbackProviderResult,
     sanitize_feedback_result,
 )
-from app.domain.gradebook.models import FailureCategory, LearningFeedback, QuestionOutcome, StudentGradebookRow
+from app.domain.gradebook.models import (
+    FailureCategory,
+    LearningFeedback,
+    PracticeStep,
+    QuestionOutcome,
+    StudentGradebookRow,
+    StudentQuestionResult,
+)
 from app.domain.gradebook.aggregation_service import GradebookAggregationService
-from app.domain.gradebook.repository import ReleaseRecordRepository
+from app.domain.gradebook.release_service import GradebookReleaseService
 
 _FAILURE_HINTS: dict[FailureCategory, str] = {
     FailureCategory.COMPILE_ERROR: "Your submission didn't compile/parse — re-check syntax before submitting.",
@@ -42,43 +52,59 @@ def _utc_now() -> datetime:
 
 
 def build_learning_feedback(
-    row: StudentGradebookRow, *, run_id: str, supporting_anchors_by_question: dict[str, list[str]]
+    row: StudentGradebookRow, *, run_id: str, supporting_anchors_by_question: dict[str, list[str]],
+    objective_ids_by_question: dict[str, list[str]] | None = None,
 ) -> LearningFeedback:
     """Pure — takes an already-built gradebook row (itself already
     release-gated by the caller) and produces template-based feedback.
     PENDING questions are silently excluded: grading isn't final, so there
-    is nothing honest to say about them yet."""
+    is nothing honest to say about them yet. At most `MAX_GAPS` gaps are
+    reported, the ones that cost the most marks first, and the practice
+    steps, anchors and missing-material notes follow those gaps."""
+    objectives = objective_ids_by_question or {}
     strengths: list[str] = []
-    gaps: list[str] = []
-    practice_steps: list[str] = []
-    source_anchors: list[str] = []
-    missing_material: list[str] = []
+    gaps: list[tuple[float, str, str, StudentQuestionResult]] = []
 
     for qr in row.question_results:
         label = f"Question {qr.slot_index + 1}"
-        anchors = supporting_anchors_by_question.get(qr.question_id, [])
-
         if qr.outcome == QuestionOutcome.FULLY_SOLVED:
             strengths.append(f"{label}: fully solved ({qr.weighted_score:g}/{qr.max_score:g}).")
-            continue
-        if qr.outcome == QuestionOutcome.PENDING:
-            continue
-
-        if qr.outcome == QuestionOutcome.PARTIALLY_SOLVED:
-            gaps.append(f"{label}: partially solved ({qr.weighted_score:g}/{qr.max_score:g}).")
-            if qr.failure_category and qr.failure_category != FailureCategory.NONE:
-                practice_steps.append(_FAILURE_HINTS[qr.failure_category])
+        elif qr.outcome == QuestionOutcome.PARTIALLY_SOLVED:
+            gaps.append((qr.max_score - qr.weighted_score, label, f"{label}: partially solved ({qr.weighted_score:g}/{qr.max_score:g}).", qr))
         elif qr.outcome == QuestionOutcome.BLANK:
-            gaps.append(f"{label}: not attempted.")
+            gaps.append((qr.max_score - qr.weighted_score, label, f"{label}: not attempted.", qr))
 
+    gap_lines: list[str] = []
+    practice_steps: list[str] = []
+    practice_sequence: list[PracticeStep] = []
+    source_anchors: list[str] = []
+    missing_material: list[str] = []
+    for _lost, label, line, qr in sorted(gaps, key=lambda g: -g[0])[:MAX_GAPS]:
+        gap_lines.append(line)
+        question_objectives = objectives.get(qr.question_id, [])
+        hint = None
+        if qr.outcome == QuestionOutcome.PARTIALLY_SOLVED and qr.failure_category and qr.failure_category != FailureCategory.NONE:
+            hint = _FAILURE_HINTS[qr.failure_category]
+        if question_objectives:
+            step = hint or "Review the supporting material for this objective, then retry a similar question."
+            for objective_id in question_objectives:
+                practice_sequence.append(PracticeStep(objective_id=objective_id, step=step))
+                practice_steps.append(f"Objective {objective_id}: {step}")
+        elif hint:
+            practice_steps.append(hint)
+
+        anchors = supporting_anchors_by_question.get(qr.question_id, [])
         if anchors:
             source_anchors.extend(anchors)
         else:
-            missing_material.append(f"{label}: no supporting material on file to recommend.")
+            where = f" (objective {', '.join(question_objectives)})" if question_objectives else ""
+            missing_material.append(f"{label}{where}: no supporting material on file to recommend.")
 
     return LearningFeedback(
-        run_id=run_id, uid=row.uid, strengths=strengths, gaps=gaps, practice_steps=practice_steps,
-        source_anchors=sorted(set(source_anchors)), missing_material=missing_material, generated_at=_utc_now(),
+        run_id=run_id, uid=row.uid, strengths=strengths[:MAX_STRENGTHS], gaps=gap_lines,
+        practice_steps=practice_steps[:MAX_PRACTICE_STEPS], practice_sequence=practice_sequence[:MAX_PRACTICE_STEPS],
+        source_anchors=sorted(set(source_anchors)), missing_material=missing_material[:MAX_MISSING_MATERIAL],
+        generated_at=_utc_now(),
     )
 
 
@@ -95,11 +121,15 @@ class TemplateFeedbackProvider:
         anchors_by_question: dict[str, list[str]],
         objective_ids_by_question: dict[str, list[str]],
     ) -> FeedbackProviderResult:
-        feedback = build_learning_feedback(row, run_id=run_id, supporting_anchors_by_question=anchors_by_question)
+        feedback = build_learning_feedback(
+            row, run_id=run_id, supporting_anchors_by_question=anchors_by_question,
+            objective_ids_by_question=objective_ids_by_question,
+        )
         return FeedbackProviderResult(
             strengths=feedback.strengths,
             gaps=feedback.gaps,
             practice_steps=feedback.practice_steps,
+            practice_sequence=feedback.practice_sequence,
             source_anchors=feedback.source_anchors,
             missing_material=feedback.missing_material,
         )
@@ -108,16 +138,14 @@ class TemplateFeedbackProvider:
 class FeedbackService:
     def __init__(self, db, provider: FeedbackProvider | None = None) -> None:
         self._db = db
-        self._releases = ReleaseRecordRepository(db)
+        self._release_service = GradebookReleaseService(db)
         self._aggregation = GradebookAggregationService(db)
         self._provider = provider or TemplateFeedbackProvider()
 
     def build_feedback_for_student(self, run_id: str, uid: str) -> LearningFeedback:
-        if self._releases.latest_for_run(run_id) is None:
-            raise ResultsNotReleasedError(f"run {run_id} results have not been released yet")
-
-        run, revision = self._aggregation.get_run_and_revision(run_id)
-        row = self._aggregation.build_student_row(run, revision, uid)
+        # The frozen row of the latest release, exactly what /results shows - never the live gradebook,
+        # so a later regrade or defective-question resolution cannot leak into feedback before it is released.
+        row, _release = self._release_service.student_result(run_id, uid)
 
         anchors_by_question: dict[str, list[str]] = {}
         objective_ids_by_question: dict[str, list[str]] = {}
@@ -129,24 +157,27 @@ class FeedbackService:
                 objective_ids_by_question[qr.question_id] = candidate.objective_ids
 
         known_anchor_ids = {anchor for anchors in anchors_by_question.values() for anchor in anchors}
+        known_objective_ids = {o for objectives in objective_ids_by_question.values() for o in objectives}
+        from_model = not isinstance(self._provider, TemplateFeedbackProvider)
         try:
             result = self._provider.generate_feedback(
                 row, run_id=run_id, anchors_by_question=anchors_by_question,
                 objective_ids_by_question=objective_ids_by_question,
             )
         except Exception:
-            # A configured-but-unavailable/unimplemented real provider must
-            # never break this student-facing page — always fall back to
-            # the always-correct template (contract: this feature is a
-            # supplementary enhancement, never a hard dependency).
+            # A configured-but-unavailable real provider must never break this student-facing page:
+            # fall back to the deterministic template (supplementary enhancement, never a hard dependency).
+            from_model = False
             result = TemplateFeedbackProvider().generate_feedback(
                 row, run_id=run_id, anchors_by_question=anchors_by_question,
                 objective_ids_by_question=objective_ids_by_question,
             )
 
-        sanitized, _fabricated_anchor_warnings = sanitize_feedback_result(result, known_anchor_ids=known_anchor_ids)
+        sanitized, _warnings = sanitize_feedback_result(
+            result, known_anchor_ids=known_anchor_ids, known_objective_ids=known_objective_ids if from_model else None,
+        )
         return LearningFeedback(
             run_id=run_id, uid=uid, strengths=sanitized.strengths, gaps=sanitized.gaps,
-            practice_steps=sanitized.practice_steps, source_anchors=sanitized.source_anchors,
-            missing_material=sanitized.missing_material, generated_at=_utc_now(),
+            practice_steps=sanitized.practice_steps, practice_sequence=sanitized.practice_sequence,
+            source_anchors=sanitized.source_anchors, missing_material=sanitized.missing_material, generated_at=_utc_now(),
         )

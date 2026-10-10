@@ -617,7 +617,7 @@ Defects found while implementing: P11-1 .. P11-5 in the report (§4).
 |---|---|---|
 | A — structured question generation | `generation/provider.py` (`GENERATION_SYSTEM_PROMPT_A_V2` default, V1 retained; `DeterministicFakeProvider`, `HttpGenerationProviderAdapter`), `FamilyConstraints` on `BlueprintSlot`, provider notes on `GenerationCandidate`, `generation/validation.py` | PARTIALLY_EXISTS — v2 prompt, family constraints (API only, no faculty UI) and reviewer notes done (compat §17); SQL items unsupported (D-5); no real provider exercised; see GEN-03, GEN-05, GEN-07 |
 | B — independent review | `generation/independent_review*.py` | EXISTS_AND_VERIFIED (GEN-06); prompt v2, evidence flag, unexecuted-check record and sibling variants added (compat §18) |
-| C — learning feedback | `gradebook/feedback_*.py` | EXISTS_AND_VERIFIED (GEN-10) |
+| C — learning feedback | `gradebook/feedback_*.py` | EXISTS_AND_VERIFIED (GEN-10) for the template path; EXISTS_BUT_DEFECTIVE fixed: it read the live gradebook instead of the released row. Prompt v2, caps, objective-mapped practice steps and a working HTTP adapter added (compat §19). Faculty-approved feedback facts and study links are not modelled |
 
 ## 14. Decisions required (referenced above)
 

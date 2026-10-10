@@ -289,6 +289,24 @@ def test_a_regrade_after_release_creates_a_new_version_with_lineage_and_students
     assert v1_rows[0]["row"]["raw_score"] == 0.0
 
 
+def test_learning_feedback_follows_the_released_row_not_the_live_regrade(world) -> None:
+    world.grade_everyone()
+    world.review_short_answers(4.0)
+    world.release(acknowledge=False)
+    feedback = lambda: world.student("s2").client.get(f"{STUDENT}/runs/{RUN}/feedback")  # noqa: E731
+
+    before = feedback()
+    assert before.status_code == 200 and before.headers["cache-control"] == "no-store"
+    assert not any("Question 1: fully solved" in s for s in before.json()["strengths"])
+
+    JudgeService(world.env.db, None).regrade_mcq(run_id=RUN, uid="s2", question_id=Q0, reviewer="owner", correct=True, reason="key was ambiguous")
+    assert _rows(world)["s2"]["raw_score"] == 2.0  # live gradebook already moved
+    assert feedback().json()["strengths"] == before.json()["strengths"]  # the student's feedback has not
+
+    world.release(note="Q1 key was ambiguous; s2 regraded.", acknowledge=False)
+    assert any("Question 1: fully solved" in s for s in feedback().json()["strengths"])
+
+
 def test_a_defective_question_fix_reaches_students_only_with_a_new_release(world) -> None:
     world.grade_everyone()
     world.review_short_answers(4.0)

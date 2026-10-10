@@ -623,3 +623,20 @@ No ADR. **No data migration, backfill, collection or index change**; every new f
 | SQL items | n/a | Not reviewable until a SQL item type exists (decision D-5) |
 
 Rollback: revert the commit. `GenerationCandidate` and `IndependentReviewIssue` declare no `extra="forbid"`, so older code should read stored v2 reviews and ignore the new keys; this was not tested against the previous commit.
+
+## 19. Backend prompt C (learning feedback prompt v2) migration notes
+
+No ADR. **No data migration, backfill, collection or index change**: feedback is computed on request and never stored.
+
+| Area | Before | Now |
+|---|---|---|
+| Data source (defect) | `GET /api/exams/v1/student/gradebook/runs/{run_id}/feedback` checked that a release existed, then rebuilt the student's row from the **live** gradebook. A regrade or defective-question fix made after a release showed up in feedback before it was released, while `/results` still showed the earlier release | Feedback is built from the same frozen row `/results` serves (`GradebookReleaseService.student_result`); releases made before snapshots existed are served live exactly as `/results` does. A test proves feedback only changes after the re-release |
+| Size | Every unsolved question was a gap | At most 3 gaps (largest mark loss first), 5 strengths, 5 practice steps, 5 missing-material notes. Practice steps, anchors and missing-material follow the kept gaps |
+| Practice sequence | Free-text `practice_steps` | `practice_steps` is unchanged for existing clients; the new optional `practice_sequence` (`[{objective_id, step}]`) maps each step to an objective ID taken from the question's own record. Missing-material notes now name the objective |
+| Model output | Only unknown anchor IDs were stripped | When a provider is configured, its output is also length-capped, practice steps naming an unsupplied objective are dropped, free-text steps with no objective are discarded, and text alleging misconduct, naming AI use, other students or hidden tests is dropped. The deterministic template output is not filtered this way |
+| Prompt | `GENERATION_SYSTEM_PROMPT_C_V1` (retained) | `GENERATION_SYSTEM_PROMPT_C_V2` is sent with `prompt_version` `learning-feedback-prompt-c-v2` |
+| HTTP adapter | Configured but raised `NotImplementedError`, so every request fell back to the template | Posts through the same transport as generation and review. Any failure or malformed reply still falls back to the template. Tested against a mock transport only |
+| Defaults | Template provider | Unchanged: the HTTP adapter runs only when both `EXAM_FEEDBACK_PROVIDER_BASE_URL` and `EXAM_FEEDBACK_PROVIDER_API_KEY` are set |
+| Not modelled | n/a | Faculty-approved feedback facts and permitted study links do not exist in the data model; the prompt says they are used only when supplied, and nothing is sent for them |
+
+Rollback: revert the commit. The optional `practice_sequence` field is ignored by the existing student page, which renders `practice_steps`.

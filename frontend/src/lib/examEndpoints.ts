@@ -371,6 +371,7 @@ export type LearningFeedback = {
   strengths: string[];
   gaps: string[];
   practice_steps: string[];
+  practice_sequence?: { objective_id: string; step: string }[];
   source_anchors: string[];
   missing_material: string[];
   generated_at: string;

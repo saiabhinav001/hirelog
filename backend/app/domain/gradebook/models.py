@@ -227,6 +227,13 @@ class SimilarityMatch(BaseModel):
     computed_at: datetime
 
 
+class PracticeStep(BaseModel):
+    """One practice step tied to an objective ID that was supplied from the question's own record."""
+
+    objective_id: str = Field(max_length=100)
+    step: str = Field(max_length=300)
+
+
 class LearningFeedback(BaseModel):
     """Deterministic, rule-based — not a live LLM call (contract: 'Optional
     AI signals remain disabled until locally evaluated.'). Assembled only
@@ -238,6 +245,7 @@ class LearningFeedback(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     gaps: list[str] = Field(default_factory=list)
     practice_steps: list[str] = Field(default_factory=list)
+    practice_sequence: list[PracticeStep] = Field(default_factory=list)
     source_anchors: list[str] = Field(default_factory=list)
     missing_material: list[str] = Field(default_factory=list)
     generated_at: datetime
