@@ -232,7 +232,7 @@ D-9 short-link policy; **D-10 CI history (rebase or branch trigger)**; D-11 lega
 | G12 | Alerting wired to queue-health and `/health/ready`; on-call | Monitoring platform |
 | G13 | Cost measurements | Real billing data |
 | G14 | Real identity-provider and OTP delivery provider | D-6 |
-| G15 | Fresh final adversarial review at the HTTP / concurrent standard (the 2026-10 review had at least one wrong "verified" row) | After G1–G9 |
+| G15 | Fresh final adversarial review at the HTTP / concurrent standard (the 2026-10 review had at least one wrong "verified" row). **Partly met 2026-10-11** ([adversarial-review-report.md](adversarial-review-report.md)): in-memory HTTP probes of every route, one defect found and fixed; repeat at the real-staging standard | After G1–G9 |
 | G16 | Surface skipped-grading outbox entries (§5 finding) | Small code change |
 
 **Recommendation:** do not release. Proceed to a supervised staging qualification (G1–G9, G12, G14) with the institution's D-14 figure; re-assess after G15.
