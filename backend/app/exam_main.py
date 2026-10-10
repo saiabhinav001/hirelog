@@ -33,6 +33,8 @@ from app.api.routes import (
     exams_proctoring,
     exams_student,
 )
+from app.core import background
+from app.core.background import AdaptivePoller
 from app.core.config import settings
 from app.core.firebase import db
 from app.core.logging_config import configure_logging
@@ -43,21 +45,29 @@ from app.domain.exams.repository import OutboxRepository
 configure_logging(json_logs=settings.ENV.strip().lower() == "production")
 logger = logging.getLogger("hirelog.exams.api")
 
-_stop_event = threading.Event()
+_health_cache: dict = {}
 
 
-def _firestore_health_check() -> dict:
+def _firestore_health_check(*, use_cache: bool = True) -> dict:
     """Deliberately NOT importing `app.core.health_checks` here — that module
     pulls in `app.services.nlp`/`faiss_store` (spaCy/sentence-transformers/
     torch), the exact legacy startup weight this entry point exists to avoid.
     """
     import time as _time
 
+    now = _time.monotonic()
+    cached = _health_cache.get("ok")
+    if use_cache and cached and now - cached[0] < settings.EXAM_HEALTH_CACHE_SECONDS:
+        return cached[1]  # readiness probes must not burn free-tier reads
+
     started = _time.perf_counter()
     try:
-        db.collection("metadata").document("bootstrap").get()
-        return {"status": "ok", "latency_ms": round((_time.perf_counter() - started) * 1000.0, 2)}
+        db.collection("exam_health").document("ping").get()
+        report = {"status": "ok", "latency_ms": round((_time.perf_counter() - started) * 1000.0, 2)}
+        _health_cache["ok"] = (now, report)
+        return report
     except Exception as exc:  # noqa: BLE001
+        _health_cache.pop("ok", None)
         return {"status": "error", "detail": str(exc)}
 
 
@@ -110,7 +120,7 @@ def _similarity_provider():
     return DeterministicFakeSimilarityProvider()
 
 
-def _outbox_drain_loop() -> None:
+def _make_outbox_tick():
     from app.domain.judge.outbox_handler import GradingTriggerOutboxHandler
     from app.domain.judge.runtime_allowlist import default_allowlist
 
@@ -118,22 +128,24 @@ def _outbox_drain_loop() -> None:
     handler = CompositeOutboxHandler(
         [LoggingNoopHandler(), GradingTriggerOutboxHandler(db, _judge_provider(), default_allowlist())]
     )
-    while not _stop_event.is_set():
-        try:
-            drain_outbox_once(
-                repo,
-                handler,
-                now=system_clock.now(),
-                limit=25,
-                lease_seconds=settings.EXAM_OUTBOX_LEASE_SECONDS,
-                max_attempts=settings.EXAM_OUTBOX_MAX_ATTEMPTS,
-            )
-        except Exception:
-            logger.exception("exam outbox drain tick failed")
-        _stop_event.wait(2.0)
+
+    def tick() -> int:
+        handled = drain_outbox_once(
+            repo,
+            handler,
+            now=system_clock.now(),
+            limit=25,
+            lease_seconds=settings.EXAM_OUTBOX_LEASE_SECONDS,
+            max_attempts=settings.EXAM_OUTBOX_MAX_ATTEMPTS,
+        )
+        if handled:
+            background.wake("judge")  # the grading trigger just queued FINAL_GRADE submissions
+        return handled
+
+    return tick
 
 
-def _judge_sweep_loop() -> None:
+def _make_judge_sweep_tick():
     """Completes FINAL_GRADE submissions the outbox handler created (nobody
     polls those over HTTP) and any PUBLIC_RUN submission a student stopped
     polling (e.g. closed the tab) — bounded, idempotent, safe after a crash
@@ -141,33 +153,28 @@ def _judge_sweep_loop() -> None:
     from app.domain.judge.service import JudgeService
 
     service = JudgeService(db, _judge_provider())
-    while not _stop_event.is_set():
-        try:
-            service.sweep_pending_once(limit=25)
-        except Exception:
-            logger.exception("judge submission sweep tick failed")
-        _stop_event.wait(2.0)
+    return lambda: service.sweep_pending_once(limit=25)
 
 
-def _proctoring_stale_incident_sweep_loop() -> None:
+def _make_proctoring_sweep_tick():
     """Closes departure incidents for students who left the tab entirely
     without ever sending an end event — otherwise those incidents would
     stay open (and uncounted) forever."""
     from app.domain.proctoring.ledger_service import ProctoringLedgerService
 
     service = ProctoringLedgerService(db)
-    while not _stop_event.is_set():
-        try:
-            service.sweep_stale_incidents_once(
-                grace_seconds=settings.EXAM_PROCTORING_GRACE_SECONDS,
-                stale_after_seconds=settings.EXAM_PROCTORING_STALE_INCIDENT_SECONDS,
-            )
-        except Exception:
-            logger.exception("proctoring stale-incident sweep tick failed")
-        _stop_event.wait(15.0)
+
+    def tick() -> int:
+        closed = service.sweep_stale_incidents_once(
+            grace_seconds=settings.EXAM_PROCTORING_GRACE_SECONDS,
+            stale_after_seconds=settings.EXAM_PROCTORING_STALE_INCIDENT_SECONDS,
+        )
+        return closed or service.last_open_incident_count  # stay fast while incidents are still open
+
+    return tick
 
 
-def _evidence_retention_sweep_loop() -> None:
+def _make_retention_sweep_tick():
     """Deletes evidence (storage bytes + Firestore record together) once
     past the configured retention window — bounded, idempotent."""
     from app.api.routes.exams_proctoring import _storage
@@ -175,21 +182,40 @@ def _evidence_retention_sweep_loop() -> None:
     from app.domain.proctoring.retention import RetentionSweeper
 
     sweeper = RetentionSweeper(EvidenceService(db, _storage()))
-    while not _stop_event.is_set():
-        try:
-            sweeper.sweep_once(retention_days=settings.EXAM_EVIDENCE_RETENTION_DAYS, limit=100)
-        except Exception:
-            logger.exception("evidence retention sweep tick failed")
-        _stop_event.wait(3600.0)
+
+    def tick() -> bool:
+        sweeper.sweep_once(retention_days=settings.EXAM_EVIDENCE_RETENTION_DAYS, limit=100)
+        return False
+
+    return tick
+
+
+def start_background_workers() -> None:
+    """Free-tier friendly: each loop backs off while idle and is woken by
+    in-process work (see `app.core.background`)."""
+    workers = [
+        AdaptivePoller("outbox", _make_outbox_tick(), min_interval=settings.EXAM_OUTBOX_POLL_MIN_SECONDS,
+                       max_interval=settings.EXAM_OUTBOX_POLL_MAX_SECONDS),
+        AdaptivePoller("judge", _make_judge_sweep_tick(), min_interval=settings.EXAM_JUDGE_SWEEP_MIN_SECONDS,
+                       max_interval=settings.EXAM_JUDGE_SWEEP_MAX_SECONDS),
+        AdaptivePoller("proctoring", _make_proctoring_sweep_tick(), burst_seconds=180.0,
+                       min_interval=settings.EXAM_PROCTORING_SWEEP_MIN_SECONDS,
+                       max_interval=settings.EXAM_PROCTORING_SWEEP_MAX_SECONDS),
+        AdaptivePoller("retention", _make_retention_sweep_tick(), min_interval=3600.0, max_interval=3600.0),
+    ]
+    for worker in workers:
+        background.start_daemon(worker)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not settings.EXAMS_ENABLED:
         logger.warning("EXAMS_ENABLED is false — exam API is up but all mutating routes return 503")
+    if not settings.EXAM_STORAGE_BOUNDARY:
+        logger.warning("EXAM_STORAGE_BOUNDARY is off — exam code is NOT confined to exam collections")
 
     def _bg_bootstrap() -> None:
-        report = _firestore_health_check()
+        report = _firestore_health_check(use_cache=False)
         if report.get("status") == "ok":
             logger.info("Exam API: Firestore connection verified")
         else:
@@ -197,14 +223,11 @@ async def lifespan(app: FastAPI):
 
     threading.Thread(target=_bg_bootstrap, daemon=True).start()
     if settings.EXAMS_ENABLED:
-        threading.Thread(target=_outbox_drain_loop, daemon=True).start()
-        threading.Thread(target=_judge_sweep_loop, daemon=True).start()
-        threading.Thread(target=_proctoring_stale_incident_sweep_loop, daemon=True).start()
-        threading.Thread(target=_evidence_retention_sweep_loop, daemon=True).start()
+        start_background_workers()
 
     logger.info("Exam API startup complete — ENV=%s EXAMS_ENABLED=%s", settings.ENV, settings.EXAMS_ENABLED)
     yield
-    _stop_event.set()
+    background.stop_all()
     logger.info("Exam API shutting down")
 
 
@@ -244,7 +267,15 @@ def health_ready(response: FastAPIResponse) -> dict:
     ready = report.get("status") == "ok"
     if not ready:
         response.status_code = 503
-    return {"status": "ready" if ready else "degraded", "firestore": report, "exams_enabled": settings.EXAMS_ENABLED}
+    return {
+        "status": "ready" if ready else "degraded",
+        "firestore": report,
+        "exams_enabled": settings.EXAMS_ENABLED,
+        "storage_boundary": {
+            "enforced": settings.EXAM_STORAGE_BOUNDARY,
+            "collection_prefix": settings.EXAM_COLLECTION_PREFIX,
+        },
+    }
 
 
 app.include_router(exams_faculty.router)

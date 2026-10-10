@@ -63,6 +63,7 @@ class _FakeOutboxRepo:
         self._entries = {e.id: e for e in entries}
         self.processed_ids: list[str] = []
         self.failed_calls: list[tuple[str, int]] = []
+        self.dead_letter_calls: list[tuple[str, int]] = []
 
     def claim_batch(self, *, limit, lease_seconds, worker_id, now):
         return [e for e in self._entries.values() if not e.processed][:limit]
@@ -73,6 +74,10 @@ class _FakeOutboxRepo:
 
     def mark_failed(self, entry_id, *, error, attempts):
         self.failed_calls.append((entry_id, attempts))
+
+    def mark_dead_letter(self, entry_id, *, error, attempts, now):
+        self.dead_letter_calls.append((entry_id, attempts))
+        self._entries[entry_id].processed = True
 
 
 class _FailingHandler:
@@ -97,3 +102,15 @@ def test_drain_survives_handler_failure_and_records_attempt() -> None:
     assert handled == 0
     assert repo.failed_calls == [("e1", 1)]
     assert repo.processed_ids == []
+
+
+def test_drain_dead_letters_an_entry_that_exhausted_its_retries() -> None:
+    """A poisoned entry must leave the claimable set — otherwise it is
+    re-claimed and re-read forever and starves newer entries."""
+    entry = OutboxEntry(id="e1", kind="run_command", run_id="run-1", created_at=NOW, attempts=4)
+    repo = _FakeOutboxRepo([entry])
+    handled = drain_outbox_once(repo, _FailingHandler(), now=NOW, limit=10, max_attempts=5)
+    assert handled == 0
+    assert repo.dead_letter_calls == [("e1", 5)]
+    assert repo.failed_calls == []
+    assert repo.claim_batch(limit=10, lease_seconds=60, worker_id="w", now=NOW) == []

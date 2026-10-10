@@ -183,6 +183,39 @@ class Settings(BaseSettings):
     EXAM_JPLAG_JAR_PATH: Optional[str] = None
     EXAM_JPLAG_JAVA_EXECUTABLE: str = "java"
 
+    # ── Storage isolation (shared Firebase project) ──────────────────────────
+    # When true, the process may only touch the exam collections allow-listed
+    # in `app.core.exam_storage` (and only under EXAM_COLLECTION_PREFIX).
+    # `Dockerfile.exams` turns this on; the legacy API never does.
+    EXAM_STORAGE_BOUNDARY: bool = False
+    EXAM_COLLECTION_PREFIX: str = ""
+
+    # ── Firestore free-tier (Spark) budget controls ──────────────────────────
+    # Membership look-ups are cached per uid for this long, and invalidated
+    # immediately by any membership write made through this process. 0 disables.
+    EXAM_MEMBERSHIP_CACHE_TTL_SECONDS: float = 30.0
+    # Background loops back off exponentially while idle (and are woken by
+    # in-process work), instead of polling Firestore every couple of seconds.
+    EXAM_OUTBOX_POLL_MIN_SECONDS: float = 2.0
+    EXAM_OUTBOX_POLL_MAX_SECONDS: float = 120.0
+    EXAM_JUDGE_SWEEP_MIN_SECONDS: float = 2.0
+    EXAM_JUDGE_SWEEP_MAX_SECONDS: float = 120.0
+    EXAM_PROCTORING_SWEEP_MIN_SECONDS: float = 15.0
+    EXAM_PROCTORING_SWEEP_MAX_SECONDS: float = 300.0
+    EXAM_HEALTH_CACHE_SECONDS: float = 60.0
+    EXAM_DRAFT_MAX_BYTES: int = 65_536
+
+    # ── OTP delivery ─────────────────────────────────────────────────────────
+    # With none of these set, OTP challenges fail closed (503) rather than
+    # logging codes. EXAM_OTP_ALLOW_DEV_SINK is for local development only.
+    EXAM_OTP_SMTP_HOST: Optional[str] = None
+    EXAM_OTP_SMTP_PORT: int = 587
+    EXAM_OTP_SMTP_USERNAME: Optional[str] = None
+    EXAM_OTP_SMTP_PASSWORD: Optional[str] = None
+    EXAM_OTP_FROM_ADDRESS: Optional[str] = None
+    EXAM_OTP_SMTP_USE_SSL: bool = False
+    EXAM_OTP_ALLOW_DEV_SINK: bool = False
+
     @property
     def is_production(self) -> bool:
         return self.ENV == "production"

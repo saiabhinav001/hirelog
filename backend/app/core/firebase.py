@@ -64,10 +64,18 @@ _db = None
 
 
 def get_db() -> firestore.Client:
-    """Lazy Firestore client — initializes on first call."""
+    """Lazy Firestore client — initializes on first call. With
+    EXAM_STORAGE_BOUNDARY the client is wrapped so only allow-listed exam
+    collections can be opened (see `app.core.exam_storage`)."""
     global _db
     if _db is None:
-        _db = initialize_firebase()
+        client = initialize_firebase()
+        if settings.EXAM_STORAGE_BOUNDARY:
+            from app.core.exam_storage import ExamStorageBoundary
+
+            client = ExamStorageBoundary(client, prefix=settings.EXAM_COLLECTION_PREFIX)
+            logger.info("Exam storage boundary enforced (collection prefix %r)", settings.EXAM_COLLECTION_PREFIX)
+        _db = client
     return _db
 
 

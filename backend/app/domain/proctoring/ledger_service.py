@@ -38,6 +38,7 @@ class ProctoringLedgerService:
         self.log = IncidentLogRepository(db)
         self.attempts = AttemptRepository(db)
         self.runs = ExamRunRepository(db)
+        self.last_open_incident_count = 0
 
     def record_observation(
         self,
@@ -87,7 +88,9 @@ class ProctoringLedgerService:
         for students who left the tab entirely without an end event ever
         arriving (contract #11: durable/restart-safe workers)."""
         closed = 0
-        for state in self.states.list_open_incidents(limit=limit):
+        open_states = list(self.states.list_open_incidents(limit=limit))
+        self.last_open_incident_count = len(open_states)  # lets the poller stay fast while incidents are open
+        for state in open_states:
             run = self.runs.get(state.run_id)
             if run is None:
                 continue

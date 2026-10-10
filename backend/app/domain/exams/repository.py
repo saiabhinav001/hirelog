@@ -323,6 +323,16 @@ class OutboxRepository:
             {"attempts": attempts, "last_error": str(error)[:500]}
         )
 
+    def mark_dead_letter(self, entry_id: str, *, error: str, attempts: int, now: datetime) -> None:
+        """Retires an entry that exhausted its retries: it leaves the claimable
+        set (processed=True) but stays queryable via `dead_letter` for review."""
+        self._db.collection(OUTBOX_COLLECTION).document(entry_id).update(
+            {
+                "processed": True, "dead_letter": True, "processed_at": now.isoformat(),
+                "attempts": attempts, "last_error": str(error)[:500],
+            }
+        )
+
 
 def new_outbox_entry(*, kind: str, run_id: str, payload: dict, now: datetime) -> OutboxEntry:
     return OutboxEntry(id=uuid4().hex, kind=kind, run_id=run_id, payload=payload, created_at=now)

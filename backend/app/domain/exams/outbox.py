@@ -76,11 +76,13 @@ def drain_outbox_once(
         except Exception as exc:  # noqa: BLE001 - must not crash the drain loop
             attempts = entry.attempts + 1
             logger.exception("exam outbox handler failed for entry %s (attempt %d)", entry.id, attempts)
-            repo.mark_failed(entry.id, error=str(exc), attempts=attempts)
             if attempts >= max_attempts:
                 logger.critical(
-                    "exam outbox entry %s exceeded max_attempts=%d — needs manual review",
+                    "exam outbox entry %s exceeded max_attempts=%d — dead-lettered, needs manual review",
                     entry.id,
                     max_attempts,
                 )
+                repo.mark_dead_letter(entry.id, error=str(exc), attempts=attempts, now=now)
+            else:
+                repo.mark_failed(entry.id, error=str(exc), attempts=attempts)
     return handled
