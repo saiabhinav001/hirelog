@@ -607,3 +607,19 @@ No ADR (a prompt revision plus additive optional fields). **No data migration, b
 | SQL items | n/a | Still unsupported (`ItemType` has no SQL value; decision D-5). A provider returning `item_type: "sql"` is recorded as a malformed candidate |
 
 Client guidance: the blueprint API accepts `family_constraints` on explicit slots; the faculty blueprint screen does not expose it yet. Rollback: revert the commit. `BlueprintSlot` forbids unknown keys, so older code cannot read a blueprint whose slot carries `family_constraints`; before reverting, recreate any such blueprint without them (candidate fields are tolerated as extra keys only if the reader ignores them, which the current models do not guarantee, so treat candidates generated under v2 the same way).
+
+## 18. Backend prompt B (independent review prompt v2) migration notes
+
+No ADR. **No data migration, backfill, collection or index change**; every new field is optional with an empty default.
+
+| Area | Before | Now |
+|---|---|---|
+| Review prompt | `GENERATION_SYSTEM_PROMPT_B_V1` | `GENERATION_SYSTEM_PROMPT_B_V2` is sent (V1 retained). It follows the pack wording, describes the `solve` and `compare` stages, and pins the issue and result shapes. The review call now carries `prompt_version` (`independent-review-prompt-b-v2`), stored on the candidate as `independent_review_prompt_version` |
+| Fairness across variants | Not checkable | The review payload adds `sibling_variants`: public prompts of the other live variants in the slot (at most 8, 1000 characters each; never private data, never the candidate's own prompt). Held on a transient request field that is not persisted. Also sent when set: `family_constraints`, `options_will_be_shuffled` |
+| Issue evidence | Model-supplied or missing | The backend sets `evidence_missing` on any blocker or major issue left with neither a bundle-verified anchor nor a counterexample (after fabricated anchors are stripped). The flag is not model-settable. It does not change the status rule: any blocker still pulls a ready candidate back to `needs_revision`, so the reviewer sees the claim is unverified |
+| Unexecuted checks | Returned, then dropped | Stored (≤20, ≤500 characters each) as `independent_review_unexecuted_checks`. A coding review always records that reference solutions and tests were not executed by the review |
+| Free-form items | A missing reviewer answer passed silently | No independent answer on a short-answer or coding item makes the agreement `uncertain` and adds a major issue; status is unchanged because a human compares free-form answers. Choice items keep the existing deterministic key comparison |
+| Edits | Review fields reset | The two new review fields reset with the rest of the review on a new version |
+| SQL items | n/a | Not reviewable until a SQL item type exists (decision D-5) |
+
+Rollback: revert the commit. `GenerationCandidate` and `IndependentReviewIssue` declare no `extra="forbid"`, so older code should read stored v2 reviews and ignore the new keys; this was not tested against the previous commit.

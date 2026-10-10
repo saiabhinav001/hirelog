@@ -161,6 +161,8 @@ class GenerationRequest(BaseModel):
     shuffle_options: bool = False  # copied from the blueprint: validation must reject position-dependent options
     # Signatures already used in this blueprint, shown to the provider so it avoids them. Never persisted.
     previous_signatures: list[str] = Field(default_factory=list, exclude=True)
+    # Public prompts of the other live variants in the slot, shown to the independent reviewer only. Never persisted.
+    sibling_public_prompts: list[str] = Field(default_factory=list, exclude=True)
     source_versions: dict[str, int] = Field(default_factory=dict)  # source_id -> extracted version number sent
     excluded_anchors: list[dict] = Field(default_factory=list)  # {source_id, anchor_id, reason} withheld from the provider
     usage: dict = Field(default_factory=dict)  # provider-reported tokens/cost, opaque
@@ -185,6 +187,8 @@ class IndependentReviewIssue(BaseModel):
     reason: str
     source_anchor: Optional[SourceAnchorRef] = None
     counterexample: Optional[str] = None
+    # Set by the backend, never by the model: a blocker/major claim with no anchor and no counterexample.
+    evidence_missing: bool = False
 
 
 class GenerationCandidate(BaseModel):
@@ -242,6 +246,8 @@ class GenerationCandidate(BaseModel):
     independent_review_agreement: Optional[Literal["agree", "disagree", "uncertain"]] = None
     independent_review_issues: list[IndependentReviewIssue] = Field(default_factory=list)
     independent_review_completed_at: Optional[datetime] = None
+    independent_review_unexecuted_checks: list[str] = Field(default_factory=list)
+    independent_review_prompt_version: Optional[str] = None
     # Prompt 5 (ADR 0021): an edit never mutates a candidate; it creates the next version.
     version: int = 1
     previous_version_id: Optional[str] = None

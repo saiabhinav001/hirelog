@@ -15,6 +15,7 @@ from uuid import uuid4
 from app.domain.exams.clock import Clock, system_clock
 from app.domain.generation.independent_review import apply_independent_review
 from app.domain.generation.independent_review_provider import (
+    REVIEW_PROMPT_VERSION,
     IndependentReviewProvider,
     ReviewProviderError,
     ReviewProviderTimeoutError,
@@ -179,6 +180,9 @@ class IndependentReviewJobRunner:
             raise LookupError(f"generation request {candidate.request_id} not found")
 
         now = self._clock.now()
+        # Public prompts only, so the reviewer can judge fairness across variants.
+        siblings = sorted(p for cid, p in self._repo.live_prompts_for_slot(candidate.blueprint_id, candidate.slot_index).items() if cid != candidate.id)
+        request = request.model_copy(update={"sibling_public_prompts": siblings})
         try:
             result = self._provider.review(candidate, request)
         except ReviewProviderTimeoutError as exc:
@@ -191,7 +195,9 @@ class IndependentReviewJobRunner:
         known_anchors = {
             (anchor.source_id, anchor.source_version, anchor.anchor_id) for anchor in request.approved_source_bundle
         }
-        application = apply_independent_review(candidate, result, known_anchors=known_anchors, now=now)
+        application = apply_independent_review(
+            candidate, result, known_anchors=known_anchors, now=now, prompt_version=REVIEW_PROMPT_VERSION,
+        )
         self._repo.save_candidate(application.candidate)
         return IndependentReviewJobResult(
             status="succeeded",

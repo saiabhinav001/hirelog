@@ -15,6 +15,10 @@ from app.domain.generation.independent_review_provider import IndependentReviewR
 from app.domain.generation.models import CandidateStatus, GenerationCandidate, IndependentReviewIssue, ItemType, SourceAnchorRef
 
 
+_MAX_NOTES = 20
+_MAX_NOTE_CHARS = 500
+
+
 @dataclass(frozen=True)
 class IndependentReviewApplication:
     candidate: GenerationCandidate
@@ -27,6 +31,7 @@ def apply_independent_review(
     *,
     known_anchors: set[tuple[str, int, str]],
     now: datetime,
+    prompt_version: Optional[str] = None,
 ) -> IndependentReviewApplication:
     """`known_anchors` is the set of (source_id, source_version, anchor_id)
     triples actually supplied to the provider — any `source_anchor` an issue
@@ -48,7 +53,8 @@ def apply_independent_review(
                     f"independent review cited a source anchor not in the supplied bundle: {anchor.anchor_id!r}"
                 )
                 issue = issue.model_copy(update={"source_anchor": None})
-        sanitized_issues.append(issue)
+        has_evidence = issue.source_anchor is not None or bool((issue.counterexample or "").strip())
+        sanitized_issues.append(issue.model_copy(update={"evidence_missing": issue.severity != "minor" and not has_evidence}))
 
     # Deterministic answer-key check for choice items: the backend compares the reviewer's BLIND
     # answer with the key itself, so a provider that says "agree" while answering differently
@@ -69,6 +75,16 @@ def apply_independent_review(
                 reason=f"the reviewer solved it independently as {sorted(given)} but the key says {sorted(expected)}",
                 counterexample=f"independent answer: {result.independent_answer}"))
             agreement, force_downgrade = "disagree", True
+    elif not (result.independent_answer or "").strip():
+        # Free-form answers are compared by a human; without a blind answer the reviewer has not verified anything.
+        sanitized_issues.append(IndependentReviewIssue(
+            severity="major", field="independent_answer",
+            reason="the reviewer gave no independent answer, so the proposed answer or rubric is unverified"))
+        agreement = "uncertain"
+
+    unexecuted = [c.strip()[:_MAX_NOTE_CHARS] for c in result.unexecuted_checks if c.strip()][:_MAX_NOTES]
+    if candidate.item_type == ItemType.CODING and not any("execut" in c.lower() for c in unexecuted):
+        unexecuted.append("reference solutions and tests were not executed by this review; execution belongs to the judge")
 
     # Never upgrades: a candidate not currently READY_FOR_HUMAN_REVIEW is
     # left exactly as-is (e.g. already NEEDS_REVISION, APPROVED, REJECTED,
@@ -87,6 +103,8 @@ def apply_independent_review(
             "independent_review_agreement": agreement,
             "independent_review_issues": sanitized_issues,
             "independent_review_completed_at": now,
+            "independent_review_unexecuted_checks": unexecuted,
+            "independent_review_prompt_version": prompt_version,
         }
     )
     return IndependentReviewApplication(candidate=updated, fabricated_anchor_warnings=fabricated_warnings)

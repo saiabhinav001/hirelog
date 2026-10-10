@@ -110,6 +110,8 @@ def decide_edit(
             "independent_review_agreement": None,
             "independent_review_issues": [],
             "independent_review_completed_at": None,
+            "independent_review_unexecuted_checks": [],
+            "independent_review_prompt_version": None,
             "execution_verified": False,
             "edited_by": editor,
             "edited_at": now,
