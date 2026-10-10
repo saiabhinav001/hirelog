@@ -573,6 +573,24 @@ no append-only history for grade disputes; export content in process memory with
 | OPS-06 | Backup restore with measured RPO/RTO | `docs/runbooks/backup-dr.md` (procedure); no measured restore | — | MISSING (measurement) | Isolated restore drill | P11 |
 | OPS-07 | Dependency vulnerabilities | `next` 16.2.10 (2 critical), `websocket-driver`, firebase/grpc/nanoid/source-map-js highs; backend `starlette`, `transformers`, … | `npm audit` 2026-10-09 | EXISTS_BUT_DEFECTIVE | `next ≥ 16.3.8` upgrade pass (separate decision) | P11 |
 
+### 11.1 Status after the Prompt 11 implementation
+
+Evidence and the release recommendation are in [production-qualification-report.md](production-qualification-report.md) (rewritten this phase). **No staging environment, real Firebase project, container runtime or load generator exists in this workspace**;
+everything measured came from a local Firestore emulator on one laptop and is labelled that way. Backend 1529 tests (1516 before), frontend 237, build, legacy search gate and three Playwright specs pass.
+
+| ID | Status after P11 | What changed | Evidence |
+|---|---|---|---|
+| OPS-01 | PARTIALLY_EXISTS (D-10 open) | `conftest.py` pins `EXAMS_ENABLED=false` (was: 11 tests failed on a machine whose `.env` enables the module). The branch still has **no merge base with `origin/main`** and CI triggers only on PR / push to `main`, so CI has never run this work; Python 3.11 (production, CI) vs 3.12 (local) parity untested | full suite with the variable unset and `.env` = true |
+| OPS-02 | MISSING (real staging) — local emulator evidence added | Synchronized 300-student submit burst (admit, drafts, barrier submit, lost-response retry): 0 errors, exactly-once receipts and outbox entries, queue age p50 19 s / p95 31 s; latencies are single-worker laptop saturation, **not capacity** | report §3 |
+| OPS-03 | PARTIALLY_EXISTS | Live API kill / restart during a burst (150 students): 150/150 submitted once, receipts identical, outbox 1:1. **Defect found and fixed:** contention exhaustion and datastore errors were bare 500s, now retryable 503 (`temporarily_unavailable`, `Retry-After`). Database outage covered by tests only; no real outage rehearsal | `test_ops_and_outage_p11.py`, report §4 |
+| OPS-04 | EXISTS_AND_VERIFIED | Rehearsed live: with `EXAM_NEW_ADMISSIONS_PAUSED=true` an admitted student still reads state, saves and submits (receipt); a new student gets 403 `new_admissions_paused`; clearing the flag restores admission | report §4 |
+| OPS-05 | PARTIALLY_EXISTS | `GET /api/exams/v1/ops/queue-health` (super-admin, counts only): outbox backlog / age / dead entries, judge waiting / retrying / exhausted, attempts overdue for sealing; alert thresholds written against it. **No alerting platform is wired**; skipped-grading outbox entries are not counted (finding) | `test_queue_health_*`, report §10 |
+| OPS-06 | MISSING (measurement) | Not done: no backup, no real project, the emulator offers no export | report §12 |
+| OPS-07 | EXISTS_BUT_DEFECTIVE → improved | `next` 16.2.10 → 16.4.0 clears both **critical** advisories (frontend audit 11 → 6, 0 critical); lockfile updates for `websocket-driver`, `nanoid`, `source-map-js`. Open: `firebase` / `grpc-js` highs (only offer is a major downgrade), `postcss` and one more moderate; backend `starlette` 0.45.3 and `python-dotenv` 1.0.1 (a FastAPI 0.143 / Starlette 1.7 trial passed 1515 of 1529 tests — only the 14 route-introspection tripwires fail) | report §5 |
+| AUTH-08 (rules) / ING-08 (egress) / PRC-07 (IAM) | MISSING (real environment) | Not run: rules emulator (`firebase-tools` absent), sandbox egress (no real judge, D-5), real bucket / IAM | report §14 |
+
+Defects found while implementing: P11-1 .. P11-5 in the report (§4).
+
 ## 12. Master-prompt invariants (cross-reference)
 
 | # | Invariant | Status | Rows |

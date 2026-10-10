@@ -364,3 +364,30 @@ Out of Phase 10 on purpose: real screen-reader / zoom / device / colour-contrast
 - [x] Role-scoped gradebook, unreleased denial, regrade lineage, CSV injection, export expiry, cache inspection, offline shell, account switch, update suppression, keyboard and named-control tests pass.
 - [x] Full backend suite (`EXAMS_ENABLED=false`: 1516 passed), ruff, frontend `tsc`, `eslint`, Vitest (237 passed with `--maxWorkers=2 --testTimeout=20000`) and the PWA / accessibility Playwright specs pass.
 - [ ] **Open:** real screen-reader, zoom, device and contrast checks; CDN behaviour; lockdown profile; D-8.
+
+## 14. Phase 11 — staging qualification and release readiness (local pass done; real staging not possible, ADR 0027)
+
+Real staging, the institution's concurrency target (D-14) and the provider decisions are outside what this workspace can supply, so the pass was done against a local Firestore emulator and the gaps are listed as gates in [production-qualification-report.md](production-qualification-report.md) §14. **Recommendation: do not release.**
+
+| Area | Change |
+|---|---|
+| `backend/app/exam_main.py` | Handlers: retryable datastore errors and exhausted transactions → `503 temporarily_unavailable` + `Retry-After`; other failures → generic 500 |
+| `backend/app/domain/exams/ops_health.py`, `api/routes/exams_ops.py` | Read-only queue health (outbox backlog / age / dead, judge waiting / retrying / exhausted, overdue unsealed attempts), super-admin only |
+| `backend/tests/conftest.py` | Pins `EXAMS_ENABLED=false` |
+| `backend/scripts/exam_load_test.py` | `--scenario burst`, retries, Firestore verification of attempts and outbox |
+| Frontend | `next` 16.4.0 (two critical advisories); offline-shell e2e waits for the active worker |
+| Tests | `test_ops_and_outage_p11.py` (13): outage / contention / generic-500 / queue health / authorization |
+| Docs | Report rewritten (evidence, findings, matrices, alerts, runbook pointers, rollback, decisions, gates), ADR 0027, compat §16, traceability §11.1 |
+
+Done live against the emulator and recorded: 100 / 150 / 300-student bursts, API kill / restart during a burst (before and after the fix), new-admissions-pause rehearsal.
+
+Out of Phase 11 on purpose (gates G1–G16): real staging load, realtime lag, provider throughput, sandbox and IAM evidence, real outage and restore drills with measured RPO / RTO, rules emulator suite, CI on this branch (D-10) and on Python 3.11, backend security upgrade, alerting platform, cost, real browsers / devices / screen readers, fresh adversarial review.
+
+### Phase 11 acceptance checklist
+
+- [x] Existing suites run: backend 1529, frontend 237, build, legacy search gate, three Playwright specs.
+- [x] Burst and failure injection run locally with stated configuration; results reported as local / emulator only.
+- [x] A real defect found by the injection (bare 500 under contention) fixed with tests that fail on the old code.
+- [x] Rollback lever rehearsed; no data deleted.
+- [x] Release pack written; every incomplete gate listed; evidence-based recommendation: **no-go**.
+- [ ] **Open:** every gate G1–G16 in the report; D-10, D-14 and the provider decisions.

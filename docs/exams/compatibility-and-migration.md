@@ -571,3 +571,24 @@ Code only: old code ignores the new fields and the new collection; releases made
 ### 15.4 Old clients
 
 The student results page tolerates the missing provenance fields. An old faculty page that posts `{note}` only keeps working for a complete first release and shows the server's refusal otherwise.
+
+## 16. Prompt 11 migration notes
+
+Implemented as [ADR 0027](../adr/0027-retryable-503-for-datastore-failures-and-queue-health-read.md). **No data migration, backfill, collection or index change.** One new read-only route; no new environment variable.
+
+### 16.1 Behavior changes integrators will see
+
+| Area | Before | Now |
+|---|---|---|
+| Datastore unavailable, deadline exceeded, quota exhausted, or a transaction that keeps aborting | Bare `500` (plain text / default body), a stack trace logged per request | `503` `{"detail": {"code": "temporarily_unavailable", "message": …}}` with `Retry-After: 2` and `Cache-Control: no-store`. A failed call committed nothing; retrying the **same** request (same idempotency key / save id / expected version) is safe |
+| Any other unexpected datastore error or stray `ValueError` | `500` | Still `500`, now with a generic body (`{"detail": "Internal Server Error"}`) and `no-store`; details only in the server log |
+| `GET /api/exams/v1/ops/queue-health` | n/a | Super-admin only, `no-store`, counts and ages only (no uids, payloads or answers): `outbox`, `judge`, `finalization` |
+| Test suite | Read `EXAMS_ENABLED` from the developer's `.env` | `conftest.py` pins it to `false` |
+| Frontend `next` | 16.2.10 | 16.4.0 (`eslint-config-next` stays 16.2.10) |
+| `scripts/exam_load_test.py` | Admission only | Adds `--scenario burst` (drafts, barrier submit, lost-response retry, `--submit-retries`, `--verify-firestore`) |
+
+### 16.2 Client guidance
+The student client already retries draft saves with the same save id; with the 503 contract it should treat `503` like a transport error (retry the same request after `Retry-After`) rather than showing a fatal error. The faculty and student screens show the server's message for a 503.
+
+### 16.3 Rollback
+Revert the commit: the handlers and the ops route are additive. `next` can be returned to 16.2.10 through `package.json` / the lockfile, but that reintroduces two critical advisories — do not do so on a Windows-hosted server.

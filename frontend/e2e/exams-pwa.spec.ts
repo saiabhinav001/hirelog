@@ -38,8 +38,12 @@ test("service worker registers and precaches the offline shell on an exam page",
 test("a failed exam-page navigation while offline shows the offline explanation, never a browser error page", async ({ page, context }) => {
   await page.goto("/exams/login");
   await page.waitForFunction(() => navigator.serviceWorker.getRegistration("/exams/").then((r) => !!r));
-  // Give the SW a moment to finish precaching after the registration resolves.
-  await page.waitForTimeout(500);
+  // An ACTIVATED worker is needed to answer the offline navigation; wait for it, then for the precache.
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.waitForFunction(async () => {
+    const cached = await caches.match("/exams-offline.html");
+    return Boolean(cached);
+  });
 
   await context.setOffline(true);
   await page.goto("/exams/login");

@@ -18,6 +18,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi import Response as FastAPIResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from google.api_core import exceptions as gcloud_exceptions
 
 from app.api.routes import (
     exams_faculty,
@@ -30,6 +32,7 @@ from app.api.routes import (
     exams_live,
     exams_lockdown,
     exams_me,
+    exams_ops,
     exams_proctoring,
     exams_student,
 )
@@ -323,6 +326,43 @@ async def _no_store_middleware(request, call_next):
     return response
 
 
+_RETRYABLE_BACKEND_ERRORS = (
+    gcloud_exceptions.Aborted,
+    gcloud_exceptions.ServiceUnavailable,
+    gcloud_exceptions.DeadlineExceeded,
+    gcloud_exceptions.ResourceExhausted,
+    gcloud_exceptions.RetryError,
+)
+
+
+def _temporarily_unavailable() -> JSONResponse:
+    """A database outage or exhausted transaction retries is a retryable 503, never a bare 500: nothing was committed,
+    and every write the client retries carries an idempotency key or an expected version."""
+    return JSONResponse(
+        status_code=503,
+        content={"detail": {"code": "temporarily_unavailable", "message": "The exam service is busy or its database is temporarily unavailable. Retry the same request."}},
+        headers={"Retry-After": "2", "Cache-Control": "no-store"},
+    )
+
+
+@app.exception_handler(gcloud_exceptions.GoogleAPIError)
+async def _backend_error_handler(request, exc):
+    logger.error("datastore error on %s %s: %s", request.method, request.url.path, exc.__class__.__name__, exc_info=exc)
+    if isinstance(exc, _RETRYABLE_BACKEND_ERRORS):
+        return _temporarily_unavailable()
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"}, headers={"Cache-Control": "no-store"})
+
+
+@app.exception_handler(ValueError)
+async def _value_error_handler(request, exc):
+    # google-cloud-firestore raises a bare ValueError when a transaction keeps aborting (contention).
+    if str(exc).startswith("Failed to commit transaction"):
+        logger.warning("transaction contention on %s %s: %s", request.method, request.url.path, exc)
+        return _temporarily_unavailable()
+    logger.error("unhandled ValueError on %s %s", request.method, request.url.path, exc_info=exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"}, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/")
 def root() -> dict:
     return {"status": "ok", "service": "hirelog-exams", "env": settings.ENV, "exams_enabled": settings.EXAMS_ENABLED}
@@ -357,3 +397,4 @@ app.include_router(exams_proctoring.faculty_router)
 app.include_router(exams_gradebook.student_router)
 app.include_router(exams_gradebook.faculty_router)
 app.include_router(exams_lockdown.router)
+app.include_router(exams_ops.router)

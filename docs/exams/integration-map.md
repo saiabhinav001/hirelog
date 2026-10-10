@@ -86,6 +86,7 @@ All routers carry router-level `dependencies=[Depends(require_exams_enabled)]` (
 | `exams_proctoring` (`…/student/proctoring`, `…/faculty/proctoring`) | student: POST observations/snapshots/appeals, GET incidents, POST snapshot upload + missing; faculty: GET incidents/snapshots/appeals, POST resolve/view-ticket/appeal-resolve, GET `/view/{ticket}` | user / faculty | `proctoring_states`, `proctoring_log`, `evidence_snapshots`, `evidence_upload_tickets`, `evidence_view_tickets`, `evidence_access_log`, `proctoring_appeals` |
 | `exams_gradebook` (`…/student/gradebook`, `…/faculty/gradebook`) | student: results, feedback, grade appeals; faculty: rows, counts, release(+list), defective(+list), appeals(+resolve), similarity (3), export (create/get/ticket/download) | user / faculty | `gradebook_releases`, `gradebook_release_rows` (frozen per-release student rows), `gradebook_defective_questions`, `gradebook_grade_appeals`, `gradebook_export_*`, `similarity_matches` |
 | `exams_lockdown` (`…/faculty/lockdown`) | GET/POST `/runs/{id}/profile`; GET `/runs/{id}/admission-log` | faculty | `exam_lockdown_profiles`, `exam_lockdown_admission_log` |
+| `exams_ops` (`…/ops`) | GET `/queue-health` (outbox backlog / age / dead, judge waiting / retrying / exhausted, overdue unsealed attempts; counts only) | super-admin (`require_exam_super_admin`) | reads `exam_outbox`, `judge_submissions`, runs / attempts |
 
 ## 4. Domain packages (pure decision modules are Firestore-free)
 
