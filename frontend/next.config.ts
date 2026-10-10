@@ -60,6 +60,13 @@ const contentSecurityPolicy = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
+  // Pin the project root — a stray lockfile in a parent folder (outside this
+  // repo) otherwise makes Turbopack misdetect the workspace root and fail to
+  // resolve `frontend/node_modules` deps (e.g. tailwindcss), breaking CSS.
+  turbopack: {
+    root: __dirname,
+  },
+
   // Strip console.log in production builds
   compiler: {
     removeConsole: process.env.NODE_ENV === "production" ? { exclude: ["error", "warn"] } : false,
