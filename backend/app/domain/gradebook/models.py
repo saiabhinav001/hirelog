@@ -4,6 +4,7 @@ Firestore layout (all private — no client rule grants them; default-deny
 catch-all covers everything here):
 
   gradebook_releases/{release_id}
+  gradebook_release_rows/{snapshot_id}__{uid}
   gradebook_defective_questions/{resolution_id}
   gradebook_grade_appeals/{appeal_id}
   similarity_matches/{match_id}
@@ -115,6 +116,15 @@ class ReleaseRecord(BaseModel):
     released_by: str
     released_at: datetime
     note: str = ""
+    # What the students are shown for this version: a frozen copy of every enrolled student's row, taken at
+    # release time (`gradebook_release_rows/{snapshot_id}__{uid}`). None on releases made before snapshots
+    # existed; those are served live, exactly as before.
+    snapshot_id: Optional[str] = None
+    row_count: int = 0
+    # Honest state at release time, so a later reader can tell a complete release from a partial one.
+    pending_question_count: int = 0
+    live_attempt_count: int = 0
+    acknowledged_incomplete: bool = False
 
 
 class DefectiveQuestionResolution(BaseModel):
@@ -148,6 +158,8 @@ class GradeAppeal(BaseModel):
     resolved_at: Optional[datetime] = None
     resolution_notes: Optional[str] = None
     version: int = 1
+    # The release version the student was looking at when they disputed it.
+    release_version: Optional[int] = None
 
 
 class ExportFormat(str, Enum):
@@ -173,6 +185,10 @@ class ExportJob(BaseModel):
     storage_ref: Optional[str] = None
     row_count: Optional[int] = None
     error: Optional[str] = None
+    # The downloadable content is deleted at `expires_at`; `expired_at` records that it was. The job record
+    # itself (who asked, when, how many rows) is kept.
+    expires_at: Optional[datetime] = None
+    expired_at: Optional[datetime] = None
 
 
 class ExportDownloadTicket(BaseModel):

@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Optional
 
 from firebase_admin import firestore
+from google.api_core.exceptions import AlreadyExists
 
 from app.domain.gradebook.models import (
     DefectiveQuestionResolution,
@@ -16,9 +17,11 @@ from app.domain.gradebook.models import (
     GradeAppeal,
     ReleaseRecord,
     SimilarityMatch,
+    StudentGradebookRow,
 )
 
 RELEASES_COLLECTION = "gradebook_releases"
+RELEASE_ROWS_COLLECTION = "gradebook_release_rows"
 DEFECTIVE_QUESTIONS_COLLECTION = "gradebook_defective_questions"
 GRADE_APPEALS_COLLECTION = "gradebook_grade_appeals"
 EXPORT_JOBS_COLLECTION = "gradebook_export_jobs"
@@ -38,6 +41,14 @@ class ReleaseRecordRepository:
     def create(self, release: ReleaseRecord) -> None:
         self._db.collection(RELEASES_COLLECTION).document(release.id).set(_model_dict(release))
 
+    def create_if_absent(self, release: ReleaseRecord) -> bool:
+        """False when that release id already exists (a concurrent release took this version number)."""
+        try:
+            self._db.collection(RELEASES_COLLECTION).document(release.id).create(_model_dict(release))
+            return True
+        except AlreadyExists:
+            return False
+
     def list_for_run(self, run_id: str) -> list[ReleaseRecord]:
         query = self._db.collection(RELEASES_COLLECTION).where(filter=firestore.FieldFilter("run_id", "==", run_id))
         return [ReleaseRecord.model_validate({**(d.to_dict() or {}), "id": d.id}) for d in query.stream()]
@@ -47,6 +58,26 @@ class ReleaseRecordRepository:
         if not releases:
             return None
         return max(releases, key=lambda r: r.version)
+
+
+class ReleaseSnapshotRepository:
+    """The frozen per-student rows a release shows. Immutable once written: a corrected release writes a new
+    snapshot under a new snapshot id, it never edits an old one."""
+
+    def __init__(self, db) -> None:
+        self._db = db
+
+    def _ref(self, snapshot_id: str, uid: str):
+        return self._db.collection(RELEASE_ROWS_COLLECTION).document(f"{snapshot_id}__{uid}")
+
+    def put(self, snapshot_id: str, run_id: str, row: StudentGradebookRow) -> None:
+        self._ref(snapshot_id, row.uid).set({"snapshot_id": snapshot_id, "run_id": run_id, "uid": row.uid, "row": _model_dict(row)})
+
+    def get(self, snapshot_id: str, uid: str) -> Optional[StudentGradebookRow]:
+        snap = self._ref(snapshot_id, uid).get()
+        if not snap.exists:
+            return None
+        return StudentGradebookRow.model_validate((snap.to_dict() or {}).get("row") or {})
 
 
 class DefectiveQuestionResolutionRepository:
@@ -74,6 +105,13 @@ class GradeAppealRepository:
 
     def create(self, appeal: GradeAppeal) -> None:
         self._ref(appeal.id).set(_model_dict(appeal))
+
+    def create_if_absent(self, appeal: GradeAppeal) -> bool:
+        try:
+            self._ref(appeal.id).create(_model_dict(appeal))
+            return True
+        except AlreadyExists:
+            return False
 
     def get(self, appeal_id: str) -> Optional[GradeAppeal]:
         snap = self._ref(appeal_id).get()
@@ -110,6 +148,12 @@ class ExportJobRepository:
 
     def update(self, job_id: str, update: dict) -> None:
         self._ref(job_id).update(update)
+
+    def list_expired(self, now) -> list[ExportJob]:
+        """Jobs whose downloadable content is past its retention and not yet deleted."""
+        query = self._db.collection(EXPORT_JOBS_COLLECTION).where(filter=firestore.FieldFilter("expires_at", "<=", now.isoformat()))
+        jobs = [ExportJob.model_validate({**(d.to_dict() or {}), "id": d.id}) for d in query.stream()]
+        return [j for j in jobs if j.expired_at is None]
 
 
 class ExportDownloadTicketRepository:

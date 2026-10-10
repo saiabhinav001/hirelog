@@ -38,3 +38,9 @@ class JudgeBusyError(JudgeDomainError):
     """Too much work is already queued for the judge; a student-initiated run is refused so the queue stays bounded."""
 
     code = "judge_busy"
+
+
+class ScoreOutOfRangeError(JudgeDomainError):
+    """A reviewer-entered score outside 0..max_score."""
+
+    code = "score_out_of_range"

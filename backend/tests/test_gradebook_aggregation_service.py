@@ -384,10 +384,36 @@ def test_integrity_disposition_upheld_when_counted_and_no_overturned_appeal() ->
     attempts = _FakeAttemptRepo()
     attempts.put(Attempt(run_id=RUN_ID, uid="u1", status=AttemptStatus.FINALIZED))
     proctoring_states = _FakeProctoringStateRepo()
-    proctoring_states.put(ProctoringState(run_id=RUN_ID, uid="u1", counted_incident_count=1))
+    proctoring_states.put(ProctoringState(run_id=RUN_ID, uid="u1", counted_incident_count=run.policy.warning_threshold))
     svc = _service(run=run, revision=revision, attempts=attempts, proctoring_states=proctoring_states)
     row = svc.build_student_row(run, revision, "u1")
     assert row.integrity_disposition == IntegrityDisposition.BLOCKED_UPHELD
+
+
+def test_integrity_disposition_clean_when_counted_incidents_never_reached_the_block_threshold() -> None:
+    """Fewer counted incidents than the run's threshold never blocked anyone, so the label must not say 'blocked'
+    (the incidents themselves stay visible through the ledger and `warning_count`)."""
+    run = _run(["u1"])
+    revision = _revision(slot_count=1)
+    attempts = _FakeAttemptRepo()
+    attempts.put(Attempt(run_id=RUN_ID, uid="u1", status=AttemptStatus.FINALIZED, warning_count=1))
+    proctoring_states = _FakeProctoringStateRepo()
+    proctoring_states.put(ProctoringState(run_id=RUN_ID, uid="u1", counted_incident_count=run.policy.warning_threshold - 1))
+    svc = _service(run=run, revision=revision, attempts=attempts, proctoring_states=proctoring_states)
+    row = svc.build_student_row(run, revision, "u1")
+    assert row.integrity_disposition == IntegrityDisposition.CLEAN
+    assert row.warning_count == 1
+
+
+def test_integrity_disposition_resolved_continued_when_a_reviewer_allowed_the_attempt_to_continue() -> None:
+    run = _run(["u1"])
+    revision = _revision(slot_count=1)
+    attempts = _FakeAttemptRepo()
+    attempts.put(Attempt(run_id=RUN_ID, uid="u1", status=AttemptStatus.FINALIZED))
+    proctoring_states = _FakeProctoringStateRepo()
+    proctoring_states.put(ProctoringState(run_id=RUN_ID, uid="u1", counted_incident_count=run.policy.warning_threshold, review_floor=run.policy.warning_threshold))
+    svc = _service(run=run, revision=revision, attempts=attempts, proctoring_states=proctoring_states)
+    assert svc.build_student_row(run, revision, "u1").integrity_disposition == IntegrityDisposition.BLOCKED_RESOLVED_CONTINUED
 
 
 def test_integrity_disposition_resolved_continued_when_appeal_overturned() -> None:

@@ -22,7 +22,6 @@ from app.core.config import settings
 from app.core.firebase import db
 from app.domain.exams.repository import ExamRunRepository
 from app.domain.gradebook.aggregation_service import GradebookAggregationService
-from app.domain.gradebook.errors import ResultsNotReleasedError
 from app.domain.gradebook.export_service import GradebookExportService
 from app.domain.gradebook.feedback_provider import HttpFeedbackProviderAdapter
 from app.domain.gradebook.feedback_service import FeedbackService, TemplateFeedbackProvider
@@ -60,13 +59,11 @@ def _set_no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
 
 
-def _require_released(run_id: str) -> None:
-    if GradebookReleaseService(db).latest_release(run_id) is None:
-        raise ResultsNotReleasedError(f"run {run_id} results have not been released yet")
-
-
 class ReleaseRequest(BaseModel):
+    # Required (non-empty) from the second release on: the reason for the correction.
     note: str = Field(default="", max_length=1000)
+    # Needed to release while the run is open, attempts are live, or answers are not yet graded.
+    acknowledge_incomplete: bool = False
 
 
 class DefectiveQuestionRequest(BaseModel):
@@ -95,19 +92,15 @@ class ExportRequest(BaseModel):
 
 @student_router.get("/runs/{run_id}/results")
 def get_my_results(run_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
+    """The student's frozen row for the latest release (never the live gradebook), without internal grading
+    provenance. Nothing at all before a release."""
     _set_no_store(response)
     try:
-        _require_released(run_id)
-        aggregation = GradebookAggregationService(db)
-        run, revision = aggregation.get_run_and_revision(run_id)
-        if user["uid"] not in run.enrolled_uids:
-            raise PermissionError("Not enrolled in this exam run.")
-        row = aggregation.build_student_row(run, revision, user["uid"])
+        row, release = GradebookReleaseService(db).student_result(run_id, user["uid"])
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
-    release = GradebookReleaseService(db).latest_release(run_id)
-    return {"row": row.model_dump(mode="json"), "release_version": release.version if release else None}
+    return {"row": row.model_dump(mode="json"), "release_version": release.version}
 
 
 @student_router.get("/runs/{run_id}/feedback")
@@ -124,9 +117,13 @@ def get_my_feedback(run_id: str, response: Response, user: dict = Depends(requir
 @student_router.post("/runs/{run_id}/questions/{question_id}/appeals")
 def submit_grade_appeal(run_id: str, question_id: str, payload: GradeAppealRequest, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     _set_no_store(response)
-    appeal = GradebookReleaseService(db).submit_grade_appeal(
-        run_id=run_id, uid=user["uid"], question_id=question_id, student_statement=payload.student_statement
-    )
+    try:
+        appeal = GradebookReleaseService(db).submit_grade_appeal(
+            run_id=run_id, uid=user["uid"], question_id=question_id, student_statement=payload.student_statement
+        )
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
     return appeal.model_dump(mode="json")
 
 
@@ -164,7 +161,13 @@ def get_gradebook_counts(run_id: str, user: dict = Depends(require_run_scope)) -
 
 @faculty_router.post("/runs/{run_id}/release")
 def release_results(run_id: str, payload: ReleaseRequest, user: dict = Depends(require_run_scope)) -> dict:
-    release = GradebookReleaseService(db).release_results(run_id=run_id, released_by=user["uid"], note=payload.note)
+    try:
+        release = GradebookReleaseService(db).release_results(
+            run_id=run_id, released_by=user["uid"], note=payload.note, acknowledge_incomplete=payload.acknowledge_incomplete,
+        )
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
     return release.model_dump(mode="json")
 
 
@@ -178,9 +181,16 @@ def list_releases(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
 
 @faculty_router.post("/runs/{run_id}/questions/{question_id}/defective")
 def resolve_defective_question(run_id: str, question_id: str, payload: DefectiveQuestionRequest, user: dict = Depends(require_run_scope)) -> dict:
-    record = GradebookReleaseService(db).resolve_defective_question(
-        run_id=run_id, question_id=question_id, resolution=payload.resolution, reason=payload.reason, resolved_by=user["uid"],
-    )
+    try:
+        _run, revision = GradebookAggregationService(db).get_run_and_revision(run_id)
+        if question_id not in {f"{revision.id}:slot:{index}" for index in range(revision.slot_count)}:
+            raise LookupError(f"question {question_id} is not part of run {run_id}")
+        record = GradebookReleaseService(db).resolve_defective_question(
+            run_id=run_id, question_id=question_id, resolution=payload.resolution, reason=payload.reason, resolved_by=user["uid"],
+        )
+    except Exception as exc:
+        raise_for_domain_error(exc)
+        raise
     return record.model_dump(mode="json")
 
 
@@ -188,7 +198,6 @@ def resolve_defective_question(run_id: str, question_id: str, payload: Defective
 def list_defective_resolutions(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
     records = GradebookReleaseService(db).list_defective_resolutions(run_id)
     return {"results": [r.model_dump(mode="json") for r in records]}
-
 
 # ── Faculty: grade appeals ───────────────────────────────────────────────────
 
@@ -244,7 +253,7 @@ def list_similarity_matches_for_run(run_id: str, user: dict = Depends(require_ru
 
 @faculty_router.post("/runs/{run_id}/export")
 def create_export(run_id: str, payload: ExportRequest, user: dict = Depends(require_run_scope)) -> dict:
-    service = GradebookExportService(db, _storage())
+    service = GradebookExportService(db, _storage(), retention_hours=settings.EXAM_EXPORT_RETENTION_HOURS)
     export_format = ExportFormat.CSV if payload.format == "csv" else ExportFormat.JSON
     job = service.create_job(run_id=run_id, requested_by=user["uid"], export_format=export_format)
     try:

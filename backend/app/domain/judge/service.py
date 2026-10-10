@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.core.rate_limit import SlidingWindowLimiter
 from app.domain.generation.repository import GenerationRepository
 from app.domain.judge.converters import to_test_groups
-from app.domain.judge.errors import JudgeBusyError, RuntimeNotAllowedError
+from app.domain.judge.errors import JudgeBusyError, RuntimeNotAllowedError, ScoreOutOfRangeError
 from app.domain.judge.grading import create_regrade, grade_mcq_exact_match, new_grading_result
 from app.domain.judge.models import (
     CodeSubmission,
@@ -222,7 +222,7 @@ class JudgeService:
 
     # ── MCQ (exact match) ─────────────────────────────────────────────────────
 
-    def grade_mcq(self, *, candidate_id: str, run_id: str, uid: str, question_id: str, student_answer: str, expected_answer: str) -> McqGradeResult:
+    def grade_mcq(self, *, candidate_id: str, run_id: str, uid: str, question_id: str, student_answer: object, expected_answer: str) -> McqGradeResult:
         # Version 1 has a deterministic id, so a retried finalization cannot add a second (or overwrite a regrade).
         result = McqGradeResult(
             id=_first_result_id("mcq", run_id, uid, question_id, candidate_id), run_id=run_id, uid=uid,
@@ -265,8 +265,17 @@ class JudgeService:
         review = self._short_answer_reviews.get(review_id)
         if review is None:
             raise LookupError(f"short-answer review {review_id} not found")
+        if score < 0 or score > review.max_score:
+            raise ScoreOutOfRangeError(f"score {score} is outside 0..{review.max_score} for this question")
         now = _utc_now()
         is_regrade = review.status == ShortAnswerReviewStatus.REVIEWED
+        history = list(review.history)
+        if is_regrade:
+            history.append({
+                "version": review.version, "score": review.score, "rubric_notes": review.rubric_notes,
+                "reviewed_by": review.reviewed_by,
+                "reviewed_at": review.reviewed_at.isoformat() if review.reviewed_at else None,
+            })
         self._short_answer_reviews.update(
             review_id,
             {
@@ -276,6 +285,7 @@ class JudgeService:
                 "reviewed_by": reviewer,
                 "reviewed_at": now.isoformat(),
                 "version": review.version + 1 if is_regrade else review.version,
+                "history": history,
             },
         )
         return self._short_answer_reviews.get(review_id)

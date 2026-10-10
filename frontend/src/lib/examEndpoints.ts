@@ -264,7 +264,10 @@ export type StudentQuestionResult = {
   tests_passed: number | null;
   tests_total: number | null;
   failure_category: string | null;
+  // Internal grading provenance: present for faculty, always null in a student's own results.
   submission_hash: string | null;
+  runtime_image?: string | null;
+  test_suite_version?: number | null;
 };
 
 export type IntegrityDisposition = "clean" | "blocked_pending_review" | "blocked_upheld" | "blocked_resolved_continued";
@@ -299,6 +302,11 @@ export type ReleaseRecord = {
   released_by: string;
   released_at: string;
   note: string;
+  // What the release froze for students, and how complete it was when it was made.
+  row_count?: number;
+  pending_question_count?: number;
+  live_attempt_count?: number;
+  acknowledged_incomplete?: boolean;
 };
 
 export type DefectiveQuestionResolution = {
@@ -320,6 +328,7 @@ export type GradeAppeal = {
   status: "pending" | "upheld" | "corrected";
   created_at: string;
   resolved_by: string | null;
+  release_version?: number | null;
   resolved_at: string | null;
   resolution_notes: string | null;
   version: number;
@@ -346,6 +355,9 @@ export type ExportJob = {
   requested_by: string;
   format: "csv" | "json";
   status: "pending" | "running" | "succeeded" | "failed";
+  // The content is deleted at `expires_at` (the record stays); `expired_at` is set once it has been.
+  expires_at?: string | null;
+  expired_at?: string | null;
   created_at: string;
   completed_at: string | null;
   storage_ref: string | null;
@@ -671,10 +683,10 @@ export const examEndpoints = {
     ),
   getGradebookCounts: (token: string | undefined, runId: string) =>
     authed<{ results: GradebookCounts[] }>(`/api/exams/v1/faculty/gradebook/runs/${runId}/counts`, token),
-  releaseResults: (token: string | undefined, runId: string, note: string) =>
+  releaseResults: (token: string | undefined, runId: string, note: string, acknowledgeIncomplete = false) =>
     authed<ReleaseRecord>(`/api/exams/v1/faculty/gradebook/runs/${runId}/release`, token, {
       method: "POST",
-      body: JSON.stringify({ note }),
+      body: JSON.stringify({ note, acknowledge_incomplete: acknowledgeIncomplete }),
     }),
   listReleases: (token: string | undefined, runId: string) =>
     authed<{ results: ReleaseRecord[] }>(`/api/exams/v1/faculty/gradebook/runs/${runId}/releases`, token),

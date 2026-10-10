@@ -28,7 +28,7 @@ from firebase_admin import firestore
 
 from app.domain.gradebook.aggregation_service import GradebookAggregationService
 from app.domain.gradebook.decisions import sanitize_csv_cell
-from app.domain.gradebook.errors import ExportJobNotReadyError, ExportTicketInvalidError
+from app.domain.gradebook.errors import ExportExpiredError, ExportJobNotReadyError, ExportTicketInvalidError
 from app.domain.gradebook.models import (
     ExportAccessLogEntry,
     ExportDownloadTicket,
@@ -95,9 +95,10 @@ def build_json_bytes(rows: list[StudentGradebookRow]) -> bytes:
 
 
 class GradebookExportService:
-    def __init__(self, db, storage: EvidenceStorage) -> None:
+    def __init__(self, db, storage: EvidenceStorage, *, retention_hours: int = 24) -> None:
         self._db = db
         self._storage = storage
+        self._retention = timedelta(hours=max(1, retention_hours))
         self.jobs = ExportJobRepository(db)
         self.tickets = ExportDownloadTicketRepository(db)
         self.access_log = ExportAccessLogRepository(db)
@@ -112,7 +113,8 @@ class GradebookExportService:
         """Runs a PENDING job to completion. Idempotent-ish in the sense
         that a SUCCEEDED/FAILED job is simply re-run from scratch (the
         gradebook is re-read fresh) — never partially appends to a prior
-        export file."""
+        export file. The content is only kept for the retention window
+        (`expires_at`); `sweep_expired` deletes it afterwards."""
         job = self.jobs.get(job_id)
         if job is None:
             raise LookupError(f"export job {job_id} not found")
@@ -129,6 +131,7 @@ class GradebookExportService:
                 {
                     "status": ExportJobStatus.SUCCEEDED.value, "completed_at": now.isoformat(),
                     "storage_ref": storage_ref, "row_count": len(rows),
+                    "expires_at": (now + self._retention).isoformat(), "expired_at": None,
                 },
             )
         except Exception as exc:
@@ -138,12 +141,33 @@ class GradebookExportService:
             raise
         return self.jobs.get(job.id)
 
+    @staticmethod
+    def _is_expired(job: ExportJob, now: datetime) -> bool:
+        return job.expired_at is not None or (job.expires_at is not None and now >= job.expires_at)
+
+    def sweep_expired(self, *, now: datetime | None = None) -> int:
+        """Deletes the stored content of every export past its retention window and records that on the job.
+        Bytes first, record second: a failed delete leaves the job listed so the next sweep retries it."""
+        now = now or _utc_now()
+        deleted = 0
+        for job in self.jobs.list_expired(now):
+            try:
+                if job.storage_ref:
+                    self._storage.delete(job.storage_ref)
+                self.jobs.update(job.id, {"storage_ref": None, "expired_at": now.isoformat()})
+                deleted += 1
+            except Exception:
+                continue
+        return deleted
+
     def issue_download_ticket(self, *, job_id: str, issued_to: str, ttl_seconds: int) -> ExportDownloadTicket:
         job = self.jobs.get(job_id)
         if job is None:
             raise LookupError(f"export job {job_id} not found")
         if job.status != ExportJobStatus.SUCCEEDED:
             raise ExportJobNotReadyError(f"export job {job_id} is {job.status.value}, not ready to download")
+        if self._is_expired(job, _utc_now()):
+            raise ExportExpiredError(f"export job {job_id} has expired and its content was deleted; create a new export")
         ticket = ExportDownloadTicket(
             id=uuid4().hex, export_job_id=job_id, issued_to=issued_to,
             expires_at=_utc_now() + timedelta(seconds=ttl_seconds),
@@ -154,7 +178,8 @@ class GradebookExportService:
     def download(self, *, ticket_id: str, requested_by: str) -> tuple[bytes, ExportJob]:
         """Single-use, short-lived ticket, consumed inside a transaction —
         the same pattern as evidence view tickets (ADR 0013). Every
-        successful access is audited."""
+        successful access is audited. An export past its retention window
+        is refused even with a still-valid ticket."""
         transaction = self._db.transaction()
 
         @firestore.transactional
@@ -170,6 +195,8 @@ class GradebookExportService:
         job = self.jobs.get(ticket.export_job_id)
         if job is None or job.storage_ref is None:
             raise LookupError("export job has no stored content")
+        if self._is_expired(job, _utc_now()):
+            raise ExportExpiredError(f"export job {job.id} has expired and its content was deleted; create a new export")
         content = self._storage.get(job.storage_ref)
         if content is None:
             raise LookupError("stored export content missing")

@@ -13,8 +13,10 @@ from app.domain.gradebook.models import (
     GradeAppeal,
     GradeAppealStatus,
     GradebookCounts,
+    IntegrityDisposition,
     QuestionOutcome,
     ReleaseRecord,
+    StudentGradebookRow,
     StudentQuestionResult,
 )
 from app.domain.judge.models import TestCaseOutcome, TestCaseResult
@@ -170,17 +172,63 @@ def decide_resolve_grade_appeal(
     )
 
 
+# ── student-facing view ──────────────────────────────────────────────────────
+
+
+def student_row_view(row: StudentGradebookRow) -> StudentGradebookRow:
+    """What a student may see of their own released row: scores, outcome and
+    the coding failure category, without the internal grading provenance
+    (submission hash, runtime image, hidden test-suite version)."""
+    return row.model_copy(update={
+        "question_results": [
+            q.model_copy(update={"submission_hash": None, "runtime_image": None, "test_suite_version": None})
+            for q in row.question_results
+        ],
+    })
+
+
+# ── integrity disposition ────────────────────────────────────────────────────
+
+
+def decide_integrity_disposition(
+    *, blocked_now: bool, counted_incidents: int, block_threshold: int, review_floor: int, appeal_overturned: bool
+) -> IntegrityDisposition:
+    """Separate from the academic score and never an automatic penalty. A
+    student reaches a block only when the counted incidents reach the run's
+    threshold, so fewer counted incidents than that is CLEAN here (the
+    incidents themselves stay visible in the ledger and `warning_count`).
+    `review_floor > 0` means a reviewer explicitly allowed the attempt to
+    continue after a block."""
+    if blocked_now:
+        return IntegrityDisposition.BLOCKED_PENDING_REVIEW
+    if appeal_overturned or review_floor > 0:
+        return IntegrityDisposition.BLOCKED_RESOLVED_CONTINUED
+    if counted_incidents > 0 and counted_incidents >= block_threshold:
+        return IntegrityDisposition.BLOCKED_UPHELD
+    return IntegrityDisposition.CLEAN
+
+
 # ── CSV export safety ────────────────────────────────────────────────────────
 
 # OWASP CSV-injection guidance: a cell whose first character is one of these
 # is interpreted as a formula by Excel/LibreOffice/Google Sheets when the
 # file is opened. Prefixing with a single quote neutralizes it while leaving
 # the visible value unchanged in every spreadsheet application.
-_FORMULA_TRIGGER_PREFIXES = ("=", "+", "-", "@")
+_FORMULA_TRIGGER_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n", "＝", "＋", "－", "＠")
+# Characters some spreadsheet importers skip before deciding a cell is a formula.
+_IGNORABLE_LEADING = " \t\r\n\x00\ufeff\u00a0\u200b"
 
 
 def sanitize_csv_cell(value: str) -> str:
-    if value and value[0] in _FORMULA_TRIGGER_PREFIXES:
+    """Neutralizes a spreadsheet formula: the OWASP trigger set (`= + - @`,
+    TAB, CR) plus LF and the full-width look-alikes, also when hidden behind
+    leading whitespace / zero-width characters that an importer may skip."""
+    if not value:
+        return value
+    if value[0] in _FORMULA_TRIGGER_PREFIXES:
+        return "'" + value
+    stripped = value.lstrip(_IGNORABLE_LEADING)
+    if stripped and stripped[0] in _FORMULA_TRIGGER_PREFIXES:
         return "'" + value
     return value
 

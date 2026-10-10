@@ -1,4 +1,4 @@
-﻿# Hirelog Exams — phased delta plan (confirmed gaps only)
+# Hirelog Exams — phased delta plan (confirmed gaps only)
 
 Prompt 0 (v1.1), audited 2026-10-09 at `5b0ad3b`. Every item below traces to a row classified `EXISTS_BUT_DEFECTIVE`, `PARTIALLY_EXISTS`,
 `MISSING` or `BLOCKED_BY_DECISION` in [requirements-traceability.md](requirements-traceability.md); rows classified `EXISTS_AND_VERIFIED` are
@@ -336,3 +336,31 @@ Out of Phase 9 on purpose: an institution approval step for profiles and the ret
 - [x] Full backend suite (`EXAMS_ENABLED=false`: 1423 passed), ruff, frontend `tsc`, `eslint` and Vitest (193 passed with `--maxWorkers=2 --testTimeout=20000`) pass.
 - [x] Migration notes and ADR 0025 written; no production data touched; no secrets or addresses added. *(No real browser, camera, bucket or IAM policy was used.)*
 - [ ] **Open:** D-7 approval workflow and retention periods; staging evidence for storage boundaries and real browsers.
+
+## 13. Phase 10 — gradebook, scoring semantics, exports, accessibility and the exam cache boundary (implemented, ADR 0026)
+
+D-8 (partial credit, negative marking, official count definitions) stays open; the semantics that were implemented and tested are the current behaviour and are written in [scoring-and-gradebook-semantics.md](scoring-and-gradebook-semantics.md).
+
+| Area | Change |
+|---|---|
+| `backend/app/domain/gradebook/release_service.py`, `repository.py`, `models.py`, `errors.py` | Frozen per-release rows; v2+ reason; acknowledged incomplete releases; race-safe release ids; audit; bounded, race-safe grade disputes |
+| `backend/app/domain/gradebook/aggregation_service.py`, `decisions.py` | `presented` fix; latest defective resolution; threshold-based integrity label; short-answer clamp; formula-safe CSV; student view without provenance |
+| `backend/app/domain/gradebook/export_service.py`, `exam_main.py`, `core/config.py` | Export retention, expiry refusals, sweep loop, `EXAM_EXPORT_RETENTION_HOURS` |
+| `backend/app/domain/judge/grading.py`, `outbox_handler.py`, `service.py`, `models.py`, `errors.py` | Exact-set choice grading; score range; re-review history |
+| `backend/app/api/routes/exams_gradebook.py` | Student results from the release; release body and errors; defective question validation; dispute errors |
+| Frontend | Hook with a shared attempt lock; exam page holds while loading / in progress / blocked, blocked page holds; `next.config.ts` `no-store` for `/exams/:path*`; faculty release with acknowledge / reason and inline errors, export expiry shown, labelled inputs; student results: corrected-release note, no dispute while pending, labelled field, readable refusals |
+| Tests | Backend: `test_gradebook_routes_p10.py` (19, HTTP, real scope checks), `test_gradebook_export_p10.py`, `test_judge_choice_grading_p10.py`, release / aggregation / export unit tests updated. Frontend: shipped-service-worker tests, hook tests, header policy test, axe + keyboard tests (exam page, results, blocked, faculty gradebook), faculty release flow. E2E: cache-boundary spec |
+| Docs | ADR 0026 (+ index), scoring semantics, compat §15, traceability §10.1, integration map |
+
+Out of Phase 10 on purpose: real screen-reader / zoom / device / colour-contrast evidence, a CDN, a managed-client lockdown profile (a PWA alone is not lockdown), D-8, append-only dispute history, purging orphaned snapshot rows.
+
+### Phase 10 acceptance checklist
+
+- [x] Grade counts and scoring semantics defined exactly, and enforced by tests.
+- [x] Students see only released, frozen results; a correction is a new version with a reason and an audit event; original submissions and result versions are preserved.
+- [x] No automatic penalty from similarity or AI-authorship signals; similarity never reaches a student.
+- [x] Exports are authenticated, scoped to the run owner, single-use, expiring (content deleted) and formula-safe.
+- [x] The service worker caches only the static shell; authenticated pages, APIs and tokens are network-only / `no-store` at the service worker, framework and API layers; no offline submission; updates cannot interrupt an attempt.
+- [x] Role-scoped gradebook, unreleased denial, regrade lineage, CSV injection, export expiry, cache inspection, offline shell, account switch, update suppression, keyboard and named-control tests pass.
+- [x] Full backend suite (`EXAMS_ENABLED=false`: 1516 passed), ruff, frontend `tsc`, `eslint`, Vitest (237 passed with `--maxWorkers=2 --testTimeout=20000`) and the PWA / accessibility Playwright specs pass.
+- [ ] **Open:** real screen-reader, zoom, device and contrast checks; CDN behaviour; lockdown profile; D-8.

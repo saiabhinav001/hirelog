@@ -31,4 +31,5 @@ including decisions to deliberately **not** build something yet.
 | [0023](0023-exam-workspace-ui-timer-navigator-and-teacher-controls.md) | Exam workspace UI: server-anchored timer, navigator, teacher controls and short links | Accepted |
 | [0024](0024-judge-hardening-durable-grading-and-registry.md) | Judge hardening: no silent verdicts, durable grading, a server-owned registry (real adapter and SQL not approved) | Accepted |
 | [0025](0025-proctoring-ledger-review-appeals-and-evidence.md) | Proctoring: a ledger that never mis-blocks, audited review, append-only appeals, evidence that is real or honestly missing | Accepted |
+| [0026](0026-gradebook-frozen-releases-scoring-semantics-exports-and-cache-boundary.md) | Gradebook: frozen releases with lineage, exact scoring semantics, expiring formula-safe exports, exam-scoped cache boundary | Accepted |
 See [../architecture.md](../architecture.md) for the system diagram and request flow.

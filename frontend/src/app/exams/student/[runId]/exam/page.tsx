@@ -172,7 +172,9 @@ function ExamContent() {
     getToken,
     cameraWaived
   );
-  useExamServiceWorker({ attemptActive: attempt?.status === "in_progress" });
+  // Hold back any service-worker update from the first render (the attempt is not loaded yet, so "unknown" counts as
+  // active) until the attempt is known to be over; a blocked attempt can still resume, so it is held too.
+  useExamServiceWorker({ attemptActive: attempt === null || attempt.status === "in_progress" || attempt.status === "blocked" });
 
   // Capability-aware fullscreen tracking — mirrors the preflight page's own
   // check; re-entry always requires a real user gesture (the Fullscreen API

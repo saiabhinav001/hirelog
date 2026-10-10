@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
 import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
+import { describeConflict } from "@/lib/examConflicts";
 import {
   examEndpoints,
   type DefectiveQuestionResolution,
@@ -15,6 +16,7 @@ import {
   type ReleaseRecord,
   type StudentGradebookRow,
 } from "@/lib/examEndpoints";
+import { ExamApiError } from "@/lib/examsApi";
 
 const OUTCOME_BADGE: Record<string, string> = {
   fully_solved: "badge-success",
@@ -41,6 +43,8 @@ function GradebookContent() {
 
   const [releaseNote, setReleaseNote] = useState("");
   const [releasing, setReleasing] = useState(false);
+  const [releaseError, setReleaseError] = useState<string | null>(null);
+  const [incompleteWarning, setIncompleteWarning] = useState<string | null>(null);
 
   const [defectiveQuestionId, setDefectiveQuestionId] = useState("");
   const [defectiveResolution, setDefectiveResolution] = useState<"full_credit_all" | "exclude_from_total">("full_credit_all");
@@ -90,15 +94,26 @@ function GradebookContent() {
 
   const latestRelease = releases.length > 0 ? releases[releases.length - 1] : null;
 
-  const handleRelease = async () => {
+  const handleRelease = async (acknowledgeIncomplete = false) => {
     setReleasing(true);
+    setReleaseError(null);
     try {
       const token = await getToken();
-      await examEndpoints.releaseResults(token, runId, releaseNote);
+      if (acknowledgeIncomplete) {
+        await examEndpoints.releaseResults(token, runId, releaseNote, true);
+      } else {
+        await examEndpoints.releaseResults(token, runId, releaseNote);
+      }
       setReleaseNote("");
+      setIncompleteWarning(null);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not release results.");
+      if (err instanceof ExamApiError && err.code === "release_incomplete") {
+        setIncompleteWarning(err.message);
+      } else {
+        // A refusal (e.g. a correction without a reason) is explained next to the button, not by replacing the page.
+        setReleaseError(describeConflict(err, "Could not release results."));
+      }
     } finally {
       setReleasing(false);
     }
@@ -182,20 +197,39 @@ function GradebookContent() {
         <h2 className="text-lg font-semibold">Release results</h2>
         <p className="mt-1 text-sm text-[var(--text-muted)]">
           {latestRelease
-            ? `Currently released at version ${latestRelease.version} (${new Date(latestRelease.released_at).toLocaleString()}).`
+            ? `Students currently see version ${latestRelease.version}, released ${new Date(latestRelease.released_at).toLocaleString()}. Regrades and defective-question resolutions change this gradebook at once but reach students only when you release a new version.`
             : "Results have not been released to students yet."}
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <input
             className="input-field max-w-xs"
-            placeholder="Optional note (e.g. 'corrected after regrade')"
+            aria-label={latestRelease ? "Reason for the corrected release" : "Release note (optional)"}
+            placeholder={latestRelease ? "Reason for the correction (required)" : "Optional note"}
             value={releaseNote}
             onChange={(e) => setReleaseNote(e.target.value)}
           />
-          <button className="btn-primary" disabled={releasing} onClick={handleRelease}>
+          <button className="btn-primary" disabled={releasing} onClick={() => handleRelease()}>
             {releasing ? "Releasing…" : latestRelease ? "Release corrected results (new version)" : "Release results"}
           </button>
         </div>
+        {releaseError && (
+          <p role="alert" className="mt-2 text-sm text-[var(--error)]">
+            {releaseError}
+          </p>
+        )}
+        {incompleteWarning && (
+          <div role="alert" className="mt-3 rounded-md border border-[var(--border)] p-3 text-sm">
+            <p>{incompleteWarning}</p>
+            <div className="mt-2 flex gap-2">
+              <button className="btn-primary text-xs" disabled={releasing} onClick={() => handleRelease(true)}>
+                Release anyway
+              </button>
+              <button className="btn-secondary text-xs" onClick={() => setIncompleteWarning(null)}>
+                Not yet
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Per-question counts */}
@@ -243,12 +277,14 @@ function GradebookContent() {
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <input
             className="input-field max-w-xs font-mono text-xs"
+            aria-label="Question id to resolve"
             placeholder="question_id (from the table above)"
             value={defectiveQuestionId}
             onChange={(e) => setDefectiveQuestionId(e.target.value)}
           />
           <select
             className="input-field max-w-[200px]"
+            aria-label="Resolution"
             value={defectiveResolution}
             onChange={(e) => setDefectiveResolution(e.target.value as "full_credit_all" | "exclude_from_total")}
           >
@@ -256,6 +292,7 @@ function GradebookContent() {
             <option value="exclude_from_total">Exclude from total</option>
           </select>
           <input
+            aria-label="Reason for the resolution"
             className="input-field max-w-xs"
             placeholder="Reason"
             value={defectiveReason}
@@ -280,7 +317,7 @@ function GradebookContent() {
       <div className="card mt-6 p-6">
         <h2 className="text-lg font-semibold">Export</h2>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <select className="input-field max-w-[140px]" value={exportFormat} onChange={(e) => setExportFormat(e.target.value as "csv" | "json")}>
+          <select className="input-field max-w-[140px]" aria-label="Export format" value={exportFormat} onChange={(e) => setExportFormat(e.target.value as "csv" | "json")}>
             <option value="csv">CSV</option>
             <option value="json">JSON</option>
           </select>
@@ -296,6 +333,11 @@ function GradebookContent() {
             <span className="badge-error badge">Export failed: {exportJob.error}</span>
           )}
         </div>
+        {exportJob && exportJob.status === "succeeded" && exportJob.expires_at && (
+          <p className="mt-2 text-xs text-[var(--text-muted)]">
+            Available until {new Date(exportJob.expires_at).toLocaleString()}; the file is deleted after that.
+          </p>
+        )}
       </div>
 
       {/* Student rows */}

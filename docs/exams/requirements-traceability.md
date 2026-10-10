@@ -1,4 +1,4 @@
-﻿# Hirelog Exams — requirements traceability (Prompt 0, v1.1)
+# Hirelog Exams — requirements traceability (Prompt 0, v1.1)
 
 Audited 2026-10-09 at `5b0ad3b` (pre-Prompt-1 baseline). Companion documents: [baseline.md](baseline.md),
 [integration-map.md](integration-map.md), [compatibility-and-migration.md](compatibility-and-migration.md), [delta-plan.md](delta-plan.md).
@@ -521,6 +521,45 @@ D-7 (who approves a profile, retention periods for evidence and the ledger) is o
 | PWA-01 | Only the static shell cached; authenticated pages/APIs network-only/no-store at SW, framework, CDN, API | SW precaches 4 static files and never calls `respondWith` for API/page requests; API: per-route + middleware `no-store`; Next: only `/_next/static` headers (prod immutable) — **no explicit `no-store` for `/exams/**` HTML** | `e2e:exams-pwa.spec.ts` (2) | PARTIALLY_EXISTS | Add `Cache-Control: private, no-store` for `/exams/:path*` in `next.config.ts` | P10 |
 | PWA-02 | SW updates never interrupt an active attempt; cache hygiene on logout | `useExamServiceWorker({attemptActive})` holds `skipWaiting`; SW caches no user data so there is nothing to purge | `fe:useExamServiceWorker.test.ts` (7), e2e above | EXISTS_AND_VERIFIED | — | — |
 | A11Y-01 | Accessibility automation: axe, keyboard, themes/contrast, accommodations | Axe + keyboard only for `/exams/login`; accommodation tests for camera waiver; manual checklist doc | `e2e:exams-accessibility.spec.ts` (2), `fe:useCameraCapture.test.ts` (4) | PARTIALLY_EXISTS | Cover exam pages and theme contrast | P10 |
+
+### 10.1 Status after the Prompt 10 implementation
+
+Implemented as [ADR 0026](../adr/0026-gradebook-frozen-releases-scoring-semantics-exports-and-cache-boundary.md); semantics in
+[scoring-and-gradebook-semantics.md](scoring-and-gradebook-semantics.md); migration notes in [compatibility-and-migration.md §15](compatibility-and-migration.md).
+Gradebook evidence is HTTP- and service-level against the in-memory Firestore (real routers and repositories, real resource-scope checks); the service worker is tested by running the **shipped** `exams-sw.js` against fakes;
+`next.config.ts` was checked on a production build (`next start`); two Playwright specs ran in real Chromium against the dev server. **No real screen reader, zoom, device, CDN, managed client or axe colour-contrast run was used.**
+Backend suite: 1516 tests passing with `EXAMS_ENABLED=false` (1423 before); `ruff check .` clean; frontend `tsc` and `eslint` clean, Vitest 237 passing in 35 files (193 / 28 before; `--maxWorkers=2 --testTimeout=20000`).
+
+| ID | Status after P10 | What changed | Evidence |
+|---|---|---|---|
+| GRD-01 | EXISTS_AND_VERIFIED (D-8 open for policy) | Exact semantics written and enforced: multiple select graded as an exact set (was always wrong), short-answer score bounded, latest defective resolution wins, `presented` needs a started attempt, integrity label follows the block threshold; counts always add up to `assigned` | `test_judge_choice_grading_p10.py`, `test_gradebook_routes_p10.py` (counts, multiple select, defective order, score range), `test_gradebook_aggregation_service.py` |
+| GRD-02 | EXISTS_AND_VERIFIED (was defective) | Students are served the release's **frozen** rows; v2+ needs a reason and is audited; MCQ / short-answer / coding regrades stay new versions (short-answer re-review now keeps `history`) | `test_a_regrade_after_release_*`, `test_a_defective_question_fix_reaches_students_only_with_a_new_release`, `test_gradebook_release_service.py` (24) |
+| GRD-03 | EXISTS_AND_VERIFIED (real JPlag unqualified) | Unchanged; an HTTP test shows a stored 99% match changes no score and appears in no student response | `test_similarity_evidence_never_changes_a_score_or_reaches_a_student` |
+| GRD-04 | EXISTS_AND_VERIFIED (was defective) | Content expires (`EXAM_EXPORT_RETENTION_HOURS`) and is swept; an expired job refuses tickets and downloads; CSV neutralises 15 prefix variants; tickets bound to the caller and single-use; scoped by run owner. Residual: in-memory content when no bucket | `test_gradebook_export_p10.py`, `test_an_export_*` (3) |
+| GRD-05 | EXISTS_AND_VERIFIED | Results, feedback and disputes denied before a release; own row only | `test_a_student_gets_nothing_before_a_release_*` |
+| GRD-06 | EXISTS_AND_VERIFIED (was defective for grade disputes) | Disputes need a release and a question in the student's row, one open per question, bounded, race-safe, audited; proctoring appeals unchanged | `test_grade_appeals_*`, `test_only_the_runs_owner_can_resolve_a_grade_appeal`, release-service tests |
+| GRD-07 | EXISTS_AND_VERIFIED | Every gradebook route denied to a teacher who does not own the run (`scope_denied`), exercised with the real scope dependencies | `test_a_teacher_who_does_not_own_the_run_is_denied_every_gradebook_route` (9) |
+| PWA-01 | EXISTS_AND_VERIFIED (CDN UNVERIFIED) | `Cache-Control: private, no-store` for `/exams/:path*` (verified on a production build, static and dynamic pages); the shipped worker never intercepts API / page requests, never writes a runtime cache, holds exactly the 4 static files through a session / account switch / logout; offline shell shown on a failed navigation | `examHeaders.test.ts`, `examServiceWorker.test.ts` (18 cases), `exams-pwa.spec.ts`, `exams-pwa-cache.spec.ts` |
+| PWA-02 | EXISTS_AND_VERIFIED (was defective) | One module-level attempt lock: a layout instance can no longer release a waiting update or reload during an attempt; unknown (loading) and blocked count as active; the last release lets the update through | `useExamServiceWorker.test.ts` (4 new; they fail on the old hook) |
+| A11Y-01 | PARTIALLY_EXISTS (automation only) | axe in jsdom on the exam page (short answer, single, multiple select, time-up), student results, blocked page and the faculty gradebook; the helper is proven to detect violations; keyboard-only multiple select to Submit; named controls; polite live warnings; theme contrast tokens (existing `examTheme.test.ts`); camera waiver accommodation (existing). **Not checked:** colour contrast computed by axe, zoom / reflow, screen-reader output, real devices | `page.a11y.test.tsx` (3 files), `axe.test.tsx`, `page.release.test.tsx` |
+
+Defects found in the existing code while implementing:
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| P10-1 | High | Students saw the live gradebook after any release; regrades leaked instantly, unreleased and unaudited | Frozen per-release rows, reasoned and audited corrections |
+| P10-2 | High | Multiple-select answers were always graded wrong | Exact-set comparison (applies to newly finalized attempts) |
+| P10-3 | High | The layout's service-worker hook released a waiting update, and reloaded the page, during an attempt | Shared attempt lock; loading / blocked held |
+| P10-4 | Medium | Exports never expired | Retention + sweep + refusal after expiry |
+| P10-5 | Medium | CSV only neutralised a first `= + - @` | TAB, CR, LF, look-alikes, leading whitespace / zero-width |
+| P10-6 | Medium | Never-started students counted as presented; defective resolution chosen by store order; short-answer score above the maximum | Fixed with tests |
+| P10-7 | Medium | Grade disputes: before release, any question id, unlimited, racing; a re-review overwrote the earlier score | Guards, derived ids, `history` |
+| P10-8 | Low | Integrity label "blocked upheld" for any counted incident | Threshold- and review-based |
+| P10-9 | Low | Student results showed grading provenance; faculty results page replaced itself with an error on a refused release; unlabeled inputs | Student view, inline errors with acknowledge / reason flow, labels |
+| P10-10 | Low | No framework-level `no-store` for exam pages | `next.config.ts` |
+
+Residual: real screen-reader / zoom / device / contrast evidence; CDN and managed-client (lockdown) profile; D-8 (partial credit, negative marking, official count definitions);
+no append-only history for grade disputes; export content in process memory without a bucket; orphan snapshot rows when two releases collide; `next.config.ts` carries an unrelated, uncommitted `turbopack.root` change of the user.
 
 ## 11. Staging, release readiness, operations — Prompt 11
 

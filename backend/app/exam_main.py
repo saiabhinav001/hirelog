@@ -257,6 +257,22 @@ def _evidence_retention_sweep_loop() -> None:
         _stop_event.wait(900.0)
 
 
+def _export_expiry_sweep_loop() -> None:
+    """Deletes the stored content of gradebook exports past `EXAM_EXPORT_RETENTION_HOURS` (the job record stays).
+    Unlike the evidence sweep it also runs without a bucket, because exports then sit in process memory and must still
+    be dropped. Bounded and idempotent; safe in several instances."""
+    from app.api.routes.exams_proctoring import _storage
+    from app.domain.gradebook.export_service import GradebookExportService
+
+    service = GradebookExportService(db, _storage(), retention_hours=settings.EXAM_EXPORT_RETENTION_HOURS)
+    while not _stop_event.is_set():
+        try:
+            service.sweep_expired()
+        except Exception:
+            logger.exception("export expiry sweep tick failed")
+        _stop_event.wait(900.0)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not settings.EXAMS_ENABLED:
@@ -276,6 +292,7 @@ async def lifespan(app: FastAPI):
         threading.Thread(target=_judge_sweep_loop, daemon=True).start()
         threading.Thread(target=_proctoring_stale_incident_sweep_loop, daemon=True).start()
         threading.Thread(target=_evidence_retention_sweep_loop, daemon=True).start()
+        threading.Thread(target=_export_expiry_sweep_loop, daemon=True).start()
         if settings.EXAM_FINALIZATION_SWEEP_ENABLED:
             threading.Thread(target=_finalization_sweep_loop, daemon=True).start()
         else:

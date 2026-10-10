@@ -80,7 +80,7 @@ class GradingTriggerOutboxHandler:
                 all_test_groups=all_groups, allowlist=self._allowlist,
             )
         elif candidate.item_type in (ItemType.SINGLE_CHOICE, ItemType.MULTIPLE_SELECT):
-            student_answer = str(answer.get("selected", ""))
+            student_answer = answer.get("selected")  # str for single choice, list[str] for multiple select
             self._judge.grade_mcq(
                 candidate_id=candidate_id, run_id=run_id, uid=uid, question_id=question_id,
                 student_answer=student_answer, expected_answer=str(candidate.private_expected_answer or ""),

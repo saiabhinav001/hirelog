@@ -103,7 +103,11 @@ class _FakeJobRepo:
         return self.store.get(job_id)
 
     def update(self, job_id: str, update: dict) -> None:
-        self.store[job_id] = self.store[job_id].model_copy(update=update)
+        # Round-trip through the model, as the real repository does through Firestore (ISO strings -> datetimes).
+        self.store[job_id] = ExportJob.model_validate({**self.store[job_id].model_dump(mode="json"), **update})
+
+    def list_expired(self, now) -> list[ExportJob]:
+        return [j for j in self.store.values() if j.expires_at is not None and j.expires_at <= now and j.expired_at is None]
 
 
 class _FakeTicketRepo:
@@ -136,6 +140,7 @@ def _service(*, rows=None) -> GradebookExportService:
     svc = GradebookExportService.__new__(GradebookExportService)
     svc._db = _FakeDb()
     svc._storage = InMemoryEvidenceStorage()
+    svc._retention = timedelta(hours=24)
     svc.jobs = _FakeJobRepo()
     svc.tickets = _FakeTicketRepo()
     svc.access_log = _FakeAccessLogRepo()

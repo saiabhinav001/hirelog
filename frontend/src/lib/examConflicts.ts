@@ -24,6 +24,12 @@ const CONFLICT_TEXT: Record<string, string> = {
   attempt_not_blocked: "That attempt is no longer blocked, so there is nothing to decide. The page has been refreshed.",
   evidence_storage_unavailable: "Evidence storage is not available right now. The exam itself is not affected.",
   view_ticket_invalid: "That evidence link has expired, was already used, or belongs to someone else. Request it again.",
+  release_reason_required: "A corrected release must say why it is being made. Add a note describing the correction.",
+  release_incomplete: "Some attempts are still running or some answers are not graded yet.",
+  grade_appeal_not_allowed: "That dispute cannot be filed: results must be released, the question must be in your results, and each question can have one open dispute.",
+  export_expired: "That export has expired and its content was deleted. Generate a new one.",
+  export_ticket_invalid: "That download link has expired or was already used. Request a new one.",
+  score_out_of_range: "That score is outside the range allowed for this question.",
 };
 
 export function describeConflict(err: unknown, fallback = "That did not work."): string {

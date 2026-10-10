@@ -133,7 +133,8 @@ class _FakeShortAnswerReviewRepo:
 
     def update(self, review_id: str, update: dict) -> None:
         current = self.store[review_id]
-        self.store[review_id] = current.model_copy(update=update)
+        # Round-trip through the model like Firestore does (ISO strings come back as datetimes, enums as enums).
+        self.store[review_id] = ShortAnswerReview.model_validate({**current.model_dump(mode="json"), **update})
 
     def list_pending(self, *, limit: int = 100):
         matches = [r for r in self.store.values() if r.status == ShortAnswerReviewStatus.PENDING]

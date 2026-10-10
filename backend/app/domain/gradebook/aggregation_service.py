@@ -16,6 +16,7 @@ from app.domain.gradebook.decisions import (
     coding_failure_category,
     compute_gradebook_counts,
     count_tests_passed,
+    decide_integrity_disposition,
 )
 from app.domain.gradebook.models import (
     GradebookCounts,
@@ -101,6 +102,7 @@ def _build_question_result(
     if candidate.item_type == ItemType.SHORT_ANSWER:
         graded = short_answer is not None and short_answer.status == ShortAnswerReviewStatus.REVIEWED
         score = short_answer.score if (graded and short_answer and short_answer.score is not None) else 0.0
+        score = min(max(score, 0.0), candidate.marks)  # a score is never shown outside 0..marks
         outcome = classify_question_outcome(
             has_nonblank_answer=has_answer, grading_available=graded, weighted_score=score, max_score=candidate.marks
         )
@@ -114,20 +116,15 @@ def _build_question_result(
     return StudentQuestionResult(**base, outcome=QuestionOutcome.PENDING, weighted_score=0.0, max_score=candidate.marks)
 
 
-def _integrity_disposition(*, attempt: Attempt, counted_incident_count: int, appeals: list) -> IntegrityDisposition:
-    """Documented heuristic (see ADR 0014): there is no machine-readable
-    "resolution kind" field on a ledger resolution (`resolve_block` records
-    free-text notes only), so a block resolved via "allow to continue"
-    WITHOUT the student ever filing a formal appeal is conservatively shown
-    as BLOCKED_UPHELD rather than BLOCKED_RESOLVED_CONTINUED — never
-    silently hiding a real counted incident."""
-    if attempt.status == AttemptStatus.BLOCKED:
-        return IntegrityDisposition.BLOCKED_PENDING_REVIEW
-    if any(a.status == AppealStatus.OVERTURNED for a in appeals):
-        return IntegrityDisposition.BLOCKED_RESOLVED_CONTINUED
-    if counted_incident_count > 0:
-        return IntegrityDisposition.BLOCKED_UPHELD
-    return IntegrityDisposition.CLEAN
+def _integrity_disposition(
+    *, attempt: Attempt, counted_incident_count: int, review_floor: int, block_threshold: int, appeals: list
+) -> IntegrityDisposition:
+    """See `decide_integrity_disposition` for the exact rule."""
+    return decide_integrity_disposition(
+        blocked_now=attempt.status == AttemptStatus.BLOCKED, counted_incidents=counted_incident_count,
+        block_threshold=block_threshold, review_floor=review_floor,
+        appeal_overturned=any(a.status == AppealStatus.OVERTURNED for a in appeals),
+    )
 
 
 class GradebookAggregationService:
@@ -161,7 +158,11 @@ class GradebookAggregationService:
         grading_by_q = {r.question_id: r for r in self.grading_results.list_latest_for_attempt(run.id, uid)}
         mcq_by_q = {r.question_id: r for r in self.mcq_results.list_for_attempt(run.id, uid)}
         short_by_q = {r.question_id: r for r in self.short_answer_reviews.list_latest_for_attempt(run.id, uid)}
-        defective_by_q = {d.question_id: d for d in self.defective_resolutions.list_for_run(run.id)}
+        # Several resolutions may exist for one question (a later one supersedes an earlier one; both stay on
+        # record). The latest by time wins, deterministically, whatever order the store returns them in.
+        defective_by_q = {
+            d.question_id: d for d in sorted(self.defective_resolutions.list_for_run(run.id), key=lambda r: (r.resolved_at, r.id))
+        }
 
         question_results: list[StudentQuestionResult] = []
         for slot_index in range(revision.slot_count):
@@ -173,7 +174,10 @@ class GradebookAggregationService:
 
             draft = self.drafts.get(run.id, uid, question_id)
             has_answer = _has_nonblank_answer(candidate.item_type, draft)
-            presented = slot_index <= attempt.current_slot_index or draft is not None
+            # "Presented" = the student actually reached the question. A student who never started has not been
+            # shown slot 0 just because the stored slot index defaults to 0.
+            started = attempt.status not in (AttemptStatus.NOT_STARTED, AttemptStatus.ADMITTED)
+            presented = (started and slot_index <= attempt.current_slot_index) or draft is not None
 
             result = _build_question_result(
                 uid=uid, candidate=candidate, question_id=question_id, slot_index=slot_index,
@@ -189,7 +193,8 @@ class GradebookAggregationService:
         appeals = [a for a in self.proctoring_appeals.list_for_run(run.id) if a.uid == uid]
         disposition = _integrity_disposition(
             attempt=attempt, counted_incident_count=proctoring_state.counted_incident_count if proctoring_state else 0,
-            appeals=appeals,
+            review_floor=proctoring_state.review_floor if proctoring_state else 0,
+            block_threshold=run.policy.warning_threshold, appeals=appeals,
         )
 
         return StudentGradebookRow(

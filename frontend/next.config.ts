@@ -96,6 +96,13 @@ const nextConfig: NextConfig = {
             key: "Permissions-Policy",
             value: "camera=(self), microphone=(), geolocation=()",
           },
+          // Authenticated exam pages (questions, answers, results, evidence,
+          // tokens) must never be stored by the browser, the back/forward
+          // cache's disk layer, a shared proxy or a CDN. `private, no-store`
+          // is the framework/CDN half of the exam PWA contract; the service
+          // worker never caches these routes and the exam API sends no-store
+          // on every response.
+          { key: "Cache-Control", value: "private, no-store" },
         ],
       },
       // Cache static assets aggressively — PRODUCTION ONLY. Turbopack dev

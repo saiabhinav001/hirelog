@@ -528,3 +528,46 @@ Rollback: the previous code rejects a policy containing `proctoring_profile` (it
 - **A student reports "submit failed":** ask them to reload; the page shows the receipt if the first submit committed. Support can read the receipt with the same key; a new key will answer `already_submitted`.
 - **Grading skipped a draft:** a draft id that is not a slot id is logged and skipped (`draft id … is not a slot id`); drafts written before this change under an invalid id are left in place.
 - **Rollback:** the new fields are optional and ignored by the previous code; reverting restores the old (weaker) retry and slot behavior. Do not roll back mid-exam: the old code answers a retried submit with a conflict.
+
+## 15. Prompt 10 migration notes
+
+Implemented as [ADR 0026](../adr/0026-gradebook-frozen-releases-scoring-semantics-exports-and-cache-boundary.md). **No backfill is needed or performed.** One new private collection (`gradebook_release_rows`, covered by the default-deny rule in `firestore.rules`), additive fields only,
+one new optional environment variable.
+
+### 15.1 Behavior changes teachers, students and integrators will see
+
+| Area | Before | Now |
+|---|---|---|
+| `GET /student/gradebook/runs/{run}/results` | The live row, once any release existed | The latest release's **frozen** row (no submission hash / runtime image / suite version); `403 results_not_released` for a student with no row in the release |
+| `POST /faculty/gradebook/runs/{run}/release` | Always succeeded | Body `{note, acknowledge_incomplete}`. `409 release_reason_required` for version 2+ without a note; `409 release_incomplete` while the run is open, attempts are in progress / blocked or answers are pending, unless `acknowledge_incomplete` is true. Audited (`exam_results_released`) |
+| Releases made earlier | n/a | No `snapshot_id`: served live as before until the next release |
+| `POST /faculty/gradebook/runs/{run}/questions/{q}/defective` | Any string accepted | `404` unless the question is a slot of the run's revision; audited (`exam_question_resolved_defective`) |
+| Several defective resolutions for one question | One applied, depending on store order | The latest by time applies; all stay on record |
+| `POST /student/gradebook/runs/{run}/questions/{q}/appeals` | Any time, any string, unlimited | `409 grade_appeal_not_allowed` unless released, a question in the student's row, no open dispute for it, and fewer than 10 for the student; records `release_version` |
+| Resolving a grade dispute | Not audited | Audited (`exam_grade_appeal_resolved`) |
+| Multiple-select grading | Always wrong (list compared with `"A,C"`) | Exact set, no partial credit. **Only for attempts finalized after this change**; stored results are not rewritten |
+| `POST /faculty/judge/short-answer-reviews/{id}` | Any score >= 0 | `409 score_out_of_range` outside `0..marks`; a re-review keeps the earlier one in `history` |
+| `presented` count | A never-started student counted for question 1 | Needs a started attempt (or a saved draft) |
+| `integrity_disposition` | `blocked_upheld` for any counted incident | Needs counted incidents >= the run's `warning_threshold`; `blocked_resolved_continued` when a reviewer allowed the attempt to continue |
+| Gradebook exports | Content kept indefinitely | Deleted after `EXAM_EXPORT_RETENTION_HOURS` (default 24); job record keeps `expires_at` / `expired_at`; `409 export_expired` for new or earlier-issued tickets |
+| CSV cells | First character `= + - @` | Also TAB, CR, LF, full-width look-alikes, and those behind leading whitespace / zero-width characters |
+| `/exams/**` pages | No framework cache header | `Cache-Control: private, no-store` |
+| Service-worker updates | Could activate and reload during an attempt (layout instance) | Held while any component holds an attempt open (loading, in progress, blocked) |
+
+### 15.2 Data and configuration
+
+| Item | Notes |
+|---|---|
+| `gradebook_release_rows/{snapshot_id}__{uid}` | New, private (default-deny). One document per enrolled student per release. Release ids are now `{run}-v{n}` |
+| `ReleaseRecord` | Adds `snapshot_id`, `row_count`, `pending_question_count`, `live_attempt_count`, `acknowledged_incomplete` |
+| `GradeAppeal` / `ExportJob` / `ShortAnswerReview` | Add `release_version` / `expires_at`, `expired_at` / `history` |
+| `EXAM_EXPORT_RETENTION_HOURS` | Optional, default 24, in `.env.example`. A new background loop (`_export_expiry_sweep_loop`, 900 s) runs with or without a bucket |
+| Firestore index | The sweep queries `gradebook_export_jobs` on `expires_at` alone (single-field, automatic) |
+
+### 15.3 Rollback
+
+Code only: old code ignores the new fields and the new collection; releases made by the new code (which carry a `snapshot_id`) would then be served live again. Nothing to migrate back. Exports already past their window stay deleted.
+
+### 15.4 Old clients
+
+The student results page tolerates the missing provenance fields. An old faculty page that posts `{note}` only keeps working for a complete first release and shows the server's refusal otherwise.

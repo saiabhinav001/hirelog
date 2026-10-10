@@ -23,3 +23,29 @@ class ExportJobNotReadyError(GradebookDomainError):
     """Download attempted before the export job finished (or it failed)."""
 
     code = "export_job_not_ready"
+
+
+class ReleaseReasonRequiredError(GradebookDomainError):
+    """A corrected re-release (version 2+) must say why."""
+
+    code = "release_reason_required"
+
+
+class ReleaseIncompleteError(GradebookDomainError):
+    """Results were released while attempts were still live or answers still
+    ungraded, without the releaser acknowledging that."""
+
+    code = "release_incomplete"
+
+
+class ExportExpiredError(GradebookDomainError):
+    """The export's retention window has passed and its content was deleted."""
+
+    code = "export_expired"
+
+
+class GradeAppealNotAllowedError(GradebookDomainError):
+    """A grade appeal that is not for a released result / a real question, or
+    that duplicates a still-pending appeal."""
+
+    code = "grade_appeal_not_allowed"

@@ -9,6 +9,7 @@ import { useExamAuth } from "@/lib/examAuth";
 import { describeConflict } from "@/lib/examConflicts";
 import { examEndpoints, type Appeal, type Attempt, type IncidentLogEntry } from "@/lib/examEndpoints";
 import { useLiveSocket } from "@/lib/liveSocket";
+import { useExamServiceWorker } from "@/lib/useExamServiceWorker";
 
 function BlockedContent() {
   const { runId } = useParams<{ runId: string }>();
@@ -41,6 +42,8 @@ function BlockedContent() {
   }, [refresh]);
 
   useLiveSocket({ runId, getToken, onReconcile: refresh });
+  // A blocked attempt can be resumed by a reviewer: never let a service-worker update reload the page meanwhile.
+  useExamServiceWorker({ attemptActive: true });
 
   // The server decides: a reviewer letting the attempt continue, or the window ending, moves the student on.
   useEffect(() => {

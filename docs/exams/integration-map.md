@@ -1,4 +1,4 @@
-﻿# Hirelog Exams — integration map (existing components and their callers)
+# Hirelog Exams — integration map (existing components and their callers)
 
 Audited 2026-10-09 at `5b0ad3b` (pre-Prompt-1). Read-only evidence: every row below was read from code, not inferred from
 design documents. Companion documents: [baseline.md](baseline.md), [requirements-traceability.md](requirements-traceability.md),
@@ -84,7 +84,7 @@ All routers carry router-level `dependencies=[Depends(require_exams_enabled)]` (
 | `exams_judge` (`…/student/judge`, `…/faculty/judge`) | student: POST `/public-run`, GET `/public-run/{id}`; faculty: GET/POST `/grading-results/{id}[/regrade]`, POST `/mcq-results/{run}/{uid}/{q}/regrade`, GET `/short-answer-reviews/pending`, POST `/short-answer-reviews/{id}`; Prompt 8: GET `/runs/{run_id}/stalled-submissions`, POST `/runs/{run_id}/requeue-stalled` (run scope; requeue audited) | user / faculty | `judge_submissions`, `judge_grading_results`, `judge_mcq_results`, `judge_short_answer_reviews`; authz audit |
 | `exams_live` (`…/live`) | POST `/ticket`; WebSocket `/ws?ticket&run_id` | user (ticket) | `live_tickets`; in-memory `live_connection_manager` |
 | `exams_proctoring` (`…/student/proctoring`, `…/faculty/proctoring`) | student: POST observations/snapshots/appeals, GET incidents, POST snapshot upload + missing; faculty: GET incidents/snapshots/appeals, POST resolve/view-ticket/appeal-resolve, GET `/view/{ticket}` | user / faculty | `proctoring_states`, `proctoring_log`, `evidence_snapshots`, `evidence_upload_tickets`, `evidence_view_tickets`, `evidence_access_log`, `proctoring_appeals` |
-| `exams_gradebook` (`…/student/gradebook`, `…/faculty/gradebook`) | student: results, feedback, grade appeals; faculty: rows, counts, release(+list), defective(+list), appeals(+resolve), similarity (3), export (create/get/ticket/download) | user / faculty | `gradebook_releases`, `gradebook_defective_questions`, `gradebook_grade_appeals`, `gradebook_export_*`, `similarity_matches` |
+| `exams_gradebook` (`…/student/gradebook`, `…/faculty/gradebook`) | student: results, feedback, grade appeals; faculty: rows, counts, release(+list), defective(+list), appeals(+resolve), similarity (3), export (create/get/ticket/download) | user / faculty | `gradebook_releases`, `gradebook_release_rows` (frozen per-release student rows), `gradebook_defective_questions`, `gradebook_grade_appeals`, `gradebook_export_*`, `similarity_matches` |
 | `exams_lockdown` (`…/faculty/lockdown`) | GET/POST `/runs/{id}/profile`; GET `/runs/{id}/admission-log` | faculty | `exam_lockdown_profiles`, `exam_lockdown_admission_log` |
 
 ## 4. Domain packages (pure decision modules are Firestore-free)
@@ -109,6 +109,7 @@ All routers carry router-level `dependencies=[Depends(require_exams_enabled)]` (
 | `_judge_sweep_loop` → `JudgeService.sweep_pending_once` | 2 s | yes | completes FINAL_GRADE / abandoned public runs; retries unsent / failed sealed submissions with backoff and hands exhausted ones to an operator (Prompt 8) |
 | `_proctoring_stale_incident_sweep_loop` | 15 s | yes | closes departures with no end event (per state; the run's grace; ended attempts closed without counting) |
 | `_evidence_retention_sweep_loop` → `RetentionSweeper` | 900 s | yes | marks lapsed upload requests missing; deletes bytes + record together unless held; not started in production without a bucket |
+| `_export_expiry_sweep_loop` → `GradebookExportService.sweep_expired` | 900 s | yes | deletes the stored content of exports past `EXAM_EXPORT_RETENTION_HOURS` (bytes first, then the job record); also runs without a bucket |
 | `_kt_ingestion_loop` → `KtIngestionOutboxHandler` (kind `kt_ingest`, one job at a time, lease ≥ 120 s) | idle 2 s | yes (status-checked, create-only versions, stale-attempt jobs ignored) | scan + parse uploaded sources in a killable child process (Prompt 4, ADR 0020); the main outbox loop excludes this kind so grading and run commands never wait behind a document |
 | `_finalization_sweep_loop` → `ExamFinalizationSweeper.sweep_active_runs_once` (+ `run_schedule_automation_once` when `EXAM_SCHEDULE_AUTOMATION_ENABLED`) | `EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS` (15 s) | yes (each seal re-decides in its own transaction) | seals attempts past their own deadline with receipt + `attempt_finalized` outbox row + audit (Prompt 3, ADR 0019); was absent at the audit (TMR-02) |
 
@@ -127,7 +128,7 @@ manager is **per process** (single-instance caveat, ADR 0012 §4).
 | Judge | `judge_submissions`, `judge_grading_results`, `judge_mcq_results`, `judge_short_answer_reviews` |
 | Proctoring | `proctoring_states`, `proctoring_log` (append-only), `evidence_snapshots`, `evidence_upload_tickets`, `evidence_view_tickets`, `evidence_access_log`, `proctoring_appeals` |
 | Live / lockdown | `live_tickets`, `exam_lockdown_profiles`, `exam_lockdown_admission_log` |
-| Gradebook | `gradebook_releases`, `gradebook_defective_questions`, `gradebook_grade_appeals`, `gradebook_export_jobs`, `gradebook_export_tickets`, `gradebook_export_access_log`, `similarity_matches` |
+| Gradebook | `gradebook_releases`, `gradebook_release_rows` (frozen per-release student rows), `gradebook_defective_questions`, `gradebook_grade_appeals`, `gradebook_export_jobs`, `gradebook_export_tickets`, `gradebook_export_access_log`, `similarity_matches` |
 | Authorization (Prompt 1) | `exam_staff_bindings` (doc id = SHA-256 of the normalized e-mail), `exam_authz_audit` (append-only) |
 | Legacy (shared project) | `users` (client rules: self-read, create with `role == 'viewer'` + key allowlist, update restricted to `name/display_name/name_last_updated_at` with `role` unchanged), `interview_experiences`, `practice_lists` (+`questions`), `metadata` |
 
@@ -158,7 +159,7 @@ There is **no** faculty UI for institutions/roster/memberships (API-only today) 
 `EXAM_OTP_HMAC_SECRET` / `_TTL_SECONDS` (300) / `_MAX_ATTEMPTS` (5) / `EXAM_OTP_DELIVERY_PROVIDER` (Prompt 2; empty), `EXAM_STAFF_REAUTH_MAX_AGE_SECONDS` (900),
 `EXAM_MALWARE_SCANNER_ENDPOINT` (ignored), `EXAM_GENERATION_PROVIDER_*`, `EXAM_REVIEW_PROVIDER_*`, `EXAM_FEEDBACK_PROVIDER_*`, `EXAM_JUDGE_PROVIDER_*`,
 `EXAM_LIVE_TICKET_TTL_SECONDS` (60), `EXAM_PROCTORING_GRACE_SECONDS` (2.0) / `_COOLDOWN_SECONDS` (5.0) / `_STALE_INCIDENT_SECONDS` (120),
-`EXAM_EVIDENCE_*` (ticket TTLs, retention 90 d, `EXAM_EVIDENCE_STORAGE_BUCKET`), `EXAM_EXPORT_DOWNLOAD_TICKET_TTL_SECONDS` (300), `EXAM_JPLAG_*`.
+`EXAM_EVIDENCE_*` (ticket TTLs, retention 90 d, `EXAM_EVIDENCE_STORAGE_BUCKET`), `EXAM_EXPORT_DOWNLOAD_TICKET_TTL_SECONDS` (300), `EXAM_EXPORT_RETENTION_HOURS` (24), `EXAM_JPLAG_*`.
 Frontend: `NEXT_PUBLIC_EXAMS_ENABLED`, `NEXT_PUBLIC_EXAMS_API_BASE_URL`.
 
 ## 9. Seams that must be reused (do not re-implement)

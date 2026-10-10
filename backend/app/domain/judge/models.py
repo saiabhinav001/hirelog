@@ -178,3 +178,5 @@ class ShortAnswerReview(BaseModel):
     reviewed_at: Optional[datetime] = None
     version: int = 1
     created_at: datetime
+    # Earlier reviews, oldest first: a re-review keeps what it replaced (score, notes, who, when, which version).
+    history: list[dict] = Field(default_factory=list)

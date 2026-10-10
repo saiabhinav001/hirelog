@@ -236,6 +236,8 @@ class Settings(BaseSettings):
     # separately provisioned Java runtime — this config alone does not
     # create or validate that environment (see ADR for requirements).
     EXAM_EXPORT_DOWNLOAD_TICKET_TTL_SECONDS: int = 300
+    # How long a generated gradebook export stays downloadable before its content is deleted (job record kept).
+    EXAM_EXPORT_RETENTION_HOURS: int = 24
     EXAM_JPLAG_JAR_PATH: Optional[str] = None
     EXAM_JPLAG_JAVA_EXECUTABLE: str = "java"
 

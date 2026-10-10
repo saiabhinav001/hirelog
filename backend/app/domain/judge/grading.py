@@ -60,8 +60,31 @@ def aggregate_weighted_score(results: list[TestCaseResult]) -> tuple[float, floa
     return earned, max_score
 
 
-def grade_mcq_exact_match(student_answer: str, expected_answer: str) -> bool:
-    return student_answer.strip() == expected_answer.strip()
+def _choice_keys(value: object) -> Optional[frozenset[str]]:
+    """Normalises a stored answer / answer key to a set of option keys.
+    A list/tuple/set (what the exam UI sends for multiple select) or a
+    comma-separated string ("A,C", the answer-key format) are both accepted;
+    anything else, or any non-string member, is not a valid answer (None)."""
+    if value is None:
+        return frozenset()
+    if isinstance(value, str):
+        return frozenset(part.strip() for part in value.split(",") if part.strip())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        if not all(isinstance(item, str) for item in value):
+            return None
+        return frozenset(item.strip() for item in value if item.strip())
+    return None
+
+
+def grade_mcq_exact_match(student_answer: object, expected_answer: object) -> bool:
+    """All-or-nothing: the selected option set must equal the answer-key set
+    exactly. No partial credit and no negative marking (scoring semantics,
+    ADR 0026; partial credit is open decision D-8). An empty answer or an
+    empty answer key is never correct."""
+    selected, expected = _choice_keys(student_answer), _choice_keys(expected_answer)
+    if not selected or not expected:
+        return False
+    return selected == expected
 
 
 def new_grading_result(

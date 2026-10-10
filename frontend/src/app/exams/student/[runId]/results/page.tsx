@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
 import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
+import { describeConflict } from "@/lib/examConflicts";
 import { examEndpoints, type GradeAppeal, type LearningFeedback, type StudentGradebookRow } from "@/lib/examEndpoints";
 
 const OUTCOME_LABEL: Record<string, string> = {
@@ -41,7 +42,7 @@ function AppealForm({ runId, questionId, onSubmitted }: { runId: string; questio
       setStatement("");
       onSubmitted();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not submit the appeal.");
+      setError(describeConflict(err, "Could not submit the appeal."));
     } finally {
       setBusy(false);
     }
@@ -52,6 +53,7 @@ function AppealForm({ runId, questionId, onSubmitted }: { runId: string; questio
       <textarea
         className="input-field w-full"
         rows={3}
+        aria-label="Why you believe this grade is incorrect"
         placeholder="Explain why you believe this grade is incorrect…"
         value={statement}
         onChange={(e) => setStatement(e.target.value)}
@@ -64,7 +66,11 @@ function AppealForm({ runId, questionId, onSubmitted }: { runId: string; questio
           Cancel
         </button>
       </div>
-      {error && <p className="mt-1 text-xs text-[var(--error)]">{error}</p>}
+      {error && (
+        <p role="alert" className="mt-1 text-xs text-[var(--error)]">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -133,6 +139,11 @@ function ResultsContent() {
         <h1 className="text-2xl font-semibold">Your results</h1>
         {releaseVersion !== null && <span className="badge">version {releaseVersion}</span>}
       </div>
+      {releaseVersion !== null && releaseVersion > 1 && (
+        <p className="mt-2 text-sm text-[var(--text-muted)]">
+          This is a corrected release. It replaces the earlier version of your results.
+        </p>
+      )}
       <div className="card mt-4 p-6">
         <p className="text-sm text-[var(--text-muted)]">Total score</p>
         <p className="text-3xl font-semibold">
@@ -154,6 +165,8 @@ function ResultsContent() {
             </p>
             {appealedQuestionIds.has(qr.question_id) ? (
               <p className="mt-2 text-xs text-[var(--text-muted)]">Dispute submitted for this question.</p>
+            ) : qr.outcome === "pending" ? (
+              <p className="mt-2 text-xs text-[var(--text-muted)]">Still being graded. You can dispute a grade once it is final.</p>
             ) : (
               <AppealForm runId={runId} questionId={qr.question_id} onSubmitted={load} />
             )}
