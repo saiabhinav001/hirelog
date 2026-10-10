@@ -85,12 +85,15 @@ def _judge_provider():
     Process-wide singleton keeps `_pending` alive across requests, matching
     what a real external judge naturally provides for free.
     """
-    from app.domain.judge.provider import DeterministicFakeJudgeProvider, Judge0HttpAdapter
+    from app.domain.judge.provider import DeterministicFakeJudgeProvider, Judge0HttpAdapter, UnconfiguredJudgeProvider
 
     if settings.EXAM_JUDGE_PROVIDER_BASE_URL and settings.EXAM_JUDGE_PROVIDER_API_KEY:
         return Judge0HttpAdapter(
             base_url=settings.EXAM_JUDGE_PROVIDER_BASE_URL, api_key=settings.EXAM_JUDGE_PROVIDER_API_KEY
         )
+    if settings.is_production:
+        # The fake answers "Accepted" to everything; in production that would award full marks to unexecuted code.
+        return UnconfiguredJudgeProvider()
     global _judge_fake_provider_singleton
     if _judge_fake_provider_singleton is None:
         _judge_fake_provider_singleton = DeterministicFakeJudgeProvider()
@@ -132,11 +135,11 @@ def _kt_ingestion_handler():
 
 def _outbox_drain_loop() -> None:
     from app.domain.judge.outbox_handler import GradingTriggerOutboxHandler
-    from app.domain.judge.runtime_allowlist import default_allowlist
+    from app.domain.judge.runtime_allowlist import configured_allowlist
 
     repo = OutboxRepository(db)
     handler = CompositeOutboxHandler(
-        [LoggingNoopHandler(), GradingTriggerOutboxHandler(db, _judge_provider(), default_allowlist())]
+        [LoggingNoopHandler(), GradingTriggerOutboxHandler(db, _judge_provider(), configured_allowlist())]
     )
     while not _stop_event.is_set():
         try:

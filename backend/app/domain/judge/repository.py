@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Optional
 
 from firebase_admin import firestore
+from google.api_core.exceptions import AlreadyExists
 
 from app.domain.judge.models import CodeSubmission, GradingResult, McqGradeResult, ShortAnswerReview
 
@@ -29,6 +30,37 @@ class SubmissionRepository:
 
     def create(self, submission: CodeSubmission) -> None:
         self._ref(submission.id).set(_model_dict(submission))
+
+    def create_if_absent(self, submission: CodeSubmission) -> bool:
+        """True if this call created the document. A repeated final-grade trigger (outbox retry, crash) therefore
+        resumes the existing submission instead of creating a second one."""
+        try:
+            self._ref(submission.id).create(_model_dict(submission))
+            return True
+        except AlreadyExists:
+            return False
+
+    def list_by_status(self, statuses: list[str], *, limit: int) -> list[CodeSubmission]:
+        query = self._db.collection(SUBMISSIONS_COLLECTION).where(
+            filter=firestore.FieldFilter("status", "in", statuses)
+        ).limit(limit)
+        return [CodeSubmission.model_validate({**(d.to_dict() or {}), "id": d.id}) for d in query.stream()]
+
+    def list_stalled_for_run(self, run_id: str, *, limit: int) -> list[CodeSubmission]:
+        query = (
+            self._db.collection(SUBMISSIONS_COLLECTION)
+            .where(filter=firestore.FieldFilter("run_id", "==", run_id))
+            .where(filter=firestore.FieldFilter("status", "==", "infra_exhausted"))
+            .limit(limit)
+        )
+        return [CodeSubmission.model_validate({**(d.to_dict() or {}), "id": d.id}) for d in query.stream()]
+
+    def count_in_flight(self, *, limit: int) -> int:
+        """How many submissions are waiting on the judge, counted up to `limit` without reading their source code."""
+        query = self._db.collection(SUBMISSIONS_COLLECTION).where(
+            filter=firestore.FieldFilter("status", "in", ["pending", "submitted", "polling"])
+        ).select(["status"]).limit(limit)
+        return sum(1 for _ in query.stream())
 
     def get(self, submission_id: str) -> Optional[CodeSubmission]:
         snap = self._ref(submission_id).get()
@@ -120,6 +152,13 @@ class McqResultRepository:
         'auditable lineage')."""
         self._db.collection(MCQ_RESULTS_COLLECTION).document(result.id).set(_model_dict(result))
 
+    def create_if_absent(self, result: McqGradeResult) -> bool:
+        try:
+            self._db.collection(MCQ_RESULTS_COLLECTION).document(result.id).create(_model_dict(result))
+            return True
+        except AlreadyExists:
+            return False
+
     def get(self, result_id: str) -> Optional[McqGradeResult]:
         snap = self._db.collection(MCQ_RESULTS_COLLECTION).document(result_id).get()
         if not snap.exists:
@@ -163,6 +202,13 @@ class ShortAnswerReviewRepository:
 
     def create(self, review: ShortAnswerReview) -> None:
         self._ref(review.id).set(_model_dict(review))
+
+    def create_if_absent(self, review: ShortAnswerReview) -> bool:
+        try:
+            self._ref(review.id).create(_model_dict(review))
+            return True
+        except AlreadyExists:
+            return False
 
     def get(self, review_id: str) -> Optional[ShortAnswerReview]:
         snap = self._ref(review_id).get()

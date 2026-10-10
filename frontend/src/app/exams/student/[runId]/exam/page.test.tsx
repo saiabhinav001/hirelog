@@ -15,6 +15,8 @@ const listMyDraftVersionsMock = vi.fn();
 const submitMock = vi.fn();
 const saveDraftMock = vi.fn();
 const advanceMock = vi.fn();
+const publicRunMock = vi.fn();
+const getPublicRunMock = vi.fn();
 const pushMock = vi.fn();
 const getMyAccommodationsMock = vi.fn().mockResolvedValue({ extra_minutes: 0, camera_waived: false });
 const getToken = async () => "token";
@@ -43,11 +45,14 @@ vi.mock("@/lib/examEndpoints", () => ({
     submit: (...args: unknown[]) => submitMock(...args),
     saveDraft: (...args: unknown[]) => saveDraftMock(...args),
     advanceToNextQuestion: (...args: unknown[]) => advanceMock(...args),
+    publicRun: (...args: unknown[]) => publicRunMock(...args),
+    getPublicRun: (...args: unknown[]) => getPublicRunMock(...args),
     getMyAccommodations: (...args: unknown[]) => getMyAccommodationsMock(...args),
   },
 }));
 
 import ExamPage from "@/app/exams/student/[runId]/exam/page";
+import { ExamApiError } from "@/lib/examsApi";
 
 const SERVER_NOW = "2026-06-01T10:00:00Z";
 
@@ -81,7 +86,7 @@ function mockSingle(stateOverrides: Record<string, unknown> = {}, total = 1) {
 }
 
 beforeEach(() => {
-  [getStateMock, getCurrentQuestionMock, getReleasedQuestionMock, listReleasedSlotsMock, getMyDraftMock, listMyDraftVersionsMock, submitMock, saveDraftMock, advanceMock, pushMock]
+  [getStateMock, getCurrentQuestionMock, getReleasedQuestionMock, listReleasedSlotsMock, getMyDraftMock, listMyDraftVersionsMock, submitMock, saveDraftMock, advanceMock, pushMock, publicRunMock, getPublicRunMock]
     .forEach((m) => m.mockReset());
   getMyAccommodationsMock.mockReset().mockResolvedValue({ extra_minutes: 0, camera_waived: false });
 });
@@ -293,5 +298,50 @@ describe("Student exam page — navigator, previous/next, mark for review", () =
     await screen.findByRole("navigation", { name: "Question navigator" });
     expect(listReleasedSlotsMock).toHaveBeenCalled();
     expect(getStateMock).toHaveBeenCalled();
+  });
+});
+
+describe("Student exam page - running public tests", () => {
+  function mockCoding() {
+    getStateMock.mockResolvedValue(state());
+    getCurrentQuestionMock.mockResolvedValue({
+      question_id: "rev-1:slot:0", slot_index: 0, total_slots: 1,
+      public_content: { item_type: "coding", prompt: "Add two numbers.", permitted_languages: ["python3.11"] },
+    });
+    getMyDraftMock.mockResolvedValue({ version: 0, answer: null });
+    listMyDraftVersionsMock.mockResolvedValue({ versions: {} });
+    listReleasedSlotsMock.mockResolvedValue(slotsFor(0, 1));
+  }
+
+  it("says plainly that nothing ran when the code runner is unavailable", async () => {
+    mockCoding();
+    publicRunMock.mockRejectedValue(new ExamApiError("The code runner is not available right now. Your code was not run.", 503, "judge_unavailable"));
+    render(<ExamPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Run" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/your code was not run/i);
+    expect(getPublicRunMock).not.toHaveBeenCalled();
+  });
+
+  it("does not leave the student waiting when the runner reports an infrastructure problem", async () => {
+    mockCoding();
+    publicRunMock.mockResolvedValue({ submission_id: "sub-1", status: "polling" });
+    getPublicRunMock.mockResolvedValue({ status: "infra_error", results: [] });
+    render(<ExamPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Run" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/nothing was marked/i);
+    expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+  });
+
+  it("shows the compiler's message for a compile error", async () => {
+    mockCoding();
+    publicRunMock.mockResolvedValue({ submission_id: "sub-1", status: "polling" });
+    getPublicRunMock.mockResolvedValue({
+      status: "succeeded",
+      results: [{ test_id: "public:0", outcome: "compile_error", stderr: "main.c:1: error: expected ';'" }],
+    });
+    render(<ExamPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Run" }));
+    expect(await screen.findByText(/expected ';'/)).toBeInTheDocument();
+    expect(screen.getByText("compile_error")).toBeInTheDocument();
   });
 });

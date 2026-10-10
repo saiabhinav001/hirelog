@@ -79,10 +79,11 @@ def new_grading_result(
     version: int = 1,
     graded_by: Optional[str] = None,
     regrade_reason: Optional[str] = None,
+    result_id: Optional[str] = None,
 ) -> GradingResult:
     earned, max_score = aggregate_weighted_score(test_results)
     return GradingResult(
-        id=uuid4().hex,
+        id=result_id or uuid4().hex,
         submission_id=submission_id,
         candidate_id=candidate_id,
         run_id=run_id,
@@ -102,7 +103,13 @@ def new_grading_result(
 
 
 def create_regrade(
-    previous: GradingResult, *, test_results: list[TestCaseResult], now: datetime, graded_by: str, reason: str
+    previous: GradingResult,
+    *,
+    test_results: list[TestCaseResult],
+    now: datetime,
+    graded_by: str,
+    reason: str,
+    result_id: Optional[str] = None,
 ) -> GradingResult:
     """Never mutates `previous` — returns a brand-new result with
     `version = previous.version + 1`. The caller persists both; the original
@@ -121,6 +128,7 @@ def create_regrade(
         version=previous.version + 1,
         graded_by=graded_by,
         regrade_reason=reason,
+        result_id=result_id,
     )
 
 

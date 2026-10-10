@@ -15,7 +15,13 @@ from app.domain.exams.errors import (
     VersionConflictError,
 )
 from app.domain.gradebook.errors import ExportJobNotReadyError, ExportTicketInvalidError, GradebookDomainError, ResultsNotReleasedError
-from app.domain.judge.errors import JudgeDomainError, RuntimeNotAllowedError, SubmissionNotFoundError
+from app.domain.judge.errors import (
+    JudgeBusyError,
+    JudgeDomainError,
+    JudgeUnavailableError,
+    RuntimeNotAllowedError,
+    SubmissionNotFoundError,
+)
 from app.domain.proctoring.errors import ProctoringDomainError, UploadTicketInvalidError, ViewTicketInvalidError
 
 
@@ -55,6 +61,11 @@ def raise_for_domain_error(exc: Exception) -> None:
         ) from exc
     if isinstance(exc, RuntimeNotAllowedError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code": exc.code, "message": str(exc)}) from exc
+    if isinstance(exc, (JudgeBusyError, JudgeUnavailableError)):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail={"code": exc.code, "message": str(exc)},
+            headers={"Retry-After": "10"},
+        ) from exc
     if isinstance(exc, (UploadTicketInvalidError, ViewTicketInvalidError, ExportTicketInvalidError)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"code": exc.code, "message": str(exc)}) from exc
     if isinstance(exc, ExportJobNotReadyError):

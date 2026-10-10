@@ -22,12 +22,15 @@ from app.api.exams_scope import (
     require_submission_scope,
 )
 from app.core.firebase import db
+from app.domain.authz.staff_binding import AuthzAuditRepository, build_audit_event
 from app.domain.exams.student_service import ExamStudentService
 from app.domain.generation.repository import GenerationRepository, VariantAssignmentRepository
 from app.domain.judge.converters import to_test_groups
+from app.domain.judge.errors import JudgeUnavailableError
 from app.domain.judge.grading import public_test_result_dto, sealed_grade_summary_dto
+from app.domain.judge.models import SubmissionPurpose, SubmissionStatus
 from app.domain.judge.repository import GradingResultRepository, ShortAnswerReviewRepository
-from app.domain.judge.runtime_allowlist import default_allowlist
+from app.domain.judge.runtime_allowlist import configured_allowlist
 from app.domain.judge.service import JudgeService
 
 
@@ -98,8 +101,12 @@ def public_run(payload: PublicRunRequest, response: Response, user: dict = Depen
         submission = service.run_public_test(
             candidate_id=candidate.id, run_id=payload.run_id, uid=user["uid"], question_id=payload.question_id,
             language_key=payload.language_key, source_code=payload.source_code,
-            public_tests=to_test_groups(candidate.public_tests), allowlist=default_allowlist(),
+            public_tests=to_test_groups(candidate.public_tests), allowlist=configured_allowlist(),
+            test_suite_version=candidate.version,
         )
+        if submission.status == SubmissionStatus.INFRA_ERROR:
+            # Say so plainly: nothing ran, and no result (pass or fail) is implied.
+            raise JudgeUnavailableError("The code runner is not available right now. Your code was not run.")
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
@@ -112,8 +119,16 @@ def get_public_run(submission_id: str, run_id: str, question_id: str, response: 
     response.headers["Cache-Control"] = "no-store"
     candidate = _candidate_for_question(run_id, user["uid"], question_id, require_active=False)
     service = JudgeService(db, _judge_provider_for_request())
+    # Ownership is checked before anything is polled, and the submission must be this student's own test run
+    # for this very question.
+    existing = service.get_submission(submission_id)
+    if (
+        existing is None or existing.uid != user["uid"] or existing.run_id != run_id
+        or existing.question_id != question_id or existing.purpose != SubmissionPurpose.PUBLIC_RUN
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
     submission = service.poll_public_run(submission_id, public_tests=to_test_groups(candidate.public_tests))
-    if submission is None or submission.uid != user["uid"]:
+    if submission is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
     return {
         "status": submission.status.value,
@@ -140,12 +155,39 @@ def regrade(submission_id: str, payload: RegradeRequest, user: dict = Depends(re
     all_groups = to_test_groups(candidate.public_tests) + to_test_groups(candidate.hidden_test_groups)
     service = JudgeService(db, _judge_provider_for_request())
     new_version = service.regrade(
-        submission_id, all_test_groups=all_groups, allowlist=default_allowlist(),
+        submission_id, all_test_groups=all_groups, allowlist=configured_allowlist(),
         reviewer=user["uid"], reason=payload.reason,
     )
     if new_version is None:
         return {"status": "processing"}
     return sealed_grade_summary_dto(new_version)
+
+
+@faculty_router.get("/runs/{run_id}/stalled-submissions")
+def list_stalled_submissions(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
+    """Sealed-grade submissions the judge could not finish. They are listed here and stay PENDING in the gradebook;
+    none has been scored."""
+    stalled = JudgeService(db, _judge_provider_for_request()).list_stalled(run_id)
+    return {
+        "results": [
+            {
+                "submission_id": s.id, "uid": s.uid, "question_id": s.question_id, "language_key": s.language_key,
+                "attempts": s.attempts, "reason": s.last_error, "updated_at": s.updated_at.isoformat(),
+            }
+            for s in stalled
+        ]
+    }
+
+
+@faculty_router.post("/runs/{run_id}/requeue-stalled")
+def requeue_stalled_submissions(run_id: str, user: dict = Depends(require_run_scope)) -> dict:
+    """Sends a run's stalled submissions back to the judge with a fresh attempt budget; audited with the actor."""
+    requeued = JudgeService(db, _judge_provider_for_request()).requeue_stalled(run_id)
+    if requeued:
+        AuthzAuditRepository(db).append(build_audit_event(
+            "exam_judge_requeue", actor_uid=user["uid"], detail={"run_id": run_id, "count": len(requeued), "submission_ids": requeued[:50]},
+        ))
+    return {"requeued": len(requeued)}
 
 
 @faculty_router.post("/mcq-results/{run_id}/{uid}/{question_id}/regrade")

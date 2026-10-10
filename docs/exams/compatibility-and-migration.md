@@ -451,6 +451,40 @@ Rate limits (in-process sliding windows, per instance): resolver 30 / 60 s per u
 
 New fields are optional everywhere; an older client ignores them. Rollback: redeploy the previous code - `time_warning_minutes` on stored policies is then rejected by the old `extra="forbid"` model, so **before rolling back below Prompt 7, list runs that set it** (a one-off cleanup after authorization) or keep the field unset. `exam_short_links` documents are ignored by older code.
 
+## 13. Prompt 8 migration notes
+
+Implemented as [ADR 0024](../adr/0024-judge-hardening-durable-grading-and-registry.md). **No data migration or backfill is needed or performed**; no secrets or addresses were added. The real judge adapter and SQL are **not** part of this change (decision D-5).
+
+### 13.1 Configuration
+
+| Setting (exam API environment) | Default | Action |
+|---|---|---|
+| `EXAM_JUDGE_VALIDATED_LANGUAGES` | empty | Comma-separated registry keys (`python3.11`, `java17`, `cpp17`, `c17`, `node18`, `typescript5`). With a real provider configured only these are usable, by students and in blueprints. Add a key only after checking its id against the provider's `/languages`. Ignored with the fake judge |
+| `EXAM_JUDGE_MAX_INFRA_ATTEMPTS` | `5` | Failed sends before a sealed-grade submission waits for an operator (`infra_exhausted`) |
+| `EXAM_JUDGE_STALL_SECONDS` | `900` | A sealed-grade submission with no result after this long is handed to an operator |
+| `EXAM_JUDGE_MAX_IN_FLIGHT` | `200` | Student test runs are refused with `503 judge_busy` while this many submissions are waiting |
+
+### 13.2 Behavior changes teachers, students and integrators will see
+
+| Area | Before | Now |
+|---|---|---|
+| No judge configured, `ENV=production` | The dev fake answered "Accepted" to every test | `UnconfiguredJudgeProvider`: nothing runs, nothing is scored; sealed work becomes `infra_exhausted` for an operator, test runs answer `503 judge_unavailable` |
+| No judge configured, other `ENV` | Fake judge | Unchanged (dev / test only) |
+| `POST /student/judge/public-run` | `500` when a configured provider could not be called; with the fake, invented results | `503 judge_unavailable` / `503 judge_busy` (`Retry-After: 10`) when nothing was sent; the UI says the code was not run |
+| `GET /student/judge/public-run/{id}` | Polled, then `404` for another student's id | `404` first for another student's submission, another run or question, or a sealed-grade submission; new statuses `infra_error` and `infra_exhausted` are reported plainly |
+| Provider failure during send | Exception; the outbox retried and created another submission | `infra_error`, counted; retried with backoff by the sweep; after the limit `infra_exhausted` (never a score; the gradebook keeps it PENDING) |
+| Regrade whose result is not immediate | Result dropped by the sweep | Lands once as the next version |
+| Retried finalization | New submission, MCQ result and short-answer review each time | Same records (deterministic ids); a scored review is never reset |
+| Languages | `python3.11`, `java17`, `cpp17` | Adds `c17`, `node18`, `typescript5` (usable with the fake judge; with a real provider only if validated) |
+| Stored test output | Unbounded | 16 384 characters per stream per test, then `[output truncated]`; a compile error stores the compiler's message |
+| `test_suite_version` on a result | Always `1` | The variant's version |
+| New routes | — | Faculty `GET /judge/runs/{run_id}/stalled-submissions`, `POST /judge/runs/{run_id}/requeue-stalled` (run scope; the requeue is audited) |
+| `judge_submissions` documents | — | Optional `regrade_reason`, `regrade_by`, `regrade_base_version`; new ids `final-…`; new statuses `infra_exhausted` |
+
+Existing clients keep working: every new field is optional and legacy random-id documents stay readable. Work in flight at the upgrade can create one extra submission when its trigger is retried; reads take the latest version, so scores are unaffected.
+Rollback: the previous code does not know `infra_exhausted` and would fail to read such a document, so **requeue or review a run's stalled submissions (`GET …/stalled-submissions`) before rolling back below Prompt 8**. Do not delete submissions or grading results to roll back.
+Operations: configuring `EXAM_JUDGE_PROVIDER_BASE_URL` / `_API_KEY` does **not** enable real grading until an adapter is approved and implemented; until then those submissions become infrastructure errors.
+
 ### 11.3 New routes (all under `/api/exams/v1/student`, behind the exam flag, student run scope, `no-store`)
 
 | Route | Purpose |

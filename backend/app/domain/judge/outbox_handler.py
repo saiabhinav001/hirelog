@@ -76,7 +76,7 @@ class GradingTriggerOutboxHandler:
             all_groups = to_test_groups(candidate.public_tests) + to_test_groups(candidate.hidden_test_groups)
             self._judge.submit_final_grade(
                 candidate_id=candidate_id, run_id=run_id, uid=uid, question_id=question_id,
-                language_key=language_key, source_code=source_code, test_suite_version=1,
+                language_key=language_key, source_code=source_code, test_suite_version=candidate.version,
                 all_test_groups=all_groups, allowlist=self._allowlist,
             )
         elif candidate.item_type in (ItemType.SINGLE_CHOICE, ItemType.MULTIPLE_SELECT):

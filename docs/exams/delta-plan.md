@@ -277,3 +277,32 @@ Out of Phase 7 on purpose: institution/roster teacher screens, source-derived to
 - [x] Dark muted text meets AA inside the exam scope (tested from the stylesheet tokens).
 - [x] Full backend suite (`EXAMS_ENABLED=false`: 1303 passed), ruff, frontend `tsc`, `eslint` and Vitest (163 passed with `--maxWorkers=2 --testTimeout=20000`) pass.
 - [x] Migration notes and ADR 0023 written; no production data touched; no secrets or addresses added. *(No real browser, screen reader, axe run or Firestore was used.)*
+
+## 11. Phase 8 — judge hardening (implemented, ADR 0024; real adapter and SQL blocked by D-5)
+
+Phase 8's execution half is gated on decision D-5 (judge architecture, provider, language set, SQL runner qualification), which is **not** approved. The phase therefore fixed what the application does around the judge and left the adapter and SQL unbuilt.
+
+| Area | Change |
+|---|---|
+| `backend/app/domain/judge/provider.py`, `limits.py` (new) | `UnconfiguredJudgeProvider`; server-owned `JudgeLimits` (CPU, wall, memory, stack, processes, file size, `enable_network=False`) on every request; bounded stored output |
+| `backend/app/domain/judge/worker.py` | Provider failure recorded as `infra_error` (no raise, class name only); `commit` before success; compile output surfaced; obsolete `retry_infra_errors` removed |
+| `backend/app/domain/judge/service.py`, `repository.py` | Deterministic final submissions (create-if-absent); results under deterministic ids; regrade marker; sweep isolation, backoff retry, `infra_exhausted`, stall handling; operator list / requeue; in-flight cap; idempotent MCQ / short-answer creation |
+| `backend/app/domain/judge/runtime_allowlist.py`, `models.py` | Registry of C / C++ / Java / Python / JavaScript / TypeScript candidates; `configured_allowlist()`; `SubmissionStatus.INFRA_EXHAUSTED`; optional regrade fields |
+| `backend/app/api/routes/exams_judge.py`, `exams_errors.py`, `exams_generation.py`, `exam_main.py` | 503 mapping with `Retry-After`; ownership before polling; stalled / requeue routes; fake judge not used in production; blueprint languages from the configured registry |
+| Config | `EXAM_JUDGE_VALIDATED_LANGUAGES`, `EXAM_JUDGE_MAX_INFRA_ATTEMPTS`, `EXAM_JUDGE_STALL_SECONDS`, `EXAM_JUDGE_MAX_IN_FLIGHT` |
+| Frontend | Student "Run": plain message when the runner is unavailable or reports a problem, compiler message shown |
+| Tests | New `test_judge_hardening_p8.py`, `test_judge_routes_p8.py`; service-test fakes now round-trip the model like Firestore; three Vitest tests |
+| Docs | ADR 0024 (+ index), compat §13, traceability §8.1, integration map, `.env.example` |
+
+Out of Phase 8 on purpose: the real judge adapter and any code execution (D-5), SQL items and a disposable-database runner, validating Judge0 ids against a provider, a UI for the stalled list, sandbox isolation / limit / egress evidence (Phase 11), executing reference solutions to verify coding items (GEN-07).
+
+### Phase 8 acceptance checklist
+
+- [x] Nothing is graded by a stand-in: production without a judge reports it unavailable; the fake is dev / test only.
+- [x] Infrastructure failures are pending, retried with backoff, then handed to an operator; none produces a score, and the gradebook keeps the question PENDING.
+- [x] Results, regrades and retried finalizations are idempotent and survive a crash between steps; one bad submission cannot block the rest.
+- [x] Limits and the network switch are server-owned; students choose only a registry key; stored output is bounded; hidden data does not appear in student-facing responses.
+- [x] Registry lists the candidate languages and only operator-validated ones are usable with a real provider; SQL stays out.
+- [x] Full backend suite (`EXAMS_ENABLED=false`: 1355 passed), ruff, frontend `tsc`, `eslint` and Vitest pass.
+- [x] Migration notes and ADR 0024 written; no production data touched; no secrets or addresses added. *(No real judge, sandbox, browser or Firestore was used; mocks do not prove sandbox security.)*
+- [ ] **Open:** D-5 approval, adapter, language validation, SQL qualification, staging isolation evidence.

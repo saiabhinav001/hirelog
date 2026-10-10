@@ -52,6 +52,8 @@ class SubmissionStatus(str, Enum):
     POLLING = "polling"
     SUCCEEDED = "succeeded"
     INFRA_ERROR = "infra_error"  # retryable — never a silent zero score
+    # Retries or time ran out. Waits for an operator (requeue); the question stays PENDING in the gradebook, never zero.
+    INFRA_EXHAUSTED = "infra_exhausted"
 
 
 class TestCaseOutcome(str, Enum):
@@ -109,6 +111,11 @@ class CodeSubmission(BaseModel):
     public_run_results: list[TestCaseResult] = Field(default_factory=list)
     attempts: int = 0
     last_error: Optional[str] = None
+    # A regrade is recorded on the submission before it is sent, so a result that arrives after a restart still
+    # becomes version `regrade_base_version + 1` (once) instead of being dropped.
+    regrade_reason: Optional[str] = None
+    regrade_by: Optional[str] = None
+    regrade_base_version: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 

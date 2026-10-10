@@ -397,6 +397,54 @@ screens are not built; decisions D-3 (revisit) and D-9 (warning thresholds) stay
 | JDG-13 | Student "Run public tests" end to end | Rate limit 10 / 300 s per (run, uid, question); stored as `PUBLIC_RUN` submissions | `test_judge_service.py` | EXISTS_AND_VERIFIED (fake provider) | — | — |
 | JDG-14 | Clipboard blocking | Client-only DOM handlers; recorded as `CLIPBOARD_BLOCKED` informational observation (never counted) | `fe:CodeEditorPanel.test.tsx` | EXISTS_AND_VERIFIED as a deterrent; not enforcement | State limitation in incident UI | P9 |
 
+### 8.1 Status after the Prompt 8 implementation
+
+Implemented as [ADR 0024](../adr/0024-judge-hardening-durable-grading-and-registry.md); migration notes in
+[compatibility-and-migration.md §13](compatibility-and-migration.md). **Decision D-5 (judge architecture) is not approved, so the real adapter
+and SQL were not built** and no code ran anywhere: every test below uses the deterministic fake provider and in-memory repositories. **Mocks
+do not prove sandbox security** - isolation, resource enforcement, egress / metadata blocking and host-mount denial need staging evidence from
+the real judge (Prompt 11). Backend suite: 1355 tests passing with `EXAMS_ENABLED=false` (1303 before: one obsolete test removed, 53 added);
+`ruff check .` clean; frontend `tsc` and `eslint` clean.
+
+| ID | Status after P8 | What changed | Evidence |
+|---|---|---|---|
+| JDG-01 | PARTIALLY_EXISTS (BLOCKED_BY_DECISION D-5) | The fake judge ("Accepted" for everything) is no longer used in production: `UnconfiguredJudgeProvider` reports the judge unavailable. The HTTP adapter is still unimplemented, so a configured provider yields infrastructure errors, never verdicts. No user code runs in the API process (the API process opens no socket for hostile source) | `test_the_dev_fake_is_not_used_in_production`, `test_without_a_configured_judge_*`, `test_source_that_targets_the_network_*` |
+| JDG-02 | PARTIALLY_EXISTS | Registry now lists C, C++, Java, Python, JavaScript and TypeScript candidates; with a real provider only keys in `EXAM_JUDGE_VALIDATED_LANGUAGES` are usable (students and blueprints); none is validated by default. Judge0 ids are unverified defaults | `test_the_registry_names_exactly_*`, `test_with_a_real_judge_only_languages_*`, `test_only_registry_keys_resolve_*` (8 hostile keys) |
+| JDG-03 | MISSING (BLOCKED_BY_DECISION D-5) | Unchanged on purpose; a test pins that no SQL item type or registry entry exists | `test_sql_stays_out_until_a_disposable_runner_is_qualified` |
+| JDG-04 | EXISTS_AND_VERIFIED | Suite version is now the variant's version (was constant 1); final submissions, grading results and first MCQ / review records have deterministic ids | `test_a_result_is_bound_to_the_exact_code_variant_runtime_and_suite_version` |
+| JDG-05 | UNVERIFIED (infra) | The application side is now server-owned and tested: CPU, wall, memory, stack, process and file-size limits and `enable_network=False` sent with every test (no callback / image / flag field exists); stored output bounded to 16 384 chars per stream; student test runs refused with 503 when the queue is saturated. Enforcement is the judge's | `test_every_request_to_the_judge_carries_*`, `test_the_sandbox_network_is_off_*`, `test_a_request_has_no_field_*`, `test_an_output_flood_*`, `test_a_saturated_judge_*` |
+| JDG-07 | EXISTS_AND_VERIFIED (fake provider) | Was defective. Unsent or failed sealed submissions are retried with backoff by the sweep; after `EXAM_JUDGE_MAX_INFRA_ATTEMPTS` failures or `EXAM_JUDGE_STALL_SECONDS` without a result they become `infra_exhausted`, are listed for the run and can be requeued (audited); the gradebook keeps them PENDING, never zero | `test_a_failed_submission_is_retried_*`, `test_when_retries_run_out_*`, `test_requeue_only_touches_the_named_run`, `test_a_submission_the_judge_never_finishes_*`, route tests |
+| JDG-08 | EXISTS_AND_VERIFIED | Still poll-only. Results are written under deterministic ids before a submission is marked done; one failing submission no longer stops the sweep; the public-run poll checks ownership, run, question and purpose before polling | `test_a_duplicate_provider_result_*`, `test_one_bad_submission_*`, `test_a_submission_that_is_not_the_students_own_test_run_is_never_polled` |
+| JDG-09 | EXISTS_AND_VERIFIED (was defective) | A regrade that finishes after the first poll is now recorded on the submission and lands once as the next version; earlier versions untouched; a crash after the write adds no third version | `test_a_regrade_that_finishes_later_*`, `test_a_crash_after_the_regrade_was_written_*` |
+| JDG-12 / JDG-13 | EXISTS_AND_VERIFIED | Unchanged scope checks; a test run that could not be sent answers `503 judge_unavailable` / `judge_busy` with `Retry-After`, and the student UI says nothing ran | `test_judge_routes_p8.py`, `page.test.tsx` (3) |
+
+Scenario coverage requested by the prompt (what each test can and cannot show):
+
+| Scenario | Covered by | Limit |
+|---|---|---|
+| Correct / incorrect code, compile / runtime errors, time and memory limits | existing `test_judge_worker.py` (status → outcome mapping) + compile-message test | The fake returns scripted statuses; no code is compiled or run |
+| Output flood | storage bound test | Does not show the judge stops a flood |
+| Network / metadata denial | request carries `enable_network=False`, no steering fields, API process opens no socket | Denial itself is the judge's; UNVERIFIED |
+| Hidden-data leakage | marker planted in hidden expected output/stdout/stderr is absent from the summary DTO, the test-run response and what a test run sends | Hidden tests are still sent to the provider with a sealed submission |
+| Queue saturation, duplicate results, worker crash, infrastructure retry, regrade lineage | the tests listed above | In-memory store; real Firestore transactions and `create` conflicts are unverified |
+
+Defects found in the existing code while implementing (all fixed):
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| P8-1 | High | Production without a provider used the fake judge ("Accepted") | `UnconfiguredJudgeProvider` |
+| P8-2 | High | Infrastructure errors never retried; no exhausted state; unsent submissions stranded | Sweep retry, backoff, `infra_exhausted`, operator routes |
+| P8-3 | High | A regrade that was not instant was silently dropped | Regrade marker on the submission |
+| P8-4 | High | A crash between "marked done" and "result written" lost the grade | Commit-before-done, deterministic ids |
+| P8-5 | Medium | Retries duplicated submissions, MCQ results and short-answer reviews (and could reset a scored review) | Deterministic ids, create-if-absent |
+| P8-6 | Medium | One failing poll aborted the whole sweep tick | Per-submission isolation |
+| P8-7 | Medium | Compile message dropped; stdout/stderr unbounded | Compiler output as stderr; 16 384-char cap |
+| P8-8 | Low | Constant suite version; poll before ownership check; only CPU/memory limits sent; unlisted language aborted an attempt's grading loop | Variant version; check first; full limit set; operator state |
+
+Residual: no approved judge, no real execution, no SQL; Judge0 ids and images unvalidated; sandbox isolation and limit enforcement unverified;
+hidden tests travel to the provider with each sealed submission; the in-flight cap and limiters are per instance; no UI for the stalled list yet
+(the routes exist); real-Firestore behaviour of create-if-absent and the new queries unverified.
+
 ## 9. Proctoring, live control, lockdown — Prompt 9 (and Prompt 7 control room)
 
 | ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |

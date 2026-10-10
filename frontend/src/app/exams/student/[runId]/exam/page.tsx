@@ -9,6 +9,7 @@ import { LazyCodeEditorPanel } from "@/components/exams/LazyCodeEditorPanel";
 import { QuestionNavigator } from "@/components/exams/QuestionNavigator";
 import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
+import { describeConflict } from "@/lib/examConflicts";
 import { examEndpoints, type Attempt, type PublicQuestion, type ReleasedSlots } from "@/lib/examEndpoints";
 import { useLiveSocket } from "@/lib/liveSocket";
 import { useProctoringObservations } from "@/lib/proctoringObservations";
@@ -47,6 +48,7 @@ function ExamContent() {
   const [submitting, setSubmitting] = useState(false);
   const [publicRunStatus, setPublicRunStatus] = useState<string | null>(null);
   const [publicRunResults, setPublicRunResults] = useState<unknown[]>([]);
+  const [publicRunMessage, setPublicRunMessage] = useState<string | null>(null);
   const [cameraWaived, setCameraWaived] = useState(false);
   const [codingTab, setCodingTab] = useState<"testcase" | "result">("testcase");
   const [liveWarning, setLiveWarning] = useState<string | null>(null);
@@ -296,6 +298,7 @@ function ExamContent() {
       setViewIndex(viewIndexRef.current);
       setPublicRunStatus(null);
       setPublicRunResults([]);
+      setPublicRunMessage(null);
       try {
         await loadQuestion(viewIndexRef.current);
         setNotice(`Question ${index + 1}`);
@@ -319,6 +322,7 @@ function ExamContent() {
     setViewIndex(null);
     setPublicRunStatus(null);
     setPublicRunResults([]);
+    setPublicRunMessage(null);
     await refresh();
   }, [flushPendingSave, getToken, goToSlot, refresh, runId]);
 
@@ -328,15 +332,32 @@ function ExamContent() {
     const languageKey = String(answer.language ?? "");
     const sourceCode = String(answer.source_code ?? "");
     setCodingTab("result");
-    const { submission_id } = await examEndpoints.publicRun(token, runId, question.question_id, languageKey, sourceCode);
+    setPublicRunMessage(null);
+    let submission_id: string;
+    try {
+      ({ submission_id } = await examEndpoints.publicRun(token, runId, question.question_id, languageKey, sourceCode));
+    } catch (err) {
+      setPublicRunStatus(null);
+      setPublicRunResults([]);
+      setPublicRunMessage(describeConflict(err, "The code runner could not be reached. Your code was not run."));
+      return;
+    }
     setPublicRunStatus("processing");
     const poll = async (attemptsLeft: number) => {
-      if (attemptsLeft <= 0) return;
+      if (attemptsLeft <= 0) {
+        setPublicRunStatus(null);
+        setPublicRunMessage("The code runner is taking longer than usual. Your code may still be running - try again in a moment.");
+        return;
+      }
       const result = await examEndpoints.getPublicRun(token, submission_id, runId, question.question_id);
-      setPublicRunStatus(result.status);
       if (result.status === "succeeded") {
+        setPublicRunStatus(result.status);
         setPublicRunResults(result.results);
+      } else if (result.status === "infra_error" || result.status === "infra_exhausted") {
+        setPublicRunStatus(null);
+        setPublicRunMessage("The code runner had a problem, so your code was not run and nothing was marked. Please try again.");
       } else {
+        setPublicRunStatus(result.status);
         setTimeout(() => poll(attemptsLeft - 1), 1500);
       }
     };
@@ -579,18 +600,25 @@ function ExamContent() {
                 {codingTab === "result" &&
                   (publicRunStatus === "processing" ? (
                     <p className="text-[var(--text-muted)]">Running…</p>
+                  ) : publicRunMessage ? (
+                    <p role="alert" className="text-[var(--error)]">{publicRunMessage}</p>
                   ) : publicRunResults.length === 0 ? (
                     <p className="text-[var(--text-muted)]">Run your code to see results here.</p>
                   ) : (
                     publicRunResults.map((r, i) => {
-                      const result = r as { test_id: string; outcome: string };
+                      const result = r as { test_id: string; outcome: string; stderr?: string };
                       return (
-                        <p key={i}>
-                          {result.test_id}:{" "}
-                          <span className={result.outcome === "passed" ? "text-[var(--success)]" : "text-[var(--error)]"}>
-                            {result.outcome}
-                          </span>
-                        </p>
+                        <div key={i}>
+                          <p>
+                            {result.test_id}:{" "}
+                            <span className={result.outcome === "passed" ? "text-[var(--success)]" : "text-[var(--error)]"}>
+                              {result.outcome}
+                            </span>
+                          </p>
+                          {result.stderr && result.outcome !== "passed" && (
+                            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap font-mono text-xs">{result.stderr}</pre>
+                          )}
+                        </div>
                       );
                     })
                   ))}

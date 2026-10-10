@@ -47,7 +47,7 @@ from app.domain.generation.models import BlueprintSlot, CandidateStatus, ExamBlu
 from app.domain.generation.provider import DeterministicFakeProvider, HttpGenerationProviderAdapter
 from app.domain.generation.repository import GenerationRepository
 from app.domain.generation.topics import suggest_topics
-from app.domain.judge.runtime_allowlist import default_allowlist
+from app.domain.judge.runtime_allowlist import configured_allowlist
 from app.domain.kt.repository import ApprovedSourceRepository, UploadedSourceRepository
 
 router = APIRouter(
@@ -172,7 +172,7 @@ def create_blueprint(payload: CreateBlueprintRequest, user: dict = Depends(requi
     if any(slot.negative_marks > slot.marks for slot in slots):
         raise _unprocessable("negative_marks_exceed_marks", "A slot's negative marks cannot exceed its marks.")
 
-    known_languages = {entry.language_key for entry in default_allowlist()}
+    known_languages = {entry.language_key for entry in configured_allowlist()}
     allowlist = list(dict.fromkeys(payload.language_allowlist))
     bad = sorted(set(allowlist) - known_languages)
     if bad:

@@ -13,9 +13,12 @@ even in tests.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Optional, Protocol
 from uuid import uuid4
+
+from app.domain.judge.errors import JudgeUnavailableError
+from app.domain.judge.limits import JudgeLimits
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,8 @@ class JudgeSubmitRequest:
     expected_output: str
     cpu_time_limit_seconds: float
     memory_limit_kb: int
+    # Wall time, stack, process and file-size limits and the network switch; always server-owned (see limits.py).
+    limits: JudgeLimits = field(default_factory=JudgeLimits)
 
 
 @dataclass(frozen=True)
@@ -98,6 +103,18 @@ class DeterministicFakeJudgeProvider:
 
     def release(self, token: str) -> None:
         self._still_processing.discard(token)
+
+
+class UnconfiguredJudgeProvider:
+    """Used where no real judge is configured and the fake must not stand in (production). Reports the judge as
+    unavailable instead of inventing a verdict: the fake's default result is "Accepted", which in production would
+    award full marks to unexecuted code."""
+
+    def submit(self, request: JudgeSubmitRequest) -> str:
+        raise JudgeUnavailableError("no judge is configured")
+
+    def get_result(self, token: str) -> Optional[JudgeRawResult]:
+        raise JudgeUnavailableError("no judge is configured")
 
 
 class Judge0HttpAdapter:

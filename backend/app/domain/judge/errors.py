@@ -26,3 +26,15 @@ class ResultOwnershipError(JudgeDomainError):
 
 class SubmissionNotFoundError(JudgeDomainError):
     code = "submission_not_found"
+
+
+class JudgeUnavailableError(JudgeDomainError):
+    """The judge is not configured or cannot be reached. Never a score: the work stays pending or is reported as unavailable."""
+
+    code = "judge_unavailable"
+
+
+class JudgeBusyError(JudgeDomainError):
+    """Too much work is already queued for the judge; a student-initiated run is refused so the queue stays bounded."""
+
+    code = "judge_busy"

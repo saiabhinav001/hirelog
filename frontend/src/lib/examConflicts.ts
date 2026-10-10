@@ -19,6 +19,8 @@ const CONFLICT_TEXT: Record<string, string> = {
   short_links_not_enabled: "Short links are not enabled on this deployment.",
   code_space_exhausted: "Could not find a free short code. Try again.",
   publication_blocked: "Publishing is blocked - the blockers are listed on the exam page.",
+  judge_unavailable: "The code runner is not available right now, so your code was not run. Try again in a moment.",
+  judge_busy: "The code runner is busy. Wait a moment and try again.",
 };
 
 export function describeConflict(err: unknown, fallback = "That did not work."): string {

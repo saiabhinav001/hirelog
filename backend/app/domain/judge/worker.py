@@ -15,15 +15,17 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 from uuid import uuid4
 
 from app.domain.exams.clock import Clock, system_clock
 from app.domain.judge.errors import ResultOwnershipError
 from app.domain.judge.grading import classify_status, is_infra_error
+from app.domain.judge.limits import JudgeLimits, truncate_stream
 from app.domain.judge.models import (
     CodeSubmission,
     SubmissionStatus,
+    TestCaseOutcome,
     TestCaseResult,
     TestGroupSpec,
 )
@@ -34,8 +36,7 @@ from app.domain.judge.submission import verify_result_ownership
 
 logger = logging.getLogger("hirelog.judge.worker")
 
-DEFAULT_CPU_TIME_LIMIT_SECONDS = 5.0
-DEFAULT_MEMORY_LIMIT_KB = 262_144  # 256 MB
+LIMITS = JudgeLimits()
 
 
 @dataclass(frozen=True)
@@ -75,21 +76,30 @@ class JudgeWorker:
     def submit(self, submission: CodeSubmission, *, test_groups: list[TestGroupSpec], allowlist) -> None:
         """Submits every flattened test case to the provider. Never lets the
         student influence limits/runtime — those come only from the
-        allowlist entry resolved server-side."""
+        allowlist entry resolved server-side.
+
+        A provider that cannot be reached or refuses the work is infrastructure, not a verdict: the submission is
+        recorded as INFRA_ERROR (counted, retried or handed to an operator by the sweep) and this does not raise."""
         runtime = resolve_runtime(submission.language_key, allowlist)
         tokens: dict[str, str] = {}
-        for test in _flatten_test_groups(test_groups):
-            token = self._provider.submit(
-                JudgeSubmitRequest(
-                    source_code=submission.source_code,
-                    language_id=runtime.judge0_language_id,
-                    stdin=test.stdin,
-                    expected_output=test.expected_output,
-                    cpu_time_limit_seconds=DEFAULT_CPU_TIME_LIMIT_SECONDS,
-                    memory_limit_kb=DEFAULT_MEMORY_LIMIT_KB,
+        try:
+            for test in _flatten_test_groups(test_groups):
+                token = self._provider.submit(
+                    JudgeSubmitRequest(
+                        source_code=submission.source_code,
+                        language_id=runtime.judge0_language_id,
+                        stdin=test.stdin,
+                        expected_output=test.expected_output,
+                        cpu_time_limit_seconds=LIMITS.cpu_time_seconds,
+                        memory_limit_kb=LIMITS.memory_kb,
+                        limits=LIMITS,
+                    )
                 )
-            )
-            tokens[test.test_id] = token
+                tokens[test.test_id] = token
+        except Exception as exc:  # noqa: BLE001 - any provider or transport failure is infrastructure
+            logger.warning("judge submit failed for submission %s: %s", submission.id, type(exc).__name__)
+            self._record_infra_failure(submission.id, f"provider submit failed: {type(exc).__name__}", runtime.runtime_image)
+            return
 
         now = self._clock.now()
         self._repo.update(
@@ -98,11 +108,32 @@ class JudgeWorker:
                 "status": SubmissionStatus.POLLING.value,
                 "provider_tokens": tokens,
                 "runtime_image": runtime.runtime_image,
+                "last_error": None,
                 "updated_at": now.isoformat(),
             },
         )
 
-    def poll_one(self, submission_id: str, *, test_groups: list[TestGroupSpec]) -> Optional[list[TestCaseResult]]:
+    def _record_infra_failure(self, submission_id: str, reason: str, runtime_image: str = "") -> None:
+        current = self._repo.get(submission_id)
+        attempts = (current.attempts if current else 0) + 1
+        update = {
+            "status": SubmissionStatus.INFRA_ERROR.value,
+            "attempts": attempts,
+            "last_error": reason,
+            "provider_tokens": {},
+            "updated_at": self._clock.now().isoformat(),
+        }
+        if runtime_image:
+            update["runtime_image"] = runtime_image
+        self._repo.update(submission_id, update)
+
+    def poll_one(
+        self,
+        submission_id: str,
+        *,
+        test_groups: list[TestGroupSpec],
+        commit: Optional[Callable[[list[TestCaseResult]], Optional[dict]]] = None,
+    ) -> Optional[list[TestCaseResult]]:
         """Returns the final per-test results once ALL of this submission's
         tokens have resolved, or None if still processing / an infra error
         was hit (submission is left polling/marked infra_error — retryable,
@@ -136,8 +167,9 @@ class JudgeWorker:
                     is_hidden=spec.is_hidden,
                     weight=spec.weight,
                     outcome=outcome,
-                    stdout=raw.stdout,
-                    stderr=raw.stderr,
+                    stdout=truncate_stream(raw.stdout),
+                    # The compiler's message is the only explanation a student gets for a compile error.
+                    stderr=truncate_stream(raw.compile_output or raw.stderr if outcome == TestCaseOutcome.COMPILE_ERROR else raw.stderr),
                     time_ms=raw.time_ms,
                     memory_kb=raw.memory_kb,
                 )
@@ -156,17 +188,13 @@ class JudgeWorker:
             )
             return None
 
-        self._repo.update(submission_id, {"status": SubmissionStatus.SUCCEEDED.value, "updated_at": now.isoformat()})
+        # The caller persists the results BEFORE the submission is marked done: a crash in between leaves it polling,
+        # so the next poll collects the same results again instead of losing them.
+        extra = commit(results) if commit is not None else None
+        self._repo.update(
+            submission_id, {"status": SubmissionStatus.SUCCEEDED.value, "updated_at": now.isoformat(), **(extra or {})}
+        )
         return results
-
-    def retry_infra_errors(self, *, test_groups: list[TestGroupSpec], allowlist) -> int:
-        """Bounded — resubmits submissions stuck in INFRA_ERROR. Callers loop
-        this on a timer, mirroring the exam finalization sweep pattern."""
-        retried = 0
-        for submission in self._repo.list_infra_errors(limit=25):
-            self.submit(submission, test_groups=test_groups, allowlist=allowlist)
-            retried += 1
-        return retried
 
 
 def new_submission(
@@ -180,11 +208,12 @@ def new_submission(
     source_code: str,
     test_suite_version: int,
     now: datetime,
+    submission_id: Optional[str] = None,
 ) -> CodeSubmission:
     from app.domain.judge.submission import compute_submission_hash
 
     return CodeSubmission(
-        id=uuid4().hex,
+        id=submission_id or uuid4().hex,
         candidate_id=candidate_id,
         run_id=run_id,
         uid=uid,

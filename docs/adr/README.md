@@ -29,4 +29,5 @@ including decisions to deliberately **not** build something yet.
 | [0021](0021-grounded-generation-and-versioned-review.md) | Grounded, provider-neutral question generation with versioned review | Accepted |
 | [0022](0022-student-attempts-gating-and-idempotent-submit.md) | Student attempts: released-slot gating, idempotent drafts and receipt-backed submit | Accepted |
 | [0023](0023-exam-workspace-ui-timer-navigator-and-teacher-controls.md) | Exam workspace UI: server-anchored timer, navigator, teacher controls and short links | Accepted |
+| [0024](0024-judge-hardening-durable-grading-and-registry.md) | Judge hardening: no silent verdicts, durable grading, a server-owned registry (real adapter and SQL not approved) | Accepted |
 See [../architecture.md](../architecture.md) for the system diagram and request flow.

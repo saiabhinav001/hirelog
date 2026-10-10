@@ -269,26 +269,3 @@ def test_poll_one_rejects_a_result_whose_token_does_not_match_what_was_queried()
 
     with pytest.raises(ResultOwnershipError):
         worker.poll_one(submission.id, test_groups=_two_test_groups())
-
-
-# ── retry_infra_errors ────────────────────────────────────────────────────────
-
-def test_retry_infra_errors_resubmits_only_infra_error_submissions() -> None:
-    provider = DeterministicFakeJudgeProvider(
-        outcomes_by_stdin={"2 2": JudgeRawResult(token="", status_id=STATUS_INTERNAL_ERROR, status_description="x")}
-    )
-    worker, repo = _worker(provider)
-    stuck = _submission()
-    healthy = _submission().model_copy(update={"id": "sub-healthy"})
-    repo.create(stuck)
-    repo.create(healthy)
-    worker.submit(stuck, test_groups=_two_test_groups(), allowlist=ALLOWLIST)
-    worker.poll_one(stuck.id, test_groups=_two_test_groups())  # drives it to INFRA_ERROR
-    assert repo.get(stuck.id).status == SubmissionStatus.INFRA_ERROR
-    assert repo.get(healthy.id).status == SubmissionStatus.PENDING
-
-    retried = worker.retry_infra_errors(test_groups=_two_test_groups(), allowlist=ALLOWLIST)
-
-    assert retried == 1
-    assert repo.get(stuck.id).status == SubmissionStatus.POLLING  # resubmitted
-    assert repo.get(healthy.id).status == SubmissionStatus.PENDING  # untouched

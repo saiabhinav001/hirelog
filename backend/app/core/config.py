@@ -194,6 +194,15 @@ class Settings(BaseSettings):
     # this config alone does not create or validate that environment.
     EXAM_JUDGE_PROVIDER_BASE_URL: Optional[str] = None
     EXAM_JUDGE_PROVIDER_API_KEY: Optional[str] = None
+    # Prompt 8 (ADR 0024). With a real provider configured, only the language keys listed here (comma-separated) are usable.
+    # Add a key only after checking its judge0 id against the provider's /languages; empty = no language is usable.
+    EXAM_JUDGE_VALIDATED_LANGUAGES: str = ""
+    # Failed provider calls before a final-grade submission stops retrying and waits for an operator (never scored).
+    EXAM_JUDGE_MAX_INFRA_ATTEMPTS: int = 5
+    # A final-grade submission still unfinished after this long is handed to an operator instead of polling forever.
+    EXAM_JUDGE_STALL_SECONDS: int = 900
+    # Student-initiated test runs are refused (503) while this many submissions are already waiting on the judge.
+    EXAM_JUDGE_MAX_IN_FLIGHT: int = 200
 
     # ── Live control (Prompt 7, docs/adr/0012) — WebSocket admission tickets.
     # Short TTL by design: a client mints a fresh ticket for every connect/

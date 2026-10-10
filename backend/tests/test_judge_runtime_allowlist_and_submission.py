@@ -48,12 +48,12 @@ def test_unvalidated_entries_filters_correctly() -> None:
     assert [e.language_key for e in unvalidated] == ["java17"]
 
 
-def test_default_allowlist_has_three_runtimes_all_unvalidated() -> None:
+def test_default_allowlist_lists_the_candidate_runtimes_all_unvalidated() -> None:
     """Regression guard: nobody should flip `validated_against_provider` to
     True on the built-in defaults without actually querying a real Judge0
-    instance first (docs/adr/0011)."""
+    instance first (docs/adr/0011, 0024)."""
     allowlist = default_allowlist()
-    assert {e.language_key for e in allowlist} == {"python3.11", "java17", "cpp17"}
+    assert {e.language_key for e in allowlist} == {"python3.11", "java17", "cpp17", "c17", "node18", "typescript5"}
     assert all(e.validated_against_provider is False for e in allowlist)
     assert unvalidated_entries(allowlist) == allowlist
 

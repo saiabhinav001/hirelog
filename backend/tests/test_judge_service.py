@@ -39,12 +39,29 @@ class _FakeSubmissionRepo:
     def create(self, submission: CodeSubmission) -> None:
         self.store[submission.id] = submission
 
+    def create_if_absent(self, submission: CodeSubmission) -> bool:
+        if submission.id in self.store:
+            return False
+        self.store[submission.id] = submission
+        return True
+
+    def count_in_flight(self, *, limit: int) -> int:
+        live = (SubmissionStatus.PENDING, SubmissionStatus.SUBMITTED, SubmissionStatus.POLLING)
+        return min(limit, sum(1 for s in self.store.values() if s.status in live))
+
+    def list_by_status(self, statuses, *, limit: int):
+        return [s for s in self.store.values() if s.status.value in statuses][:limit]
+
+    def list_stalled_for_run(self, run_id: str, *, limit: int):
+        return [s for s in self.store.values() if s.run_id == run_id and s.status == SubmissionStatus.INFRA_EXHAUSTED][:limit]
+
     def get(self, submission_id: str):
         return self.store.get(submission_id)
 
     def update(self, submission_id: str, update: dict) -> None:
+        # Round-trip through the model like a Firestore read would: statuses become enums, timestamps datetimes.
         current = self.store[submission_id]
-        self.store[submission_id] = current.model_copy(update=update)
+        self.store[submission_id] = CodeSubmission.model_validate({**current.model_dump(mode="json"), **update})
 
     def list_pending_or_polling(self, *, limit: int):
         matches = [s for s in self.store.values() if s.status in (SubmissionStatus.SUBMITTED, SubmissionStatus.POLLING)]
@@ -82,6 +99,12 @@ class _FakeMcqResultRepo:
     def create(self, result: McqGradeResult) -> None:
         self.store[result.id] = result
 
+    def create_if_absent(self, result: McqGradeResult) -> bool:
+        if result.id in self.store:
+            return False
+        self.store[result.id] = result
+        return True
+
     def get(self, result_id: str):
         return self.store.get(result_id)
 
@@ -98,6 +121,12 @@ class _FakeShortAnswerReviewRepo:
 
     def create(self, review: ShortAnswerReview) -> None:
         self.store[review.id] = review
+
+    def create_if_absent(self, review: ShortAnswerReview) -> bool:
+        if review.id in self.store:
+            return False
+        self.store[review.id] = review
+        return True
 
     def get(self, review_id: str):
         return self.store.get(review_id)
