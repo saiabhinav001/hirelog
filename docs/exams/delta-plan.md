@@ -306,3 +306,33 @@ Out of Phase 8 on purpose: the real judge adapter and any code execution (D-5), 
 - [x] Full backend suite (`EXAMS_ENABLED=false`: 1355 passed), ruff, frontend `tsc`, `eslint` and Vitest pass.
 - [x] Migration notes and ADR 0024 written; no production data touched; no secrets or addresses added. *(No real judge, sandbox, browser or Firestore was used; mocks do not prove sandbox security.)*
 - [ ] **Open:** D-5 approval, adapter, language validation, SQL qualification, staging isolation evidence.
+
+## 12. Phase 9 — proctoring ledger, review, appeals and evidence (implemented, ADR 0025)
+
+Phase 9 needed no new institutional decision to ship; D-7 (who approves a proctoring profile, retention periods for evidence and the ledger) stays open and is recorded as provenance only (`set_by`).
+
+| Area | Change |
+|---|---|
+| `backend/app/domain/proctoring/ledger_service.py`, `decisions.py` | Attempt read first in the observation transaction; late events recorded as server entries; block only on a newly counted incident past `review_floor`; per-state isolated stale sweep using the run's grace; audited, reasoned review that keeps the ledger |
+| `backend/app/domain/proctoring/appeals_service.py`, `repository.py`, `models.py` | One pending appeal per attempt; upheld / overturned only; append-only decision history in a transaction + audit; additive fields (`review_floor`, `source`, `actor_uid`, `decisions`, `outcome`) |
+| `backend/app/domain/proctoring/evidence_service.py`, `retention.py`, `errors.py` | Byte-level image check; storage-failure handling; verified-only, audited view tickets; stale-request expiry; oldest-first retention with per-run windows and holds |
+| `backend/app/domain/exams/policy.py`, `api/routes/exams_faculty.py` | Optional `proctoring_profile`; server stamps `set_by` |
+| `backend/app/api/routes/exams_proctoring.py`, `exams_errors.py`, `exam_main.py` | Effective profile on observations and reviews; production storage guard (503); limiters; student view hides reviewer identity and notes; typed, `nosniff` evidence view; retention loop with holds, not started in production without a bucket |
+| Frontend | Candidate page: confirmed, reasoned, non-fatal review with conflict feedback and ledger source labels; control room: confirmed appeal decisions, reversal shown; student blocked page: inline appeal errors, reviewer decisions, leaves the page when the review lets them continue; camera hook no longer posts to `/upload/undefined`; proctoring fields on the schedule form |
+| Tests | New `test_proctoring_p9.py` (concurrent, HTTP-level); appeals tests rewritten on the in-memory Firestore; existing ledger / evidence / retention tests updated; Vitest for the candidate page, blocked page, appeals and profile builder |
+| Docs | ADR 0025 (+ index), compat §14, traceability §9.1, integration map |
+
+Out of Phase 9 on purpose: an institution approval step for profiles and the retention periods (D-7), real bucket / IAM / browser / camera evidence (Phase 10 / 11), purging access-log entries and consumed tickets, a unit test of the camera hook, multi-instance rate limiting, face recognition or any automatic misconduct decision (never).
+
+### Phase 9 acceptance checklist
+
+- [x] Browser signals are recorded as client-reported observations; dedupe, grace and cooldown apply per run; camera, permission and network failures never count or block.
+- [x] A threshold blocks transactionally, stops answer writes and question delivery server-side, keeps drafts and history, and the attempt still expires and is sealed.
+- [x] The ledger is append-only; a review keeps every count, records who and why, is audited, and can be reversed with every step kept; the next trivial blip does not re-block.
+- [x] Appeals are a separate, append-only, bounded channel that never changes the attempt by itself.
+- [x] Evidence is private, ticketed, audited (issued / viewed / denied), held while under review, deleted with its record after retention, and honestly missing when it could not be stored; production never uses memory.
+- [x] A submission succeeds whether or not evidence could be stored.
+- [x] No face recognition, biometric matching or automatic misconduct decision exists.
+- [x] Full backend suite (`EXAMS_ENABLED=false`: 1423 passed), ruff, frontend `tsc`, `eslint` and Vitest (193 passed with `--maxWorkers=2 --testTimeout=20000`) pass.
+- [x] Migration notes and ADR 0025 written; no production data touched; no secrets or addresses added. *(No real browser, camera, bucket or IAM policy was used.)*
+- [ ] **Open:** D-7 approval workflow and retention periods; staging evidence for storage boundaries and real browsers.

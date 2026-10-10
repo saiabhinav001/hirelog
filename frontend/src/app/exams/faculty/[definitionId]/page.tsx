@@ -39,6 +39,10 @@ function DefinitionDetail() {
   const [warningText, setWarningText] = useState("10");
   const [startAt, setStartAt] = useState("");
   const [endAt, setEndAt] = useState("");
+  const [graceSeconds, setGraceSeconds] = useState("");
+  const [cooldownSeconds, setCooldownSeconds] = useState("");
+  const [allowanceAfterReview, setAllowanceAfterReview] = useState("");
+  const [retentionDays, setRetentionDays] = useState("");
   const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   const load = useCallback(async () => {
@@ -133,7 +137,10 @@ function DefinitionDetail() {
 
   const handleScheduleRun = async (event: React.FormEvent) => {
     event.preventDefault();
-    const built = buildRunPolicy({ durationMinutes, warningMinutesText: warningText, start: startAt, end: endAt, timezone: browserZone });
+    const built = buildRunPolicy({
+      durationMinutes, warningMinutesText: warningText, start: startAt, end: endAt, timezone: browserZone,
+      graceSeconds, cooldownSeconds, allowanceAfterReview, retentionDays,
+    });
     if (!built.ok) {
       setNotice(built.error);
       return;
@@ -299,6 +306,35 @@ function DefinitionDetail() {
           <p className="text-xs text-[var(--text-muted)]">
             Times are in your time zone ({browserZone}). Students see the time left counted down from the server&apos;s clock; the window only controls when new students can start. Automatic opening and closing also needs the scheduler turned on for this deployment.
           </p>
+          <fieldset className="rounded-md border border-[var(--border)] p-3">
+            <legend className="px-1 text-sm font-medium">Proctoring (optional)</legend>
+            <p className="text-xs text-[var(--text-muted)]">
+              These tune how the server reads signals your students&apos; browsers report (tab hidden, left full screen). Those signals are
+              observations, not proof of misconduct, and a browser cannot be forced to behave. Leave a field empty to use the default.
+            </p>
+            <div className="mt-2 flex flex-wrap items-end gap-3">
+              <div>
+                <label htmlFor="proc-grace" className="label">Grace period (seconds)</label>
+                <input id="proc-grace" inputMode="decimal" className="input-field w-28" placeholder="default" value={graceSeconds} onChange={(e) => setGraceSeconds(e.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="proc-cooldown" className="label">Cooldown (seconds)</label>
+                <input id="proc-cooldown" inputMode="decimal" className="input-field w-28" placeholder="default" value={cooldownSeconds} onChange={(e) => setCooldownSeconds(e.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="proc-allowance" className="label">Allowed after a review</label>
+                <input id="proc-allowance" inputMode="numeric" className="input-field w-28" placeholder="0" value={allowanceAfterReview} onChange={(e) => setAllowanceAfterReview(e.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="proc-retention" className="label">Keep evidence (days)</label>
+                <input id="proc-retention" inputMode="numeric" className="input-field w-28" placeholder="default" value={retentionDays} onChange={(e) => setRetentionDays(e.target.value)} />
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-[var(--text-muted)]">
+              &quot;Allowed after a review&quot; is how many more counted departures are tolerated once a reviewer lets a blocked student continue; their earlier
+              incidents always stay on record. Evidence is kept at least 7 days, and longer while a block or appeal is open.
+            </p>
+          </fieldset>
           <div className="flex gap-3">
             <input
               className="input-field flex-1"

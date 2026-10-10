@@ -106,32 +106,40 @@ export function useCameraCapture(
 
       setState((s) => ({ ...s, permission: "granted" }));
       try {
-        const { snapshot_id, upload_ticket } = await fetch(
-          `${EXAMS_API_BASE}/api/exams/v1/student/proctoring/runs/${currentRunId}/snapshots`,
-          {
+        const requested = await fetch(`${EXAMS_API_BASE}/api/exams/v1/student/proctoring/runs/${currentRunId}/snapshots`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ kind }),
+          cache: "no-store",
+        });
+        if (!requested.ok) {
+          // Storage unavailable or rate limited: say so honestly and carry on - the exam never depends on this.
+          await fetch(`${EXAMS_API_BASE}/api/exams/v1/student/proctoring/runs/${currentRunId}/snapshots/missing`, {
             method: "POST",
             headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-            body: JSON.stringify({ kind }),
+            body: JSON.stringify({ kind, reason: "evidence_service_unavailable" }),
             cache: "no-store",
-          }
-        ).then((r) => r.json());
+          }).catch(() => undefined);
+          return;
+        }
+        const { upload_ticket } = (await requested.json()) as { snapshot_id: string; upload_ticket: string };
 
         const form = new FormData();
         form.append("file", result, "snapshot.jpg");
         const digest = await sha256Hex(result);
         void digest; // server independently recomputes and verifies the hash
-        void snapshot_id;
 
-        await fetch(`${EXAMS_API_BASE}/api/exams/v1/student/proctoring/snapshots/upload/${upload_ticket}`, {
+        const uploaded = await fetch(`${EXAMS_API_BASE}/api/exams/v1/student/proctoring/snapshots/upload/${upload_ticket}`, {
           method: "POST",
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
           body: form,
           cache: "no-store",
         });
-        setState((s) => ({ ...s, lastCaptureAt: new Date().toISOString() }));
+        // A refused upload is already recorded server-side as missing with its reason.
+        if (uploaded.ok) setState((s) => ({ ...s, lastCaptureAt: new Date().toISOString() }));
       } catch {
         // Upload failure is also an honest, non-blocking outcome — the
-        // snapshot stays in its "requested" state server-side.
+        // snapshot stays in its "requested" state server-side and is marked missing once its ticket lapses.
       }
     },
     [getToken]

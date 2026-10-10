@@ -24,6 +24,7 @@ from app.domain.proctoring.models import (
 )
 
 NOW = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
+JPEG = b"\xff\xd8\xff\xe0"  # what a real JPEG starts with; the server checks the bytes, not the declared type
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +55,12 @@ class _FakeSnapshotRepo:
     def list_all(self, *, limit):
         return list(self.store.values())[:limit]
 
+    def list_oldest(self, *, limit, after_requested_at=None):
+        return sorted(self.store.values(), key=lambda s: s.requested_at)[:limit]
+
+    def list_requested(self, *, limit):
+        return [s for s in self.store.values() if s.status.value == "requested"][:limit]
+
     def delete(self, snapshot_id):
         self.store.pop(snapshot_id, None)
 
@@ -79,6 +86,9 @@ class _FakeViewTicketRepo:
 
     def create(self, ticket):
         self.store[ticket.id] = ticket
+
+    def get(self, ticket_id):
+        return self.store.get(ticket_id)
 
     def get_in_transaction(self, _txn, ticket_id):
         return self.store.get(ticket_id)
@@ -116,7 +126,7 @@ def test_request_then_confirm_upload_with_matching_hash_succeeds() -> None:
     service = _service()
     snapshot, ticket = service.request_snapshot(run_id="run-1", uid="u1", kind=EvidenceSnapshotKind.CHECK_IN, upload_ticket_ttl_seconds=120)
 
-    content = b"fake-jpeg-bytes"
+    content = JPEG + b"fake-jpeg-bytes"
     digest = hashlib.sha256(content).hexdigest()
     result = service.confirm_upload(ticket_id=ticket.id, uid="u1", content=content, declared_sha256=digest, content_type="image/jpeg", max_size_bytes=10_000)
 
@@ -156,7 +166,7 @@ def test_confirm_upload_rejects_wrong_owner() -> None:
 def test_confirm_upload_rejects_replayed_ticket() -> None:
     service = _service()
     snapshot, ticket = service.request_snapshot(run_id="run-1", uid="u1", kind=EvidenceSnapshotKind.CHECK_IN, upload_ticket_ttl_seconds=120)
-    content = b"abc"
+    content = JPEG + b"abc"
     digest = hashlib.sha256(content).hexdigest()
     service.confirm_upload(ticket_id=ticket.id, uid="u1", content=content, declared_sha256=digest, content_type="image/jpeg", max_size_bytes=10_000)
 
@@ -180,21 +190,21 @@ def test_record_missing_evidence_for_unsupported_media() -> None:
 def test_view_snapshot_happy_path_is_audited() -> None:
     service = _service()
     snapshot, ticket = service.request_snapshot(run_id="run-1", uid="u1", kind=EvidenceSnapshotKind.SUBMISSION, upload_ticket_ttl_seconds=120)
-    content = b"jpeg-bytes"
+    content = JPEG + b"jpeg-bytes"
     service.confirm_upload(ticket_id=ticket.id, uid="u1", content=content, declared_sha256=hashlib.sha256(content).hexdigest(), content_type="image/jpeg", max_size_bytes=10_000)
 
     view_ticket = service.issue_view_ticket(snapshot_id=snapshot.id, faculty_uid="fac-1", ttl_seconds=60)
     result = service.view_snapshot(ticket_id=view_ticket.id, faculty_uid="fac-1")
 
     assert result == content
-    assert len(service.access_log.entries) == 1
-    assert service.access_log.entries[0].accessed_by == "fac-1"
+    assert [e.outcome for e in service.access_log.entries] == ["issued", "viewed"]
+    assert all(e.accessed_by == "fac-1" for e in service.access_log.entries)
 
 
 def test_view_snapshot_rejects_wrong_faculty() -> None:
     service = _service()
     snapshot, ticket = service.request_snapshot(run_id="run-1", uid="u1", kind=EvidenceSnapshotKind.SUBMISSION, upload_ticket_ttl_seconds=120)
-    content = b"jpeg-bytes"
+    content = JPEG + b"jpeg-bytes"
     service.confirm_upload(ticket_id=ticket.id, uid="u1", content=content, declared_sha256=hashlib.sha256(content).hexdigest(), content_type="image/jpeg", max_size_bytes=10_000)
     view_ticket = service.issue_view_ticket(snapshot_id=snapshot.id, faculty_uid="fac-1", ttl_seconds=60)
 
@@ -205,7 +215,7 @@ def test_view_snapshot_rejects_wrong_faculty() -> None:
 def test_view_snapshot_rejects_replayed_ticket() -> None:
     service = _service()
     snapshot, ticket = service.request_snapshot(run_id="run-1", uid="u1", kind=EvidenceSnapshotKind.SUBMISSION, upload_ticket_ttl_seconds=120)
-    content = b"jpeg-bytes"
+    content = JPEG + b"jpeg-bytes"
     service.confirm_upload(ticket_id=ticket.id, uid="u1", content=content, declared_sha256=hashlib.sha256(content).hexdigest(), content_type="image/jpeg", max_size_bytes=10_000)
     view_ticket = service.issue_view_ticket(snapshot_id=snapshot.id, faculty_uid="fac-1", ttl_seconds=60)
     service.view_snapshot(ticket_id=view_ticket.id, faculty_uid="fac-1")
@@ -217,7 +227,7 @@ def test_view_snapshot_rejects_replayed_ticket() -> None:
 def test_delete_snapshot_removes_storage_and_record() -> None:
     service = _service()
     snapshot, ticket = service.request_snapshot(run_id="run-1", uid="u1", kind=EvidenceSnapshotKind.CHECK_IN, upload_ticket_ttl_seconds=120)
-    content = b"abc"
+    content = JPEG + b"abc"
     verified = service.confirm_upload(ticket_id=ticket.id, uid="u1", content=content, declared_sha256=hashlib.sha256(content).hexdigest(), content_type="image/jpeg", max_size_bytes=10_000)
 
     service.delete_snapshot(verified)

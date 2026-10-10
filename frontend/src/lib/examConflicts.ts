@@ -21,6 +21,9 @@ const CONFLICT_TEXT: Record<string, string> = {
   publication_blocked: "Publishing is blocked - the blockers are listed on the exam page.",
   judge_unavailable: "The code runner is not available right now, so your code was not run. Try again in a moment.",
   judge_busy: "The code runner is busy. Wait a moment and try again.",
+  attempt_not_blocked: "That attempt is no longer blocked, so there is nothing to decide. The page has been refreshed.",
+  evidence_storage_unavailable: "Evidence storage is not available right now. The exam itself is not affected.",
+  view_ticket_invalid: "That evidence link has expired, was already used, or belongs to someone else. Request it again.",
 };
 
 export function describeConflict(err: unknown, fallback = "That did not work."): string {

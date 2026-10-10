@@ -54,3 +54,33 @@ describe("parseTopics", () => {
     expect(parseTopics(Array.from({ length: 80 }, (_, i) => `t${i}`).join(","))).toHaveLength(50);
   });
 });
+
+describe("buildRunPolicy - proctoring profile", () => {
+  const base = { durationMinutes: 60, warningMinutesText: "10", start: "", end: "" };
+
+  it("sends no profile when nothing is set, so the run keeps the deployment defaults", () => {
+    const result = buildRunPolicy(base);
+    expect(result.ok && "proctoring_profile" in result.policy).toBe(false);
+    expect(buildRunPolicy({ ...base, graceSeconds: " ", retentionDays: "" }).ok).toBe(true);
+  });
+
+  it("sends only what was filled in", () => {
+    const result = buildRunPolicy({ ...base, graceSeconds: "10", allowanceAfterReview: "2" });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.policy.proctoring_profile).toEqual({ grace_seconds: 10, allowance_after_review: 2 });
+  });
+
+  it.each([
+    [{ graceSeconds: "-1" }, /grace period/],
+    [{ graceSeconds: "61" }, /grace period/],
+    [{ cooldownSeconds: "abc" }, /cooldown/],
+    [{ allowanceAfterReview: "1.5" }, /whole number/],
+    [{ allowanceAfterReview: "11" }, /allowance/],
+    [{ retentionDays: "6" }, /retention/],
+    [{ retentionDays: "366" }, /retention/],
+  ])("refuses %j before it is sent", (fields, message) => {
+    const result = buildRunPolicy({ ...base, ...fields });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(message);
+  });
+});

@@ -6,6 +6,11 @@ export type RunPolicyInput = {
   start: string;
   end: string;
   timezone?: string;
+  /** Proctoring profile, all optional; empty = the deployment default. */
+  graceSeconds?: string;
+  cooldownSeconds?: string;
+  allowanceAfterReview?: string;
+  retentionDays?: string;
 };
 
 export type RunPolicyResult =
@@ -54,7 +59,37 @@ export function buildRunPolicy(input: RunPolicyInput): RunPolicyResult {
     if (end) policy.scheduled_end = end.toISOString();
     if (input.timezone) policy.timezone = input.timezone;
   }
+  const profile = buildProfile(input);
+  if (!profile.ok) return profile;
+  if (profile.value) policy.proctoring_profile = profile.value;
   return { ok: true, policy };
+}
+
+function optionalNumber(text: string | undefined, label: string, min: number, max: number, integer: boolean): { ok: true; value?: number } | { ok: false; error: string } {
+  const raw = (text ?? "").trim();
+  if (raw === "") return { ok: true };
+  const value = Number(raw);
+  if (!Number.isFinite(value) || (integer && !Number.isInteger(value))) return { ok: false, error: `${label} must be ${integer ? "a whole number" : "a number"}.` };
+  if (value < min || value > max) return { ok: false, error: `${label} must be between ${min} and ${max}.` };
+  return { ok: true, value };
+}
+
+/** What the server does with browser-reported signals for this run. Unset fields use the deployment default. */
+function buildProfile(input: RunPolicyInput): { ok: true; value?: Record<string, unknown> } | { ok: false; error: string } {
+  const grace = optionalNumber(input.graceSeconds, "The grace period", 0, 60, false);
+  if (!grace.ok) return grace;
+  const cooldown = optionalNumber(input.cooldownSeconds, "The cooldown", 0, 60, false);
+  if (!cooldown.ok) return cooldown;
+  const allowance = optionalNumber(input.allowanceAfterReview, "The allowance after a review", 0, 10, true);
+  if (!allowance.ok) return allowance;
+  const retention = optionalNumber(input.retentionDays, "Evidence retention", 7, 365, true);
+  if (!retention.ok) return retention;
+  const value: Record<string, unknown> = {};
+  if (grace.value !== undefined) value.grace_seconds = grace.value;
+  if (cooldown.value !== undefined) value.cooldown_seconds = cooldown.value;
+  if (allowance.value !== undefined) value.allowance_after_review = allowance.value;
+  if (retention.value !== undefined) value.evidence_retention_days = retention.value;
+  return { ok: true, value: Object.keys(value).length > 0 ? value : undefined };
 }
 
 /** Comma/newline separated topics, trimmed, de-duplicated, capped at the server's 50. */

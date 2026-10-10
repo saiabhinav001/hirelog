@@ -22,7 +22,12 @@ from app.domain.judge.errors import (
     RuntimeNotAllowedError,
     SubmissionNotFoundError,
 )
-from app.domain.proctoring.errors import ProctoringDomainError, UploadTicketInvalidError, ViewTicketInvalidError
+from app.domain.proctoring.errors import (
+    EvidenceStorageUnavailableError,
+    ProctoringDomainError,
+    UploadTicketInvalidError,
+    ViewTicketInvalidError,
+)
 
 
 def raise_for_domain_error(exc: Exception) -> None:
@@ -61,7 +66,7 @@ def raise_for_domain_error(exc: Exception) -> None:
         ) from exc
     if isinstance(exc, RuntimeNotAllowedError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"code": exc.code, "message": str(exc)}) from exc
-    if isinstance(exc, (JudgeBusyError, JudgeUnavailableError)):
+    if isinstance(exc, (JudgeBusyError, JudgeUnavailableError, EvidenceStorageUnavailableError)):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail={"code": exc.code, "message": str(exc)},
             headers={"Retry-After": "10"},

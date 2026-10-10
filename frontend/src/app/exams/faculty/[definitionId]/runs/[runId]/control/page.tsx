@@ -41,6 +41,7 @@ function ControlRoomContent() {
   const [acting, setActing] = useState(false);
   const [accessUid, setAccessUid] = useState("");
   const [accessAction, setAccessAction] = useState<{ action: "grant" | "revoke"; uid: string; key: string } | null>(null);
+  const [appealDialog, setAppealDialog] = useState<{ appeal: Appeal; decision: "upheld" | "overturned" } | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -113,6 +114,28 @@ function ControlRoomContent() {
     } finally {
       setActing(false);
       setAccessAction(null);
+      await loadPage(cursor);
+    }
+  };
+
+  const decideAppeal = async (reason: string) => {
+    if (!appealDialog) return;
+    setActing(true);
+    setFeedback(null);
+    try {
+      const token = await getToken();
+      await examEndpoints.resolveAppeal(token, appealDialog.appeal.id, appealDialog.decision, reason);
+      setFeedback({
+        kind: "ok",
+        text: appealDialog.decision === "overturned"
+          ? `Appeal from ${appealDialog.appeal.uid} overturned. They stay blocked until you review the block.`
+          : `Block upheld for ${appealDialog.appeal.uid}.`,
+      });
+    } catch (err) {
+      setFeedback({ kind: "error", text: describeConflict(err, "Could not record the decision.") });
+    } finally {
+      setActing(false);
+      setAppealDialog(null);
       await loadPage(cursor);
     }
   };
@@ -250,8 +273,11 @@ function ControlRoomContent() {
 
       <ShortLinkPanel runId={runId} getToken={getToken} />
 
-      <div className="card mt-4 p-5">
-        <h2 className="text-lg font-semibold">Pending appeals</h2>
+      <section className="card mt-4 p-5" aria-labelledby="appeals-title">
+        <h2 id="appeals-title" className="text-lg font-semibold">Appeals</h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">
+          Deciding an appeal records your decision and the reason. It does not unblock the student: open their candidate page and review the block there.
+        </p>
         <ul className="mt-3 space-y-3 text-sm">
           {appeals.filter((a) => a.status === "pending").length === 0 && (
             <li className="text-[var(--text-muted)]">No pending appeals.</li>
@@ -260,36 +286,53 @@ function ControlRoomContent() {
             <li key={appeal.id} className="rounded-md border border-[var(--border)] p-3">
               <p className="font-mono text-xs text-[var(--text-muted)]">{appeal.uid}</p>
               <p className="mt-1">{appeal.student_statement}</p>
-              <div className="mt-2 flex gap-2">
-                <button
-                  className="btn-secondary"
-                  onClick={async () => {
-                    const token = await getToken();
-                    await examEndpoints.resolveAppeal(token, appeal.id, "upheld", "Reviewed — upheld.");
-                    await loadPage(cursor);
-                  }}
-                >
-                  Uphold
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button className="btn-secondary" onClick={() => setAppealDialog({ appeal, decision: "upheld" })} aria-label={`Uphold the block for ${appeal.uid}`}>
+                  Uphold block
                 </button>
-                <button
-                  className="btn-primary"
-                  onClick={async () => {
-                    const token = await getToken();
-                    await examEndpoints.resolveAppeal(token, appeal.id, "overturned", "Reviewed — overturned.");
-                    await loadPage(cursor);
-                  }}
-                >
+                <button className="btn-primary" onClick={() => setAppealDialog({ appeal, decision: "overturned" })} aria-label={`Overturn the block for ${appeal.uid}`}>
                   Overturn
                 </button>
+                <Link className="btn-secondary" href={`/exams/faculty/${definitionId}/runs/${runId}/candidates/${appeal.uid}`}>Candidate page</Link>
               </div>
             </li>
           ))}
         </ul>
-      </div>
+        {appeals.some((a) => a.status !== "pending") && (
+          <>
+            <h3 className="mt-4 text-sm font-semibold">Decided</h3>
+            <ul className="mt-2 space-y-2 text-sm">
+              {appeals.filter((a) => a.status !== "pending").map((appeal) => (
+                <li key={appeal.id} className="rounded-md bg-[var(--surface-muted)] p-2">
+                  <span className="font-mono text-xs">{appeal.uid}</span> - {appeal.status}
+                  {(appeal.decisions?.length ?? 0) > 1 && ` (reversed: ${appeal.decisions?.map((d) => d.status).join(" → ")})`}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
+
+      {appealDialog && (
+        <ConfirmDialog
+          title={appealDialog.decision === "overturned" ? "Overturn this block?" : "Uphold this block?"}
+          details={[{ label: "Student", value: appealDialog.appeal.uid }]}
+          consequence={
+            appealDialog.decision === "overturned"
+              ? "Records that the appeal succeeded. The student stays blocked until you review the block on their candidate page."
+              : "Records that the block stands. The student can be heard again later if they have new information."
+          }
+          reasonLabel="Reason"
+          reasonRequired
+          confirmLabel={appealDialog.decision === "overturned" ? "Overturn" : "Uphold block"}
+          busy={acting}
+          onCancel={() => setAppealDialog(null)}
+          onConfirm={(reason) => decideAppeal(reason)}
+        />
+      )}
     </div>
   );
 }
-
 export default function ControlRoomPage() {
   return (
     <ExamProtectedRoute requireRole="faculty">

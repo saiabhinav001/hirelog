@@ -13,8 +13,13 @@ from uuid import uuid4
 
 from firebase_admin import firestore
 
-from app.domain.proctoring.decisions import decide_confirm_snapshot_upload
-from app.domain.proctoring.errors import SnapshotHashMismatchError, UploadTicketInvalidError, ViewTicketInvalidError
+from app.domain.proctoring.decisions import decide_confirm_snapshot_upload, detect_image_type
+from app.domain.proctoring.errors import (
+    EvidenceStorageUnavailableError,
+    SnapshotHashMismatchError,
+    UploadTicketInvalidError,
+    ViewTicketInvalidError,
+)
 from app.domain.proctoring.evidence_storage import EvidenceStorage
 from app.domain.proctoring.models import (
     EvidenceAccessLogEntry,
@@ -78,25 +83,34 @@ class EvidenceService:
             raise LookupError(f"snapshot {ticket.snapshot_id} not found")
 
         actual_sha256 = hashlib.sha256(content).hexdigest()
+        detected_type = detect_image_type(content)
         outcome = decide_confirm_snapshot_upload(
             snapshot=snapshot, declared_sha256=declared_sha256, actual_sha256=actual_sha256,
-            size_bytes=len(content), max_size_bytes=max_size_bytes,
+            size_bytes=len(content), max_size_bytes=max_size_bytes, image_ok=detected_type is not None,
         )
         now = _utc_now()
         if not outcome.accepted:
-            self.snapshots.update(
-                snapshot.id,
-                {"status": EvidenceSnapshotStatus.MISSING.value, "missing_reason": outcome.conflict_reason, "uploaded_at": now.isoformat()},
-            )
+            if snapshot.status == EvidenceSnapshotStatus.REQUESTED:  # never downgrade evidence that already verified
+                self.snapshots.update(
+                    snapshot.id,
+                    {"status": EvidenceSnapshotStatus.MISSING.value, "missing_reason": outcome.conflict_reason, "uploaded_at": now.isoformat()},
+                )
             raise SnapshotHashMismatchError(outcome.conflict_reason)
 
         storage_ref = f"exam-evidence/{snapshot.run_id}/{snapshot.uid}/{snapshot.id}"
-        self._storage.put(storage_ref, content, content_type=content_type)
+        try:
+            self._storage.put(storage_ref, content, content_type=detected_type or content_type)
+        except Exception as exc:  # noqa: BLE001 - any storage failure leaves the evidence honestly missing
+            self.snapshots.update(
+                snapshot.id,
+                {"status": EvidenceSnapshotStatus.MISSING.value, "missing_reason": "storage_unavailable", "uploaded_at": now.isoformat()},
+            )
+            raise EvidenceStorageUnavailableError("evidence storage could not be written") from exc
         self.snapshots.update(
             snapshot.id,
             {
                 "status": EvidenceSnapshotStatus.VERIFIED.value, "uploaded_at": now.isoformat(), "verified_at": now.isoformat(),
-                "storage_ref": storage_ref, "sha256": actual_sha256, "size_bytes": len(content), "content_type": content_type,
+                "storage_ref": storage_ref, "sha256": actual_sha256, "size_bytes": len(content), "content_type": detected_type,
             },
         )
         return self.snapshots.get(snapshot.id)
@@ -115,17 +129,28 @@ class EvidenceService:
         return snapshot
 
     def issue_view_ticket(self, *, snapshot_id: str, faculty_uid: str, ttl_seconds: int) -> ViewTicket:
+        """Only for evidence that was actually stored and verified. Issuing is itself audited."""
+        snapshot = self.snapshots.get(snapshot_id)
+        if snapshot is None or snapshot.status != EvidenceSnapshotStatus.VERIFIED or not snapshot.storage_ref:
+            raise LookupError("there is no stored evidence for this snapshot")
+        now = _utc_now()
         ticket = ViewTicket(
             id=uuid4().hex, snapshot_id=snapshot_id, issued_to=faculty_uid,
-            expires_at=_utc_now() + timedelta(seconds=ttl_seconds),
+            expires_at=now + timedelta(seconds=ttl_seconds),
         )
         self.view_tickets.create(ticket)
+        self.access_log.create(EvidenceAccessLogEntry(
+            id=uuid4().hex, snapshot_id=snapshot_id, accessed_by=faculty_uid, accessed_at=now, outcome="issued",
+        ))
         return ticket
 
     def view_snapshot(self, *, ticket_id: str, faculty_uid: str) -> bytes:
-        """Every successful (and only successful) access is audited —
-        camera pictures are never treated as automatic identity/liveness
-        proof; this is a manual faculty review aid, nothing more."""
+        return self.view_snapshot_with_type(ticket_id=ticket_id, faculty_uid=faculty_uid)[0]
+
+    def view_snapshot_with_type(self, *, ticket_id: str, faculty_uid: str) -> tuple[bytes, str]:
+        """Every access is audited: a refused attempt on a real ticket is recorded as `denied`, a served one as
+        `viewed`. Camera pictures are never treated as automatic identity/liveness proof; this is a manual review
+        aid, nothing more."""
         transaction = self._db.transaction()
 
         @firestore.transactional
@@ -137,7 +162,15 @@ class EvidenceService:
             self.view_tickets.mark_consumed_in_transaction(transaction, ticket_id, consumed_at=now)
             return ticket
 
-        ticket = _consume_ticket(transaction)
+        try:
+            ticket = _consume_ticket(transaction)
+        except ViewTicketInvalidError:
+            known = self.view_tickets.get(ticket_id)
+            if known is not None:  # an unknown id names no snapshot; only a real ticket can be refused on record
+                self.access_log.create(EvidenceAccessLogEntry(
+                    id=uuid4().hex, snapshot_id=known.snapshot_id, accessed_by=faculty_uid, accessed_at=_utc_now(), outcome="denied",
+                ))
+            raise
         snapshot = self.snapshots.get(ticket.snapshot_id)
         if snapshot is None or snapshot.storage_ref is None:
             raise LookupError("snapshot has no stored content")
@@ -146,9 +179,22 @@ class EvidenceService:
             raise LookupError("stored content missing")
 
         self.access_log.create(
-            EvidenceAccessLogEntry(id=uuid4().hex, snapshot_id=snapshot.id, accessed_by=faculty_uid, accessed_at=_utc_now())
+            EvidenceAccessLogEntry(id=uuid4().hex, snapshot_id=snapshot.id, accessed_by=faculty_uid, accessed_at=_utc_now(), outcome="viewed")
         )
-        return content
+        return content, snapshot.content_type or "application/octet-stream"
+
+    def expire_stale_requests(self, *, now: datetime, older_than_seconds: float, limit: int = 200) -> int:
+        """A snapshot still `requested` after its upload ticket has lapsed will never arrive (the capture failed,
+        the page closed, the network dropped). Mark it missing so a reviewer sees an honest state, not an eternal
+        "requested"."""
+        marked = 0
+        for snapshot in self.snapshots.list_requested(limit=limit):
+            if (now - snapshot.requested_at).total_seconds() > older_than_seconds:
+                self.snapshots.update(
+                    snapshot.id, {"status": EvidenceSnapshotStatus.MISSING.value, "missing_reason": "upload_not_completed"},
+                )
+                marked += 1
+        return marked
 
     def delete_snapshot(self, snapshot: EvidenceSnapshot) -> None:
         """Retention/deletion — removes the stored bytes AND the Firestore

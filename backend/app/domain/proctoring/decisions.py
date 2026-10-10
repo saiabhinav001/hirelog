@@ -25,6 +25,7 @@ from app.domain.proctoring.models import (
 
 CorrelationAction = Literal[
     "deduped",
+    "ignored_inactive",
     "informational_logged",
     "incident_opened",
     "incident_extended",
@@ -41,6 +42,34 @@ class CorrelationOutcome:
     new_state: ProctoringState
     log_entry: Optional[IncidentLogEntry]
     should_block: bool = False
+
+
+@dataclass(frozen=True)
+class EffectiveProctoring:
+    grace_seconds: float
+    cooldown_seconds: float
+    allowance_after_review: int
+    retention_days: int
+
+
+def effective_proctoring(policy, *, default_grace: float, default_cooldown: float, default_retention_days: int) -> EffectiveProctoring:
+    """The run's profile where it sets a value, the deployment default elsewhere. A run without a profile gets
+    exactly the defaults, i.e. the behaviour from before profiles existed."""
+    profile = getattr(policy, "proctoring_profile", None)
+    if profile is None:
+        return EffectiveProctoring(default_grace, default_cooldown, 0, default_retention_days)
+    return EffectiveProctoring(
+        grace_seconds=default_grace if profile.grace_seconds is None else profile.grace_seconds,
+        cooldown_seconds=default_cooldown if profile.cooldown_seconds is None else profile.cooldown_seconds,
+        allowance_after_review=profile.allowance_after_review,
+        retention_days=default_retention_days if profile.evidence_retention_days is None else profile.evidence_retention_days,
+    )
+
+
+def _crosses_block_line(newly_counted: bool, new_count: int, threshold: int, review_floor: int) -> bool:
+    """Blocks only when an incident was just COUNTED and the count is at the threshold and above the review floor.
+    An uncounted blip never blocks, so a reviewer's "allow to continue" is not undone by the next trivial event."""
+    return newly_counted and new_count >= threshold and new_count > review_floor
 
 
 def _new_log_entry(
@@ -119,7 +148,7 @@ def correlate_observation(
         return CorrelationOutcome(
             action="incident_closed_counted" if qualifies else "incident_closed_uncounted",
             new_state=closed_state, log_entry=entry,
-            should_block=new_count >= threshold,
+            should_block=_crosses_block_line(newly_incremented, new_count, threshold, base_state.review_floor),
         )
 
     # DEPARTURE_START_KINDS
@@ -201,7 +230,8 @@ def close_stale_open_incident(
     )
     return CorrelationOutcome(
         action="incident_closed_counted" if counted else "incident_closed_uncounted",
-        new_state=closed_state, log_entry=entry, should_block=new_count >= threshold,
+        new_state=closed_state, log_entry=entry,
+        should_block=_crosses_block_line(counted, new_count, threshold, state.review_floor),
     )
 
 
@@ -211,8 +241,20 @@ class SnapshotCompletionOutcome:
     conflict_reason: Optional[str] = None
 
 
+def detect_image_type(content: bytes) -> Optional[str]:
+    """The type the BYTES say they are (JPEG, PNG or WebP); the client's declared type is never trusted."""
+    if content[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if content[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def decide_confirm_snapshot_upload(
     *, snapshot: EvidenceSnapshot, declared_sha256: str, actual_sha256: str, size_bytes: int, max_size_bytes: int,
+    image_ok: bool = True,
 ) -> SnapshotCompletionOutcome:
     if snapshot.status != EvidenceSnapshotStatus.REQUESTED:
         return SnapshotCompletionOutcome(False, conflict_reason="snapshot_not_pending")
@@ -220,6 +262,8 @@ def decide_confirm_snapshot_upload(
         return SnapshotCompletionOutcome(False, conflict_reason="payload_too_large")
     if declared_sha256 != actual_sha256:
         return SnapshotCompletionOutcome(False, conflict_reason="hash_mismatch")
+    if not image_ok:
+        return SnapshotCompletionOutcome(False, conflict_reason="not_an_image")
     return SnapshotCompletionOutcome(True)
 
 

@@ -233,19 +233,28 @@ def _finalization_sweep_loop() -> None:
 
 
 def _evidence_retention_sweep_loop() -> None:
-    """Deletes evidence (storage bytes + Firestore record together) once
-    past the configured retention window — bounded, idempotent."""
+    """Deletes evidence (storage bytes + Firestore record together) once past the run's retention window - held while
+    the attempt is blocked or an appeal is pending - and marks upload requests that can no longer complete as missing.
+    Bounded and idempotent. Not started in production without a bucket: nothing real is stored there."""
     from app.api.routes.exams_proctoring import _storage
+    from app.domain.exams.repository import AttemptRepository, ExamRunRepository
     from app.domain.proctoring.evidence_service import EvidenceService
+    from app.domain.proctoring.repository import AppealRepository
     from app.domain.proctoring.retention import RetentionSweeper
 
-    sweeper = RetentionSweeper(EvidenceService(db, _storage()))
+    if settings.is_production and not settings.EXAM_EVIDENCE_STORAGE_BUCKET:
+        logger.warning("evidence retention sweep not started: EXAM_EVIDENCE_STORAGE_BUCKET is not configured")
+        return
+    sweeper = RetentionSweeper(
+        EvidenceService(db, _storage()), runs=ExamRunRepository(db), attempts=AttemptRepository(db), appeals=AppealRepository(db),
+    )
     while not _stop_event.is_set():
         try:
+            sweeper.expire_stale_requests(upload_ticket_ttl_seconds=settings.EXAM_EVIDENCE_UPLOAD_TICKET_TTL_SECONDS)
             sweeper.sweep_once(retention_days=settings.EXAM_EVIDENCE_RETENTION_DAYS, limit=100)
         except Exception:
             logger.exception("evidence retention sweep tick failed")
-        _stop_event.wait(3600.0)
+        _stop_event.wait(900.0)
 
 
 @asynccontextmanager

@@ -130,6 +130,17 @@ class EvidenceSnapshotRepository:
         query = self._db.collection(SNAPSHOTS_COLLECTION).limit(limit)
         return [EvidenceSnapshot.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]
 
+    def list_oldest(self, *, limit: int, after_requested_at: Optional[str] = None) -> list[EvidenceSnapshot]:
+        """Oldest first, so a bounded retention scan reaches the snapshots that are due before newer ones."""
+        query = self._db.collection(SNAPSHOTS_COLLECTION).order_by("requested_at")
+        if after_requested_at is not None:
+            query = query.start_after({"requested_at": after_requested_at})
+        return [EvidenceSnapshot.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.limit(limit).stream()]
+
+    def list_requested(self, *, limit: int) -> list[EvidenceSnapshot]:
+        query = self._db.collection(SNAPSHOTS_COLLECTION).where(filter=firestore.FieldFilter("status", "==", "requested")).limit(limit)
+        return [EvidenceSnapshot.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]
+
     def delete(self, snapshot_id: str) -> None:
         self._ref(snapshot_id).delete()
 
@@ -163,6 +174,12 @@ class ViewTicketRepository:
 
     def create(self, ticket: ViewTicket) -> None:
         self._ref(ticket.id).set(_model_dict(ticket))
+
+    def get(self, ticket_id: str) -> Optional[ViewTicket]:
+        snap = self._ref(ticket_id).get()
+        if not snap.exists:
+            return None
+        return ViewTicket.model_validate({**(snap.to_dict() or {}), "id": snap.id})
 
     def get_in_transaction(self, transaction, ticket_id: str) -> Optional[ViewTicket]:
         snap = self._ref(ticket_id).get(transaction=transaction)
@@ -206,6 +223,26 @@ class AppealRepository:
 
     def update(self, appeal_id: str, update: dict) -> None:
         self._ref(appeal_id).update(update)
+
+    def create_in_transaction(self, transaction, appeal: Appeal) -> None:
+        transaction.set(self._ref(appeal.id), _model_dict(appeal))
+
+    def get_in_transaction(self, transaction, appeal_id: str) -> Optional[Appeal]:
+        snap = self._ref(appeal_id).get(transaction=transaction)
+        if not snap.exists:
+            return None
+        return Appeal.model_validate({**(snap.to_dict() or {}), "id": snap.id})
+
+    def update_in_transaction(self, transaction, appeal_id: str, update: dict) -> None:
+        transaction.update(self._ref(appeal_id), update)
+
+    def list_for_attempt_in_transaction(self, transaction, run_id: str, uid: str) -> list[Appeal]:
+        query = (
+            self._db.collection(APPEALS_COLLECTION)
+            .where(filter=firestore.FieldFilter("run_id", "==", run_id))
+            .where(filter=firestore.FieldFilter("uid", "==", uid))
+        )
+        return [Appeal.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream(transaction=transaction)]
 
     def list_for_run(self, run_id: str) -> list[Appeal]:
         query = self._db.collection(APPEALS_COLLECTION).where(filter=firestore.FieldFilter("run_id", "==", run_id))

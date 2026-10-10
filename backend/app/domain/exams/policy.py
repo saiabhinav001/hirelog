@@ -23,6 +23,25 @@ class AccommodationWindow(BaseModel):
     note: str = Field(default="", max_length=240)
 
 
+class ProctoringProfile(BaseModel):
+    """Per-run proctoring settings (Prompt 9, ADR 0025). Every field is optional: unset = the deployment default
+    (`EXAM_PROCTORING_*`, `EXAM_EVIDENCE_RETENTION_DAYS`), so a run without a profile behaves exactly as before.
+    These tune what the server does with browser-REPORTED signals; they cannot make a browser enforce anything."""
+
+    # A departure shorter than this is not counted.
+    grace_seconds: Optional[float] = Field(default=None, ge=0, le=60)
+    # A return-and-leave inside this window continues the same departure.
+    cooldown_seconds: Optional[float] = Field(default=None, ge=0, le=60)
+    # Extra counted departures tolerated after a reviewer allows the attempt to continue (the ledger is never reset).
+    allowance_after_review: int = Field(default=0, ge=0, le=10)
+    # How long evidence for this run is kept; never below a week, so an appeal can still be heard.
+    evidence_retention_days: Optional[int] = Field(default=None, ge=7, le=365)
+    # Who set the profile; stamped by the server when the run is created.
+    set_by: Optional[str] = Field(default=None, max_length=128)
+
+    model_config = {"extra": "forbid"}
+
+
 class ExamPolicy(BaseModel):
     duration_minutes: int = Field(ge=1, le=24 * 60)
     warning_threshold: int = Field(default=3, ge=1, le=50)
@@ -52,6 +71,8 @@ class ExamPolicy(BaseModel):
     # Prompt 7 (ADR 0023): minutes before a student's deadline at which the workspace announces the time left.
     # Display only - the deadline itself is always the server's.
     time_warning_minutes: list[int] = Field(default_factory=lambda: [10], max_length=8)
+    # Prompt 9 (ADR 0025): optional per-run proctoring settings; None = deployment defaults.
+    proctoring_profile: Optional[ProctoringProfile] = None
 
     model_config = {"extra": "forbid"}
 

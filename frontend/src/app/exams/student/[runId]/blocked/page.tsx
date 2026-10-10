@@ -1,22 +1,25 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
 import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
+import { describeConflict } from "@/lib/examConflicts";
 import { examEndpoints, type Appeal, type Attempt, type IncidentLogEntry } from "@/lib/examEndpoints";
 import { useLiveSocket } from "@/lib/liveSocket";
 
 function BlockedContent() {
   const { runId } = useParams<{ runId: string }>();
+  const router = useRouter();
   const { getToken } = useExamAuth();
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [incidents, setIncidents] = useState<IncidentLogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [appealText, setAppealText] = useState("");
   const [submittedAppeal, setSubmittedAppeal] = useState<Appeal | null>(null);
+  const [appealError, setAppealError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -39,16 +42,25 @@ function BlockedContent() {
 
   useLiveSocket({ runId, getToken, onReconcile: refresh });
 
+  // The server decides: a reviewer letting the attempt continue, or the window ending, moves the student on.
+  useEffect(() => {
+    if (!attempt) return;
+    if (attempt.status === "in_progress") router.replace(`/exams/student/${runId}/exam`);
+    else if (attempt.status === "submitted" || attempt.status === "expired" || attempt.status === "finalized") router.replace(`/exams/student/${runId}/receipt`);
+  }, [attempt, router, runId]);
+
   const handleSubmitAppeal = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!appealText.trim()) return;
     setSubmitting(true);
+    setAppealError(null);
     try {
       const token = await getToken();
       const appeal = await examEndpoints.submitAppeal(token, runId, appealText.trim());
       setSubmittedAppeal(appeal);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not submit your appeal.");
+      // A failed appeal must not replace the page: the student keeps their text and sees what to do.
+      setAppealError(describeConflict(err, "Could not submit your appeal. Please try again."));
     } finally {
       setSubmitting(false);
     }
@@ -58,6 +70,7 @@ function BlockedContent() {
   if (!attempt) return <LoadingState message="Checking your attempt status…" />;
 
   const countedIncidents = incidents.filter((i) => i.counted);
+  const decisions = incidents.filter((i) => i.source === "reviewer");
 
   return (
     <div className="page-container max-w-xl py-16 text-center">
@@ -82,10 +95,25 @@ function BlockedContent() {
             </li>
           ))}
         </ul>
+        {decisions.length > 0 && (
+          <>
+            <h3 className="mt-4 text-sm font-semibold">Reviews so far</h3>
+            <ul className="mt-2 space-y-2 text-sm">
+              {decisions.map((entry) => (
+                <li key={entry.id} className="rounded-md bg-[var(--surface-muted)] p-2">
+                  {new Date(entry.received_at).toLocaleTimeString()} - {entry.note.replace(/^reviewer decision: /, "A reviewer decided: ")}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </div>
 
       <div className="card mt-4 p-6 text-left">
         <h2 className="text-sm font-semibold">Appeal this block</h2>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">
+          An appeal tells the reviewer your side. The reviewer decides whether the block is lifted; filing one does not change your attempt.
+        </p>
         {submittedAppeal ? (
           <p className="mt-2 text-sm text-[var(--success)]">Your appeal was submitted and is pending faculty review.</p>
         ) : (
@@ -101,6 +129,7 @@ function BlockedContent() {
             <button className="btn-primary" type="submit" disabled={submitting}>
               {submitting ? "Submitting…" : "Submit appeal"}
             </button>
+            {appealError && <p role="alert" className="text-sm text-[var(--error)]">{appealError}</p>}
           </form>
         )}
       </div>

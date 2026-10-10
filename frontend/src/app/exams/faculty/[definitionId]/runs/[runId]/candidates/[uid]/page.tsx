@@ -4,9 +4,11 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { AttemptActions } from "@/components/exams/AttemptActions";
+import { ConfirmDialog } from "@/components/exams/ConfirmDialog";
 import { ExamProtectedRoute } from "@/components/exams/ExamProtectedRoute";
 import { ErrorState, LoadingState } from "@/components/States";
 import { useExamAuth } from "@/lib/examAuth";
+import { describeConflict } from "@/lib/examConflicts";
 import { examEndpoints, type Attempt, type EvidenceSnapshotSummary, type IncidentLogEntry } from "@/lib/examEndpoints";
 import { useLiveSocket } from "@/lib/liveSocket";
 
@@ -18,9 +20,13 @@ function CandidateDetailContent() {
   const [snapshots, setSnapshots] = useState<EvidenceSnapshotSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
-  const [resolveNotes, setResolveNotes] = useState("");
+  const [resolveDialog, setResolveDialog] = useState<"allow" | "uphold" | null>(null);
   const [resolving, setResolving] = useState(false);
   const [viewedImageUrl, setViewedImageUrl] = useState<string | null>(null);
+
+  useEffect(() => () => {
+    if (viewedImageUrl) URL.revokeObjectURL(viewedImageUrl);
+  }, [viewedImageUrl]);
 
   const refresh = useCallback(async () => {
     try {
@@ -57,21 +63,24 @@ function CandidateDetailContent() {
 
   useLiveSocket({ runId, getToken, onReconcile: refresh });
 
-  const handleResolveBlock = async (allowContinue: boolean) => {
+  const handleResolveBlock = async (allowContinue: boolean, reason: string) => {
     setResolving(true);
+    setFeedback(null);
     try {
       const token = await getToken();
-      await examEndpoints.resolveBlock(token, runId, uid, allowContinue, resolveNotes);
-      setResolveNotes("");
-      await refresh();
+      await examEndpoints.resolveBlock(token, runId, uid, allowContinue, reason);
+      setFeedback({ kind: "ok", text: allowContinue ? "The student can continue. Their incident count was kept." : "The block stands. Your decision was recorded." });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not resolve the block.");
+      setFeedback({ kind: "error", text: describeConflict(err, "Could not record the decision.") });
     } finally {
       setResolving(false);
+      setResolveDialog(null);
+      await refresh(); // after a conflict too: the attempt may already have moved on
     }
   };
 
   const handleViewSnapshot = async (snapshotId: string) => {
+    setFeedback(null);
     try {
       const token = await getToken();
       const { view_ticket } = await examEndpoints.issueViewTicket(token, snapshotId);
@@ -80,11 +89,11 @@ function CandidateDetailContent() {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         cache: "no-store",
       });
-      if (!response.ok) throw new Error("Could not load evidence image.");
+      if (!response.ok) throw new Error("Could not load the evidence image. Request it again.");
       const blob = await response.blob();
       setViewedImageUrl(URL.createObjectURL(blob));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not view evidence.");
+      setFeedback({ kind: "error", text: describeConflict(err, "Could not view the evidence.") });
     }
   };
 
@@ -95,6 +104,7 @@ function CandidateDetailContent() {
     <div className="page-container max-w-xl py-10">
       <h1 className="text-2xl font-semibold">Candidate detail</h1>
       <p className="mt-1 font-mono text-sm text-[var(--text-muted)]">{uid}</p>
+      <p role={feedback?.kind === "error" ? "alert" : "status"} className={`mt-3 text-sm ${feedback?.kind === "error" ? "text-[var(--error)]" : ""}`}>{feedback?.text}</p>
 
       <div className="card mt-6 p-5">
         <dl className="space-y-2 text-sm">
@@ -108,22 +118,33 @@ function CandidateDetailContent() {
 
       {attempt.status === "blocked" && (
         <div className="card mt-4 p-5">
-          <h2 className="text-lg font-semibold">Resolve block</h2>
+          <h2 className="text-lg font-semibold">Review this block</h2>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Explicit decision required — never automatic. Upholding leaves the block in place; allowing continue
-            resumes the attempt.
+            A person decides - never automatic. The student&apos;s answers are kept either way and the incident history is never
+            reset. Upholding leaves the block in place; allowing the student to continue resumes the attempt on its existing
+            deadline (extend their time separately if they lost some).
           </p>
-          <textarea
-            className="input-field mt-3 w-full"
-            placeholder="Review notes (audited)"
-            value={resolveNotes}
-            onChange={(e) => setResolveNotes(e.target.value)}
-            aria-label="Resolution notes"
-          />
           <div className="mt-3 flex gap-3">
-            <button className="btn-secondary" onClick={() => handleResolveBlock(false)} disabled={resolving}>Uphold</button>
-            <button className="btn-primary" onClick={() => handleResolveBlock(true)} disabled={resolving}>Allow to continue</button>
+            <button className="btn-secondary" onClick={() => setResolveDialog("uphold")} disabled={resolving}>Uphold the block</button>
+            <button className="btn-primary" onClick={() => setResolveDialog("allow")} disabled={resolving}>Allow to continue</button>
           </div>
+          {resolveDialog && (
+            <ConfirmDialog
+              title={resolveDialog === "allow" ? "Let this student continue?" : "Uphold the block?"}
+              details={[{ label: "Student", value: uid }, { label: "Incidents counted", value: String(attempt.warning_count) }]}
+              consequence={
+                resolveDialog === "allow"
+                  ? "The attempt resumes now. Every incident stays on record. Browser signals are reported by the student's browser and are not proof of misconduct."
+                  : "The attempt stays blocked. The student can appeal, and the window can still close on it."
+              }
+              reasonLabel="Reason"
+              reasonRequired
+              confirmLabel={resolveDialog === "allow" ? "Allow to continue" : "Uphold"}
+              busy={resolving}
+              onCancel={() => setResolveDialog(null)}
+              onConfirm={(reason) => handleResolveBlock(resolveDialog === "allow", reason)}
+            />
+          )}
         </div>
       )}
 
@@ -135,6 +156,8 @@ function CandidateDetailContent() {
           {incidents.map((entry) => (
             <li key={entry.id} className="rounded-md bg-[var(--surface-muted)] p-2">
               <span className={`badge mr-2 ${entry.counted ? "badge-warning" : ""}`}>{entry.kind}</span>
+              {entry.source === "reviewer" && <span className="badge badge-primary mr-2">reviewer decision</span>}
+              {entry.source === "server" && <span className="badge mr-2">server</span>}
               {entry.duration_seconds != null && `${Math.round(entry.duration_seconds)}s — `}
               {new Date(entry.client_timestamp).toLocaleTimeString()} — {entry.note}
             </li>
@@ -174,7 +197,6 @@ function CandidateDetailContent() {
         <div className="mt-3">
           <AttemptActions runId={runId} attempt={attempt} getToken={getToken} onChanged={refresh} onFeedback={setFeedback} />
         </div>
-        <p role={feedback?.kind === "error" ? "alert" : "status"} className={`mt-3 text-sm ${feedback?.kind === "error" ? "text-[var(--error)]" : ""}`}>{feedback?.text}</p>
         {attempt.status === "not_started" && <p className="mt-2 text-sm text-[var(--text-muted)]">This student has not started, so there is nothing to extend or end.</p>}
       </div>
     </div>

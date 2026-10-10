@@ -29,3 +29,10 @@ class AttemptNotBlockedError(ProctoringDomainError):
     currently BLOCKED — never a silent no-op, always explicit."""
 
     code = "attempt_not_blocked"
+
+
+class EvidenceStorageUnavailableError(ProctoringDomainError):
+    """Private evidence storage is not configured or could not be reached. Evidence is then recorded as missing;
+    nothing else (answers, submission) depends on it."""
+
+    code = "evidence_storage_unavailable"

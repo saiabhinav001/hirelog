@@ -77,6 +77,8 @@ class _DocRef:
 
 
 def _matches(data: dict, field: str, op: str, value: Any) -> bool:
+    if (op == "!=" or getattr(op, "name", "") == "IS_NOT_NULL") and (value is None or getattr(op, "name", "") == "IS_NOT_NULL"):
+        return data.get(field) is not None  # Firestore: field exists and is not null
     if field not in data or data[field] is None:
         return False
     actual = data[field]

@@ -462,6 +462,51 @@ hidden tests travel to the provider with each sealed submission; the in-flight c
 | LIV-02 | Live authorization scoped to the run | `exams_live._resolve_role`: any faculty obtains a FACULTY ticket for **any** run | none route-level | EXISTS_BUT_DEFECTIVE | AUTH-09 scope on ticket issuance | P1 |
 | LCK-01 | Managed-lockdown (SEB) admission, honestly scoped | `verify_seb_admission` (header hash; fail-closed when enabled without keys; never User-Agent) | `test_lockdown_decisions.py` (11), `test_lockdown_service.py` (6) | EXISTS_AND_VERIFIED (no real SEB pilot) | — | P11 |
 
+### 9.1 Status after the Prompt 9 implementation
+
+Implemented as [ADR 0025](../adr/0025-proctoring-ledger-review-appeals-and-evidence.md); migration notes in
+[compatibility-and-migration.md §14](compatibility-and-migration.md). Evidence is HTTP- and service-level against the in-memory Firestore with
+optimistic transactions and concurrent callers (`exam_inmemory.py`); the earlier "verified" rows rested on pure decision tests and
+pass-through fakes. **No real browser, camera, bucket, IAM policy or identity was used.** Backend suite: 1423 tests passing with
+`EXAMS_ENABLED=false` (1355 before: four obsolete appeal tests replaced, 72 added); `ruff check .` clean; frontend `tsc` and `eslint` clean, Vitest 193 passing
+(run with `--maxWorkers=2 --testTimeout=20000`).
+
+| ID | Status after P9 | What changed | Evidence |
+|---|---|---|---|
+| PRC-01 | PARTIALLY_EXISTS (D-7) | Optional per-run `proctoring_profile`: grace, cooldown, allowance after a review, evidence retention (bounded; server stamps `set_by`); unset = deployment defaults; teacher UI fields. **Not built:** an institutional approval step for a profile and the institution's retention periods (D-7) | `test_proctoring_p9.py` (profile block), `examSchedule.test.ts` |
+| PRC-02 | EXISTS_AND_VERIFIED (HTTP) | Append-only now also pinned: no delete / update / reset method exists on the ledger repositories; reviewer decisions are entries (`source="reviewer"`, `actor_uid`), late events are `source="server"` | `test_the_ledger_has_no_delete_or_reset_path`, `test_allowing_to_continue_never_resets_the_ledger_*` |
+| PRC-03 | EXISTS_AND_VERIFIED (HTTP, concurrent) | Replay storms and 12 simultaneous deliveries of one event count once; flapping inside the cooldown counts once. Residual: the dedupe window is the last 64 ids | `test_a_replay_storm_*`, `test_the_same_event_delivered_by_many_requests_at_once_*`, `test_a_flapping_departure_*` |
+| PRC-04 | EXISTS_AND_VERIFIED (HTTP) | 6 technical / informational kinds x 40 events never count or block | `test_technical_and_informational_signals_*` |
+| PRC-05 | EXISTS_AND_VERIFIED (was defective) | Threshold-vs-submit race has one outcome (20 raced pairs); events after the attempt ended are recorded, never counted, never an error; a blocked attempt refuses draft writes, submit, question delivery and next-question while keeping its drafts; it still expires and is sealed with the last saved answers; the stale sweep survives an ended attempt; the next trivial blip no longer re-blocks after a review | `test_a_threshold_crossing_racing_a_submit_*`, `test_events_after_the_attempt_ended_*`, `test_a_blocked_attempt_*`, `test_the_stale_sweep_survives_*`, `test_allowing_to_continue_*` |
+| PRC-06 | EXISTS_AND_VERIFIED (HTTP) | A review keeps every count and entry; blocking resumes only past `review_floor` (run allowance); reversal keeps every step; each decision needs a reason and is audited | `test_the_runs_allowance_*`, `test_a_review_can_be_reversed_*`, `test_upholding_leaves_the_block_*` |
+| PRC-07 | EXISTS_AND_VERIFIED (fake storage) / UNVERIFIED (real bucket, IAM) | Production without a bucket refuses instead of using memory; byte-level image check; verified type served with `nosniff`; stale requests become missing; view tickets only for verified evidence and audited (issued / viewed / denied); retention oldest-first, per-run window, held for blocked attempts and pending appeals, failure-isolated; no derivatives exist | `test_proctoring_p9.py` (evidence and retention blocks) |
+| PRC-08 | EXISTS_AND_VERIFIED | Explicit tests: a submit succeeds while evidence storage fails or is unconfigured, and the student module never imports the evidence module | `test_submission_succeeds_when_evidence_cannot_be_stored`, `test_submission_does_not_depend_on_the_evidence_module_at_all` |
+| PRC-09 | EXISTS_AND_VERIFIED | A test scans the proctoring package for face / biometric / liveness / AI-misconduct terms | `test_no_biometric_or_automatic_misconduct_capability_exists` |
+| (appeals) | EXISTS_AND_VERIFIED (was defective) | One pending appeal per attempt; decided only as upheld / overturned; every decision appended and audited; concurrent reviewers lose neither; an appeal never changes the attempt; rate-limited; fileable after the window | `test_proctoring_appeals_service.py` (10), `test_an_appeal_*` |
+
+Scenarios requested by the prompt and where they are covered: event bursts / replay (PRC-03 rows), threshold-submit race (PRC-05), permission
+denial (PRC-04 and `test_a_missing_snapshot_for_a_denied_camera_*`), missing / stale evidence (`test_a_request_that_never_completes_*`,
+`test_an_upload_that_is_not_an_image_*`), unauthorized evidence access (`test_unauthorized_evidence_access_*`, `test_another_students_upload_ticket_*`,
+route-scope check), retention deletion (retention block), review reversal and appeal (PRC-06, appeals), expiry while blocked (PRC-05).
+
+Defects found in the existing code while implementing (all fixed):
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| P9-1 | High | An observation after submit / expiry raised an illegal transition (5xx) and kept changing the ledger | Attempt read first; late events recorded as server entries |
+| P9-2 | High | After a reviewer allowed a student to continue, the next uncounted blip blocked them again | Block only on a newly counted incident past the review floor |
+| P9-3 | Medium | One ended attempt aborted the stale-incident sweep for everyone | Per-state isolation; close without counting |
+| P9-4 | High | Appeals could be reset to pending and an earlier decision was overwritten in place | Append-only decision history in a transaction |
+| P9-5 | High | In production without a bucket evidence lived in process memory while records said verified | 503 and no retention loop |
+| P9-6 | Medium | Retention could not reach due evidence beyond the first 100 documents, and deleted evidence under review | Oldest-first paging, holds |
+| P9-7 | Medium | Reviews were not audited, were labelled as browser observations, took no reason, and the notes were visible to the student | Reviewer entries, audit event, reason required, student sees the decision only |
+| P9-8 | Medium | Uploads were trusted by label; viewer could sniff; stale requests stayed `requested`; tickets issued for nothing; issuing / refusals unaudited | Signature check, `nosniff`, expiry sweep, verified-only tickets, access outcomes |
+| P9-9 | Low | The screens crashed on a conflict; the camera hook posted to `/upload/undefined` after a refused request | Inline feedback and confirm dialogs; honest missing record |
+
+Residual: no real browser / camera / bucket / IAM evidence (Prompt 10 / 11); signals and their timestamps come from the browser and can be wrong or forged;
+the dedupe window is 64 ids; the camera-hook change is not unit-tested; limiters are per instance; access-log entries and consumed tickets are not purged;
+D-7 (who approves a profile, retention periods for evidence and the ledger) is open.
+
 ## 10. Gradebook, accessibility, PWA, exports — Prompt 10
 
 | ID | Requirement | Current implementation | Evidence / tests | Status | Smallest safe delta | Phase |

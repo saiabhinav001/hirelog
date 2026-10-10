@@ -13,7 +13,7 @@ import hashlib
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.exams_dependencies import (
     get_current_exam_user,
@@ -29,6 +29,7 @@ from app.core.rate_limit import SlidingWindowLimiter
 from app.domain.exams.repository import AttemptRepository
 from app.domain.live.publisher import publish_attempt_status_changed
 from app.domain.proctoring.appeals_service import AppealsService
+from app.domain.proctoring.decisions import effective_proctoring
 from app.domain.proctoring.evidence_service import EvidenceService
 from app.domain.proctoring.ledger_service import ProctoringLedgerService
 from app.domain.proctoring.models import AppealStatus, EvidenceSnapshotKind, ObservationKind
@@ -47,6 +48,9 @@ faculty_router = APIRouter(
 # Generous but bounded — legitimate rapid focus-switching must not lock a
 # student out, but an unbounded client cannot flood the ledger either.
 _observation_limiter = SlidingWindowLimiter(120, 60, namespace="proctoring_observation")
+# Snapshot requests and missing-evidence records create documents; appeals notify reviewers. Bounded per attempt.
+_snapshot_limiter = SlidingWindowLimiter(30, 600, namespace="proctoring_snapshot")
+_appeal_limiter = SlidingWindowLimiter(5, 3600, namespace="proctoring_appeal")
 
 
 def _evidence_storage():
@@ -71,6 +75,17 @@ def _storage():
     return _shared_storage
 
 
+def _evidence_service() -> EvidenceService:
+    """Evidence bytes need private storage. In production the in-memory stand-in is never used: without a bucket the
+    caller is told evidence is unavailable (it is recorded as missing; nothing else depends on it)."""
+    if settings.is_production and not settings.EXAM_EVIDENCE_STORAGE_BUCKET:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "evidence_storage_unavailable", "message": "Evidence storage is not configured."},
+        )
+    return EvidenceService(db, _storage())
+
+
 class ObservationRequest(BaseModel):
     kind: ObservationKind
     client_event_id: str = Field(min_length=1, max_length=200)
@@ -92,12 +107,20 @@ class AppealRequest(BaseModel):
 
 class ResolveBlockRequest(BaseModel):
     allow_continue: bool
-    notes: str = Field(default="", max_length=1000)
+    # Every review decision carries a reason: it is written to the incident ledger and the audit trail.
+    notes: str = Field(min_length=3, max_length=1000)
 
 
 class ResolveAppealRequest(BaseModel):
     status: AppealStatus
-    resolution_notes: str = Field(default="", max_length=1000)
+    resolution_notes: str = Field(min_length=3, max_length=1000)
+
+    @field_validator("status")
+    @classmethod
+    def _decided(cls, value: AppealStatus) -> AppealStatus:
+        if value == AppealStatus.PENDING:
+            raise ValueError("an appeal is resolved as upheld or overturned")
+        return value
 
 
 def _set_no_store(response: Response) -> None:
@@ -113,12 +136,16 @@ def record_observation(run_id: str, payload: ObservationRequest, response: Respo
     run = service.runs.get(run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
-    # Threshold is per-run policy, not a global default (contract #5:
-    # "Default warning threshold is 3; policy can customize it.").
+    # Threshold, grace and cooldown are per-run policy (contract #5: "Default warning threshold is 3; policy can
+    # customize it."); a run without a proctoring profile uses the deployment defaults.
+    profile = effective_proctoring(
+        run.policy, default_grace=settings.EXAM_PROCTORING_GRACE_SECONDS,
+        default_cooldown=settings.EXAM_PROCTORING_COOLDOWN_SECONDS, default_retention_days=settings.EXAM_EVIDENCE_RETENTION_DAYS,
+    )
     outcome = service.record_observation(
         run_id=run_id, uid=user["uid"], kind=payload.kind, client_event_id=payload.client_event_id,
-        client_timestamp=payload.client_timestamp, grace_seconds=settings.EXAM_PROCTORING_GRACE_SECONDS,
-        cooldown_seconds=settings.EXAM_PROCTORING_COOLDOWN_SECONDS, threshold=run.policy.warning_threshold,
+        client_timestamp=payload.client_timestamp, grace_seconds=profile.grace_seconds,
+        cooldown_seconds=profile.cooldown_seconds, threshold=run.policy.warning_threshold,
     )
     if outcome.should_block:
         updated_attempt = service.attempts.get(run_id, user["uid"])
@@ -127,19 +154,30 @@ def record_observation(run_id: str, payload: ObservationRequest, response: Respo
     return {"action": outcome.action, "warning_count": outcome.new_state.counted_incident_count}
 
 
+def _student_view(entry) -> dict:
+    """What a student may see of a ledger entry. A reviewer's decision is shown, their identity and free-text notes
+    (written for colleagues, not for the student) are not."""
+    data = entry.model_dump(mode="json")
+    if entry.source == "reviewer":
+        data["note"] = entry.note.split(". ", 1)[0]
+        data["actor_uid"] = None
+    return data
+
+
 @student_router.get("/runs/{run_id}/incidents")
 def list_my_incidents(run_id: str, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     """Visible count explanations — a student can always see why their own
     warning count is what it is (contract: 'visible count explanations')."""
     _set_no_store(response)
     entries = ProctoringLedgerService(db).log.list_for_attempt(run_id, user["uid"])
-    return {"results": [e.model_dump(mode="json") for e in entries]}
+    return {"results": [_student_view(e) for e in entries]}
 
 
 @student_router.post("/runs/{run_id}/snapshots")
 def request_snapshot(run_id: str, payload: SnapshotRequest, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     _set_no_store(response)
-    service = EvidenceService(db, _storage())
+    _snapshot_limiter.check(f"{run_id}:{user['uid']}", detail="Too many snapshot requests. Please slow down.")
+    service = _evidence_service()
     snapshot, ticket = service.request_snapshot(
         run_id=run_id, uid=user["uid"], kind=payload.kind, upload_ticket_ttl_seconds=settings.EXAM_EVIDENCE_UPLOAD_TICKET_TTL_SECONDS,
     )
@@ -154,7 +192,7 @@ async def upload_snapshot(ticket_id: str, response: Response, file: UploadFile =
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="snapshot too large")
     declared_sha256 = hashlib.sha256(content).hexdigest()
 
-    service = EvidenceService(db, _storage())
+    service = _evidence_service()
     try:
         snapshot = service.confirm_upload(
             ticket_id=ticket_id, uid=user["uid"], content=content, declared_sha256=declared_sha256,
@@ -172,6 +210,7 @@ def record_missing_snapshot(run_id: str, payload: MissingSnapshotRequest, respon
     an honest, complete outcome, not an error (contract: submission
     acceptance never depends on this)."""
     _set_no_store(response)
+    _snapshot_limiter.check(f"{run_id}:{user['uid']}", detail="Too many snapshot records. Please slow down.")
     snapshot = EvidenceService(db, _storage()).record_missing(run_id=run_id, uid=user["uid"], kind=payload.kind, reason=payload.reason)
     return snapshot.model_dump(mode="json")
 
@@ -179,6 +218,7 @@ def record_missing_snapshot(run_id: str, payload: MissingSnapshotRequest, respon
 @student_router.post("/runs/{run_id}/appeals")
 def submit_appeal(run_id: str, payload: AppealRequest, response: Response, user: dict = Depends(require_student_run_scope)) -> dict:
     _set_no_store(response)
+    _appeal_limiter.check(f"{run_id}:{user['uid']}", detail="Too many appeals. Please wait before trying again.")
     appeal = AppealsService(db).submit_appeal(run_id=run_id, uid=user["uid"], student_statement=payload.student_statement)
     return appeal.model_dump(mode="json")
 
@@ -194,8 +234,15 @@ def list_incidents_for_student(run_id: str, uid: str, user: dict = Depends(requi
 @faculty_router.post("/runs/{run_id}/uids/{uid}/resolve")
 def resolve_block(run_id: str, uid: str, payload: ResolveBlockRequest, user: dict = Depends(require_run_scope)) -> dict:
     service = ProctoringLedgerService(db)
+    run = service.runs.get(run_id)
+    allowance = effective_proctoring(
+        run.policy, default_grace=0.0, default_cooldown=0.0, default_retention_days=0,
+    ).allowance_after_review if run is not None else 0
     try:
-        service.resolve_block(run_id=run_id, uid=uid, resolved_by=user["uid"], allow_continue=payload.allow_continue, notes=payload.notes)
+        service.resolve_block(
+            run_id=run_id, uid=uid, resolved_by=user["uid"], allow_continue=payload.allow_continue, notes=payload.notes,
+            allowance=allowance,
+        )
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
@@ -213,9 +260,12 @@ def list_snapshots_for_student(run_id: str, uid: str, user: dict = Depends(requi
 
 @faculty_router.post("/snapshots/{snapshot_id}/view-ticket")
 def issue_view_ticket(snapshot_id: str, user: dict = Depends(require_snapshot_scope)) -> dict:
-    ticket = EvidenceService(db, _storage()).issue_view_ticket(
-        snapshot_id=snapshot_id, faculty_uid=user["uid"], ttl_seconds=settings.EXAM_EVIDENCE_VIEW_TICKET_TTL_SECONDS,
-    )
+    try:
+        ticket = _evidence_service().issue_view_ticket(
+            snapshot_id=snapshot_id, faculty_uid=user["uid"], ttl_seconds=settings.EXAM_EVIDENCE_VIEW_TICKET_TTL_SECONDS,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return {"view_ticket": ticket.id, "expires_at": ticket.expires_at.isoformat()}
 
 
@@ -224,13 +274,17 @@ def view_snapshot(ticket_id: str, response: Response, user: dict = Depends(requi
     _set_no_store(response)
     from fastapi import Response as RawResponse
 
-    service = EvidenceService(db, _storage())
+    service = _evidence_service()
     try:
-        content = service.view_snapshot(ticket_id=ticket_id, faculty_uid=user["uid"])
+        content, content_type = service.view_snapshot_with_type(ticket_id=ticket_id, faculty_uid=user["uid"])
     except Exception as exc:
         raise_for_domain_error(exc)
         raise
-    return RawResponse(content=content, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    # Served with the type the bytes were verified to have, never sniffed, and never cached.
+    return RawResponse(
+        content=content, media_type=content_type,
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline"},
+    )
 
 
 @faculty_router.get("/runs/{run_id}/appeals")
@@ -247,4 +301,6 @@ def resolve_appeal(appeal_id: str, payload: ResolveAppealRequest, user: dict = D
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return appeal.model_dump(mode="json")

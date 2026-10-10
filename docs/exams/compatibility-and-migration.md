@@ -485,6 +485,32 @@ Existing clients keep working: every new field is optional and legacy random-id 
 Rollback: the previous code does not know `infra_exhausted` and would fail to read such a document, so **requeue or review a run's stalled submissions (`GET …/stalled-submissions`) before rolling back below Prompt 8**. Do not delete submissions or grading results to roll back.
 Operations: configuring `EXAM_JUDGE_PROVIDER_BASE_URL` / `_API_KEY` does **not** enable real grading until an adapter is approved and implemented; until then those submissions become infrastructure errors.
 
+## 14. Prompt 9 migration notes
+
+Implemented as [ADR 0025](../adr/0025-proctoring-ledger-review-appeals-and-evidence.md). **No data migration or backfill is needed or performed**; no new collection, secret or address, and no new environment variable.
+
+### 14.1 Behavior changes teachers, students and integrators will see
+
+| Area | Before | Now |
+|---|---|---|
+| Observation after the attempt ended | A counted departure raised an illegal-transition error and changed the ledger | `200 {action: "ignored_inactive"}`; recorded as a `server` entry, never counted, never blocking |
+| Blocking | Any closed departure at or above the threshold re-blocked | Only a newly counted departure at or above the threshold and past the attempt's `review_floor` |
+| `POST /faculty/proctoring/runs/{run}/uids/{uid}/resolve` | `notes` optional; a ledger entry that looked like `page_visible` | `notes` required (3-1000 characters, else `422`); entry has `source="reviewer"` and `actor_uid`; an `exam_block_resolved` audit event; "allow" sets `review_floor` |
+| `GET /student/proctoring/runs/{run}/incidents` | Every entry, including reviewer free text | Reviewer entries show the decision only (no reviewer id, no notes) |
+| `POST /student/proctoring/runs/{run}/appeals` | Always a new appeal; unlimited | The student's pending appeal if one exists; 5 per hour per attempt (`429`) |
+| `POST /faculty/proctoring/appeals/{id}/resolve` | Any status, including `pending`; overwrote the earlier decision; notes optional | `upheld` / `overturned` only, notes required; decisions appended to `decisions` and audited |
+| Evidence in production without `EXAM_EVIDENCE_STORAGE_BUCKET` | Held in process memory, records said `verified` | `503 evidence_storage_unavailable` on snapshot request / upload / view-ticket / view; retention loop not started; recording a snapshot as missing still works |
+| Evidence upload | Any bytes with any label | JPEG, PNG or WebP by signature, else `409 snapshot_hash_mismatch` (message `not_an_image`) and the snapshot is `missing`; a storage failure is `503` and `missing / storage_unavailable` |
+| `GET /faculty/proctoring/view/{ticket}` | Always `image/jpeg` | The verified type, `X-Content-Type-Options: nosniff`, `no-store` |
+| `POST …/snapshots/{id}/view-ticket` | Issued for any snapshot | `404` unless the snapshot is verified; every issue, view and refused attempt on a real ticket is in `evidence_access_log` (`outcome`) |
+| Snapshot requests / missing records | Unlimited | 30 per 10 minutes per attempt (`429`) |
+| Stale requests | `requested` forever | `missing / upload_not_completed` once the ticket has lapsed (sweep every 15 minutes) |
+| Retention | First 100 documents, global window, ignores reviews | Oldest-first (up to 5 pages of 100), the run's window, held while the attempt is blocked or an appeal is pending |
+| Run policy | duration, warnings, grace, pause, accommodations, schedule, time warnings | optional `proctoring_profile` (`grace_seconds`, `cooldown_seconds` 0-60; `allowance_after_review` 0-10; `evidence_retention_days` 7-365; `set_by` is stamped by the server) |
+
+New fields are optional everywhere and a run without a profile behaves exactly as before. Existing documents read unchanged.
+Rollback: the previous code rejects a policy containing `proctoring_profile` (its model forbids unknown fields), so **list the runs that set it before rolling back below Prompt 9** and clear it with an authorized one-off, or leave those runs alone. The other new fields (`review_floor`, `source`, `actor_uid`, `decisions`, `outcome`) are ignored by older code, which would show `issued` / `denied` access entries as views. Do not delete ledger entries, appeals or evidence to roll back.
+
 ### 11.3 New routes (all under `/api/exams/v1/student`, behind the exam flag, student run scope, `no-store`)
 
 | Route | Purpose |

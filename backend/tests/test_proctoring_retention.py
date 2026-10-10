@@ -30,6 +30,9 @@ class _FakeSnapshotRepo:
     def list_all(self, *, limit):
         return list(self.store.values())[:limit]
 
+    def list_oldest(self, *, limit, after_requested_at=None):
+        return sorted(self.store.values(), key=lambda s: s.requested_at)[:limit]
+
     def delete(self, snapshot_id):
         self.store.pop(snapshot_id, None)
 

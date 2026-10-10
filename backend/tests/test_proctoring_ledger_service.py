@@ -111,6 +111,14 @@ def _attempt(status: AttemptStatus = AttemptStatus.IN_PROGRESS, **overrides) -> 
     return Attempt(**defaults)
 
 
+class _FakeAudit:
+    def __init__(self) -> None:
+        self.events = []
+
+    def append_in_transaction(self, _txn, event) -> None:
+        self.events.append(event)
+
+
 def _service(*, run: ExamRun, attempts: dict[str, Attempt]) -> ProctoringLedgerService:
     service = ProctoringLedgerService.__new__(ProctoringLedgerService)
     service._db = _FakeDb()
@@ -119,6 +127,7 @@ def _service(*, run: ExamRun, attempts: dict[str, Attempt]) -> ProctoringLedgerS
     service.log = _FakeLogRepo()
     service.attempts = _FakeAttemptRepo(attempts)
     service.runs = _FakeRunRepo(run)
+    service._audit = _FakeAudit()
     return service
 
 
@@ -183,7 +192,7 @@ def test_resolve_block_allow_continue_resumes_in_progress() -> None:
 
     assert service.attempts.get("run-1", "u1").status == AttemptStatus.IN_PROGRESS
     log = service.log.list_for_attempt("run-1", "u1")
-    assert any("fac-1" in e.note for e in log)
+    assert any(e.actor_uid == "fac-1" and e.source == "reviewer" for e in log)
 
 
 def test_resolve_block_uphold_leaves_status_blocked() -> None:

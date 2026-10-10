@@ -30,4 +30,5 @@ including decisions to deliberately **not** build something yet.
 | [0022](0022-student-attempts-gating-and-idempotent-submit.md) | Student attempts: released-slot gating, idempotent drafts and receipt-backed submit | Accepted |
 | [0023](0023-exam-workspace-ui-timer-navigator-and-teacher-controls.md) | Exam workspace UI: server-anchored timer, navigator, teacher controls and short links | Accepted |
 | [0024](0024-judge-hardening-durable-grading-and-registry.md) | Judge hardening: no silent verdicts, durable grading, a server-owned registry (real adapter and SQL not approved) | Accepted |
+| [0025](0025-proctoring-ledger-review-appeals-and-evidence.md) | Proctoring: a ledger that never mis-blocks, audited review, append-only appeals, evidence that is real or honestly missing | Accepted |
 See [../architecture.md](../architecture.md) for the system diagram and request flow.

@@ -11,6 +11,7 @@ const listAttemptsForRun = vi.fn();
 const listAppealsForRun = vi.fn();
 const runCommand = vi.fn();
 const changeRunAccess = vi.fn();
+const resolveAppeal = vi.fn();
 const getShortLink = vi.fn();
 const health = vi.hoisted(() => ({ value: "connected" }));
 const getToken = async () => "tok";
@@ -32,6 +33,7 @@ vi.mock("@/lib/examEndpoints", () => ({
     listAppealsForRun: (...a: unknown[]) => listAppealsForRun(...a),
     runCommand: (...a: unknown[]) => runCommand(...a),
     changeRunAccess: (...a: unknown[]) => changeRunAccess(...a),
+    resolveAppeal: (...a: unknown[]) => resolveAppeal(...a),
     getShortLink: (...a: unknown[]) => getShortLink(...a),
   },
 }));
@@ -44,7 +46,7 @@ const ATTEMPT = (uid: string, status: string) => ({ run_id: "r1", uid, status, v
 
 beforeEach(() => {
   health.value = "connected";
-  [getRun, listAttemptsForRun, listAppealsForRun, runCommand, changeRunAccess, getShortLink].forEach((m) => m.mockReset());
+  [getRun, listAttemptsForRun, listAppealsForRun, runCommand, changeRunAccess, getShortLink, resolveAppeal].forEach((m) => m.mockReset());
   getRun.mockResolvedValue(RUN);
   listAttemptsForRun.mockResolvedValue({ results: [ATTEMPT("stu-1", "in_progress"), ATTEMPT("stu-2", "expired")], next_cursor_uid: null, server_time: "2026-06-01T10:00:00Z" });
   listAppealsForRun.mockResolvedValue({ results: [] });
@@ -134,5 +136,54 @@ describe("Control room", () => {
     await userEvent.click(screen.getByRole("button", { name: "Remove from run" }));
     await userEvent.click(screen.getByRole("button", { name: "Remove student" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/already started, so they can't be removed/);
+  });
+});
+
+describe("Control room - appeals", () => {
+  const APPEAL = { id: "a1", run_id: "r1", uid: "stu-1", student_statement: "My connection dropped", status: "pending", created_at: "2026-06-01T10:00:00Z", resolved_by: null, resolved_at: null, resolution_notes: null, version: 1, decisions: [] };
+
+  it("says that deciding an appeal does not unblock the student", async () => {
+    listAppealsForRun.mockResolvedValue({ results: [APPEAL] });
+    render(<ControlRoomPage />);
+    expect(await screen.findByText(/It does not unblock the student/)).toBeInTheDocument();
+    expect(screen.getByText("My connection dropped")).toBeInTheDocument();
+  });
+
+  it("asks for a reason, never sends a canned note, and confirms what it did and did not do", async () => {
+    listAppealsForRun.mockResolvedValue({ results: [APPEAL] });
+    resolveAppeal.mockResolvedValue({});
+    render(<ControlRoomPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Overturn the block for stu-1" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(/stays blocked until you review the block/);
+    const confirm = within(dialog).getByRole("button", { name: "Overturn" });
+    expect(confirm).toBeDisabled();
+    expect(resolveAppeal).not.toHaveBeenCalled();
+    await userEvent.type(within(dialog).getByLabelText(/Reason/), "Provider log shows the outage");
+    await userEvent.click(confirm);
+    await waitFor(() => expect(resolveAppeal).toHaveBeenCalledWith("tok", "a1", "overturned", "Provider log shows the outage"));
+    expect(await screen.findByText(/They stay blocked until you review the block/)).toBeInTheDocument();
+  });
+
+  it("a failed decision is explained inline and the room stays up", async () => {
+    listAppealsForRun.mockResolvedValue({ results: [APPEAL] });
+    resolveAppeal.mockRejectedValue(new ExamApiError("no", 403));
+    render(<ControlRoomPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Uphold the block for stu-1" }));
+    await userEvent.type(screen.getByLabelText(/Reason/), "Logs agree");
+    await userEvent.click(screen.getByRole("button", { name: "Uphold block" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/not allowed/);
+    expect(screen.getByRole("heading", { name: "Live control room" })).toBeInTheDocument();
+  });
+
+  it("lists decided appeals and shows a reversal", async () => {
+    listAppealsForRun.mockResolvedValue({
+      results: [{ ...APPEAL, status: "overturned", version: 2, decisions: [
+        { status: "upheld", decided_by: "t1", decided_at: "x", notes: "a" }, { status: "overturned", decided_by: "t2", decided_at: "y", notes: "b" },
+      ] }],
+    });
+    render(<ControlRoomPage />);
+    expect(await screen.findByText(/reversed: upheld → overturned/)).toBeInTheDocument();
+    expect(screen.getByText("No pending appeals.")).toBeInTheDocument();
   });
 });

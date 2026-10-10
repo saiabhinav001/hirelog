@@ -220,6 +220,9 @@ export type IncidentLogEntry = {
   received_at: string;
   duration_seconds: number | null;
   note: string;
+  // browser = what the student's browser reported; reviewer = a decision; server = a sweep or a late event.
+  source?: "browser" | "reviewer" | "server";
+  actor_uid?: string | null;
 };
 
 export type Appeal = {
@@ -233,6 +236,7 @@ export type Appeal = {
   resolved_at: string | null;
   resolution_notes: string | null;
   version: number;
+  decisions?: { status: "upheld" | "overturned"; decided_by: string; decided_at: string; notes: string }[];
 };
 
 export type EvidenceSnapshotSummary = {

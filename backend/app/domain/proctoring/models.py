@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -77,6 +77,9 @@ class ProctoringState(BaseModel):
     last_closed_incident_ended_at: Optional[datetime] = None
     last_closed_incident_counted: bool = False
     counted_incident_count: int = 0
+    # After a reviewer allows an attempt to continue, the ledger keeps every count; blocking resumes only once the
+    # count rises PAST this floor (count at the review + the run's allowance). 0 = the original behavior.
+    review_floor: int = 0
     # Bounded dedup window — a replay older than this cap is vanishingly
     # unlikely within one exam attempt; documented, not unlimited growth.
     recent_event_ids: list[str] = Field(default_factory=list, max_length=64)
@@ -99,6 +102,10 @@ class IncidentLogEntry(BaseModel):
     duration_seconds: Optional[float] = None
     client_event_id: str
     note: str = ""  # e.g. "below grace period", "merged into open incident"
+    # Who produced the entry: the student's browser, a reviewer's decision, or the server itself (sweeps,
+    # events after the attempt ended). Reviewer entries name the reviewer; they are never browser observations.
+    source: Literal["browser", "reviewer", "server"] = "browser"
+    actor_uid: Optional[str] = None
 
 
 class EvidenceSnapshotKind(str, Enum):
@@ -165,12 +172,24 @@ class EvidenceAccessLogEntry(BaseModel):
     snapshot_id: str
     accessed_by: str
     accessed_at: datetime
+    # `issued` = a reviewer was given a ticket; `viewed` = the bytes were served; `denied` = a ticket was presented
+    # by someone it was not issued to, or after it expired / was used. Older entries are `viewed`.
+    outcome: Literal["issued", "viewed", "denied"] = "viewed"
 
 
 class AppealStatus(str, Enum):
     PENDING = "pending"
     UPHELD = "upheld"  # block stands
     OVERTURNED = "overturned"  # block lifted
+
+
+class AppealDecision(BaseModel):
+    """One reviewer decision. A reversal appends another; earlier decisions are never overwritten."""
+
+    status: AppealStatus
+    decided_by: str
+    decided_at: datetime
+    notes: str = ""
 
 
 class Appeal(BaseModel):
@@ -183,6 +202,7 @@ class Appeal(BaseModel):
     resolved_by: Optional[str] = None
     resolved_at: Optional[datetime] = None
     resolution_notes: Optional[str] = None
-    # Regrade-style versioning — a reversed decision creates a new appeal
-    # record via `version`, never edits a resolved one in place.
+    # Bumped by every reversal of an earlier decision.
     version: int = 1
+    # Full decision history, oldest first; the fields above mirror the latest decision.
+    decisions: list[AppealDecision] = Field(default_factory=list)

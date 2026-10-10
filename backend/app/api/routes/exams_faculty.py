@@ -165,10 +165,14 @@ def create_run(payload: CreateRunRequest, user: dict = Depends(require_exam_facu
     if revision is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Revision not found.")
     validate_enrollment_scope(definition.institution_id, payload.enrolled_uids)
+    policy = payload.policy
+    if policy.proctoring_profile is not None:
+        # Provenance is the server's: a client-supplied value is overwritten.
+        policy = policy.model_copy(update={"proctoring_profile": policy.proctoring_profile.model_copy(update={"set_by": user["uid"]})})
     run = service.create_run(
         definition_id=payload.definition_id,
         revision=revision,
-        policy=payload.policy,
+        policy=policy,
         enrolled_uids=payload.enrolled_uids,
         institution_id=definition.institution_id,
         actor_uid=user["uid"],
