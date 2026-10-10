@@ -22,6 +22,8 @@ from pydantic import BaseModel, Field
 
 from app.api.exams_dependencies import (
     can_administer,
+    faculty_institution_ids,
+    is_bootstrap_faculty,
     require_bootstrap_faculty,
     require_exam_faculty,
     require_exams_enabled,
@@ -66,6 +68,25 @@ class RosterApplyRequest(BaseModel):
 
 class RevokeMembershipRequest(BaseModel):
     identity_key: str = Field(min_length=1, max_length=64)
+
+
+@router.get("")
+def list_institutions(user: dict = Depends(require_exam_faculty)) -> dict:
+    """Institutions the caller may act in (platform operators see all of them)."""
+    repo = InstitutionRepository(db)
+    operator = is_bootstrap_faculty(user)
+    if operator:
+        institutions = repo.list_all()
+    else:
+        institutions = [
+            found for found in (repo.get(institution_id) for institution_id in sorted(faculty_institution_ids(user))) if found
+        ]
+    return {
+        "is_platform_operator": operator,
+        "results": [
+            {"id": item.id, "name": item.name, "can_administer": can_administer(user, item.id)} for item in institutions
+        ],
+    }
 
 
 @router.post("")

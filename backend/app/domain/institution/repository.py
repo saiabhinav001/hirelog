@@ -74,6 +74,10 @@ class InstitutionRepository:
             return None
         return Institution.model_validate({**(snap.to_dict() or {}), "id": snap.id})
 
+    def list_all(self, limit: int = 100) -> list[Institution]:
+        query = self._db.collection(INSTITUTIONS_COLLECTION).limit(limit)
+        return [Institution.model_validate({**(doc.to_dict() or {}), "id": doc.id}) for doc in query.stream()]
+
 
 class MembershipRepository:
     def __init__(self, db) -> None:

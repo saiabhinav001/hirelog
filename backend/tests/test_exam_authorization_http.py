@@ -221,6 +221,19 @@ def test_only_platform_operators_create_institutions(exam) -> None:
     assert response.status_code == 403
 
 
+def test_institution_list_only_shows_what_the_caller_may_act_in(exam, other_college) -> None:
+    client = exam.world.client
+    url = "/api/exams/v1/faculty/institutions"
+    own = client.get(url, headers=exam.faculty).json()
+    assert [item["id"] for item in own["results"]] == [exam.inst]
+    assert own["is_platform_operator"] is False and own["results"][0]["can_administer"] is False
+    assert client.get(url, headers=exam.admin).json()["results"][0]["can_administer"] is True
+    everything = client.get(url, headers=exam.world.operator()).json()
+    assert everything["is_platform_operator"] is True
+    assert {exam.inst, other_college.inst} <= {item["id"] for item in everything["results"]}
+    assert client.get(url, headers=exam.student).status_code == 403
+
+
 def test_faculty_importer_cannot_overwrite_an_existing_members_contact(exam) -> None:
     """The account-takeover path: re-pointing a member's contact email makes the
     attacker's inbox the OTP destination for that member's uid."""
