@@ -14,12 +14,16 @@
 .PARAMETER SkipBuild
   Reuse the existing frontend build instead of rebuilding it.
 
+.PARAMETER CollectionPrefix
+  Prefix for every exam collection (EXAM_COLLECTION_PREFIX), to rehearse a shared-project deployment.
+
 Logs and state live in .e2e/ (git-ignored). Stop everything with e2e-local/stop-stack.ps1.
 #>
 param(
   [string]$Python = "",
   [string]$JavaHome = "",
-  [switch]$SkipBuild
+  [switch]$SkipBuild,
+  [string]$CollectionPrefix = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,6 +84,7 @@ $env:FIREBASE_PROJECT_ID = $project
 $env:FIREBASE_SERVICE_ACCOUNT_PATH = $serviceAccount
 $env:EXAMS_ENABLED = 'true'
 $env:EXAM_STORAGE_BOUNDARY = 'true'
+if ($CollectionPrefix) { $env:EXAM_COLLECTION_PREFIX = $CollectionPrefix } else { Remove-Item Env:\EXAM_COLLECTION_PREFIX -ErrorAction SilentlyContinue }
 $env:EXAM_OTP_ALLOW_DEV_SINK = 'true'
 $env:EXAM_OTP_HMAC_SECRET = 'e2e-only-secret'
 $env:EXAM_FACULTY_EMAILS = 'operator@example.edu'

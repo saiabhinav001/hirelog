@@ -25,7 +25,7 @@ flowchart LR
 | Git branch | `main` (never touched) | `exams/phase-11-production-qualification` |
 | Web app | existing Vercel project | **new** Vercel project `hirelog-exams-staging` |
 | API | existing Hugging Face Space | **new** Space `hirelog-exams-staging` (`backend/Dockerfile.exams`) |
-| Firebase project | `placement-archive` | **open decision, see section 3** |
+| Firebase project | `placement-archive` | the same project, every collection prefixed `stg_` (decision in section 3) |
 
 Protections that are in the code, not only in configuration:
 
@@ -74,7 +74,21 @@ the deployed security rules differ from the repository's.
 
 Whichever is chosen, nothing is written to Firebase until you approve it. Rules and indexes are never deployed
 by these scripts; `firestore.rules` already denies every exam and institution collection to browser clients
-(`backend/scripts/check_exam_rules_emulator.py` proves it against the emulator: 11/11 checks).
+(`backend/scripts/check_exam_rules_emulator.py` proves it against the emulator: 11/11 checks). A static audit of
+every exam query found only single-field and equality-only filters, so **no composite index is needed** (not
+yet confirmed against real Firestore).
+
+**Decision recorded: option A** (reuse `placement-archive`'s default database), run with
+`EXAM_COLLECTION_PREFIX=stg_` so every staging collection is namespaced and removable. Verified on the
+emulator: the 11 browser journeys with the prefix created 18 top-level collections, all `stg_`-prefixed, and
+nothing else. What option A still needs, each a write to the shared project that **has not been made yet**:
+
+1. A dedicated service account for the API with only `roles/datastore.user` (the API uses only `verify_id_token`
+   and `create_custom_token`, which sign locally with the key, so no Auth role is needed). Do not reuse the broad
+   `firebase-adminsdk` key. IAM cannot restrict that role to certain collections, so the code-level boundary is
+   the only collection-level isolation: treat the key as a secret with production-wide reach.
+2. The Vercel staging origin added to Firebase Auth "authorized domains" (required for the operator's Google
+   sign-in popup; students sign in with a one-time code and custom token).
 
 ## 4. Configuration reference
 
@@ -114,14 +128,17 @@ Prerequisites you provide: the Firebase decision (section 3), a Hugging Face tok
 access, and an SMTP account. Secrets go into the environment of your own terminal or the provider dashboards,
 never into the repository or a chat.
 
-1. **Review the branch.** The work is on `hardening/exams-staging` (not pushed). Open a pull request into
-   `exams/phase-11-production-qualification`; `.github/workflows/exams-ci.yml` runs on it.
-   *Pushing any branch to GitHub creates a Preview deployment in the existing production Vercel project (unless
-   its Ignored Build Step skips that branch). The preview does not touch production traffic or data, but it is an
-   unreviewed build of this code in that project; decide whether to accept it or set an Ignored Build Step first.*
-2. **API.** Dry run (no network): `python backend/scripts/deploy_hf_exams_space.py --dry-run --owner <hf-user> --firebase-project-id <id> --firebase-service-account-path <key.json> --allowed-origins <web origin> --otp-hmac-secret <secret>`.
-   Then the same command without `--dry-run`, with `HF_TOKEN` in the environment and `--visibility public`
-   (a browser cannot call a private Space; the API still requires a Firebase sign-in for every protected route).
+1. **Review the branch.** The work is on `hardening/exams-staging` (pushed; `main` and the exams branch are untouched).
+   Open a pull request **with base `exams/phase-11-production-qualification`** (GitHub defaults to `main`; do not
+   merge into `main`). `.github/workflows/exams-ci.yml` also runs on the push itself and is green.
+   *Pushing a branch creates a Preview deployment in the existing production Vercel project. It does not touch
+   production traffic or data, but it is a build of this code in that project; an Ignored Build Step in that project
+   would skip it.*
+2. **API.** Run `backend/scripts/deploy_exams_staging.ps1` (PowerShell). It asks for the Hugging Face token and the SMTP
+   password at hidden prompts, generates the one-time-code signing secret, and calls `deploy_hf_exams_space.py`:
+   `.\backend\scripts\deploy_exams_staging.ps1 -Owner <hf-user> -FirebaseProjectId <id> -ServiceAccountPath <key.json> -AllowedOrigin <web origin> -FacultyEmails <your google email> -SmtpHost <host> -SmtpFrom <address> -DryRun`
+   (the dry run needs no network or token; drop `-DryRun` to deploy; the Space is created public because a browser
+   cannot call a private Space, and the API still requires a Firebase sign-in for every protected route).
    The script only targets a Space whose name contains `staging`, never overwrites a Space it did not create,
    and waits for `/health/live`. Needs `pip install huggingface_hub`. **Not yet verified against Hugging Face.**
 3. **Smoke test the API:** `python backend/scripts/smoke_exams_api.py --base-url https://<owner>-hirelog-exams-staging.hf.space --allowed-origin <web origin> --expect-ready`.
@@ -159,7 +176,7 @@ Regenerate the API lock after changing `backend/requirements-exams.txt`:
 
 | Layer | Command | Result at the time of writing |
 |---|---|---|
-| Exam API | `cd backend && PYTHONPATH=. pytest --ignore=tests/test_concurrency.py --ignore=tests/test_experience_lifecycle.py` | 574 passed, 1 skipped (on the slim lock environment) |
+| Exam API | `cd backend && PYTHONPATH=. pytest --ignore=tests/test_concurrency.py --ignore=tests/test_experience_lifecycle.py` | 574 passed, 1 skipped on the slim lock environment, on Windows and in a Linux container; the Exams CI run on the pushed branch is green (backend, security, web, image jobs) |
 | Web | `cd frontend && npm run lint && npm run type-check && npm run test:ci && npm run build` | lint 1 pre-existing warning, 57 unit tests passed, build ok |
 | Firestore rules | `python backend/scripts/check_exam_rules_emulator.py` (emulator running) | 11/11 |
 | Image | `docker build -f backend/Dockerfile.exams backend` | builds from the hash-pinned lock, boots as a non-root user, `/health/live` 200 |
