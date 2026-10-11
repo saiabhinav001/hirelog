@@ -90,6 +90,25 @@ nothing else. What option A still needs, each a write to the shared project that
 2. The Vercel staging origin added to Firebase Auth "authorized domains" (required for the operator's Google
    sign-in popup; students sign in with a one-time code and custom token).
 
+Current state of the project, read-only on the day of the assessment: one service account
+(`firebase-adminsdk-fbsvc`, broad) and the authorized domains `localhost`, `placement-archive.firebaseapp.com`,
+`placement-archive.web.app`, `hirelogapp.vercel.app`, `hirelog-exams.vercel.app`. The two writes, to be run only
+after explicit approval (the key is written to a local file and goes straight into a Space secret; it is never printed):
+
+```powershell
+gcloud iam service-accounts create exams-staging-api --project placement-archive --display-name "HireLog Exams staging API"
+gcloud projects add-iam-policy-binding placement-archive --member "serviceAccount:exams-staging-api@placement-archive.iam.gserviceaccount.com" --role roles/datastore.user --condition=None
+gcloud iam service-accounts keys create "$HOME\exams-staging-api-key.json" --iam-account exams-staging-api@placement-archive.iam.gserviceaccount.com
+
+# PATCH replaces the whole list, so it repeats the existing domains and adds one
+$token = gcloud auth print-access-token
+$body = '{"authorizedDomains":["localhost","placement-archive.firebaseapp.com","placement-archive.web.app","hirelogapp.vercel.app","hirelog-exams.vercel.app","hirelog-exams-staging.vercel.app"]}'
+Invoke-RestMethod -Method Patch -Uri "https://identitytoolkit.googleapis.com/admin/v2/projects/placement-archive/config?updateMask=authorizedDomains" -Headers @{ Authorization = "Bearer $token"; "x-goog-user-project" = "placement-archive" } -ContentType "application/json" -Body $body
+```
+
+Undo: `gcloud iam service-accounts delete exams-staging-api@placement-archive.iam.gserviceaccount.com --project placement-archive`
+and PATCH the domain list back without `hirelog-exams-staging.vercel.app`. Delete the local key file after it is in the Space secret.
+
 ## 4. Configuration reference
 
 **Hugging Face Space** (set by `backend/scripts/deploy_hf_exams_space.py`; secrets are Space secrets, the rest variables):
