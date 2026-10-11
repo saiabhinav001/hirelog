@@ -9,6 +9,10 @@ spacy==3.7.4; python_version < "3.13"
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 faiss-cpu==1.13.2; python_version < "3.13"
 numpy==1.26.4
+# pyarrow 26 requires NumPy>=2 but numpy is pinned to 1.26.4 above. pyarrow is only pulled in transitively
+# (optimum -> datasets); unpinned, a fresh image build resolves 26.x and `import sentence_transformers`
+# fails with "pyarrow requires NumPy 2.0 or newer", which breaks embeddings, search and NLP processing.
+pyarrow<26
 pydantic==2.7.4
 pydantic-settings==2.2.1
 python-dotenv==1.0.1
