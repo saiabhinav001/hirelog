@@ -20,7 +20,7 @@ receipts, version checks and audit trail are identical to a faculty command.
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
 from firebase_admin import firestore
@@ -55,6 +55,24 @@ class ExamFinalizationSweeper:
         self._drafts = DraftRepository(db)
         self._outbox = OutboxRepository(db)
         self._audit = AuthzAuditRepository(db)
+        # What the last full sweep saw, so the worker can sleep until something can actually be sealed.
+        self._tick_deadline: Optional[datetime] = None
+        self._tick_backlog = False
+        self._next_deadline: Optional[datetime] = None
+        self._backlog = False
+
+    def seconds_until_next_deadline(self) -> Optional[float]:
+        """Seconds until a sweep can next find something to seal: 0 while a backlog remains, None when no attempt is live."""
+        if self._backlog:
+            return 0.0
+        if self._next_deadline is None:
+            return None
+        return max(0.0, (self._next_deadline - self._clock.now()).total_seconds()) + 1.0
+
+    def _note_pending_deadlines(self, attempts: list, now: datetime) -> None:
+        pending = [a.deadline for a in attempts if a.deadline is not None and a.deadline > now]
+        if pending and (self._tick_deadline is None or min(pending) < self._tick_deadline):
+            self._tick_deadline = min(pending)
 
     # -- sealing ---------------------------------------------------------------
 
@@ -63,9 +81,12 @@ class ExamFinalizationSweeper:
         this call - callers loop until this returns 0."""
         now = self._clock.now()
         candidates = self._attempts.list_in_progress(run_id) + self._attempts.list_blocked(run_id)
+        # Only an attempt past its deadline can be sealed, so only those need their drafts read.
+        expired = [attempt for attempt in candidates if attempt.deadline is not None and now > attempt.deadline]
         draft_versions_by_uid = {
-            attempt.uid: self._drafts.all_versions(run_id, attempt.uid) for attempt in candidates
+            attempt.uid: self._drafts.all_versions(run_id, attempt.uid) for attempt in expired
         }
+        self._note_pending_deadlines(candidates, now)
         batch = decide_finalization_batch(
             attempts=candidates,
             now=now,
@@ -77,6 +98,8 @@ class ExamFinalizationSweeper:
         for decision in batch.sealed:
             if self._seal_one(run_id, decision.uid):
                 sealed += 1
+        if batch.skipped or sealed < len(batch.sealed):
+            self._tick_backlog = True  # more to seal than this pass handled, or a seal lost a race: look again soon
         return sealed
 
     def sweep_active_runs_once(self, *, batch_size: int) -> int:
@@ -93,11 +116,15 @@ class ExamFinalizationSweeper:
             runs.setdefault(run.id, run)
 
         total = 0
+        self._tick_deadline = None
+        self._tick_backlog = False
         for run_id in runs:
             try:
                 total += self.sweep_once(run_id, batch_size=batch_size)
             except Exception:  # noqa: BLE001 - one bad run must not stop the sweep
                 logger.exception("finalization sweep failed for run %s", run_id)
+                self._tick_backlog = True
+        self._next_deadline, self._backlog = self._tick_deadline, self._tick_backlog
         return total
 
     def _seal_one(self, run_id: str, uid: str) -> bool:

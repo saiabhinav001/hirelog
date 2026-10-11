@@ -140,3 +140,16 @@ Use this when a second service is not available (for example a Hugging Face Spac
 4. Verify `GET /health/live` (the main app's) and `GET /api/exams/v1/me` (should answer 401 or 403 without a token).
 
 Limits: the exam workers and live-event registry run inside the one process that serves search, so a restart or a cold start of that service also restarts them, and a second instance does not share live events. Do not rely on this for a real exam run until the release-pack gates are met.
+
+## Running on the free (Spark) Firestore plan
+
+Every worker poll costs at least one Firestore read even when nothing is waiting, and the free plan allows 50,000 reads a day for the whole project; a project shared with the legacy app shares that quota with it. Measured by counting Firestore requests while the exam API ran against the local emulator, with rates extrapolated from windows of 1 to 5 minutes (an estimate of the request count, not a bill):
+
+| | Fixed polling (2 s outbox and judge, 15 s proctoring and finalization) | Idle-adaptive polling |
+|---|---|---|
+| Exam workers, nothing happening | about 148,000 reads a day | about 4,700 reads a day |
+| 90 students mid-exam, workers only | about 43,000 reads an hour (the sweeper read every live attempt's drafts every 15 s) | about 3,000 reads an hour |
+
+The outbox, judge, proctoring and finalization workers now poll at their minimum interval only while they find work, and back off while idle (`EXAM_OUTBOX_POLL_*`, `EXAM_JUDGE_SWEEP_*`, `EXAM_PROCTORING_SWEEP_*` and `EXAM_FINALIZATION_SWEEP_*` in `.env.example`; the defaults keep the old minimums, so exam-time latency is unchanged). Work done in the same process wakes them at once: admission, submit, run commands, terminate and recover, KT uploads, judge runs and proctoring observations. The finalization sweeper sleeps until the earliest known attempt deadline (never longer than `EXAM_FINALIZATION_SWEEP_MAX_INTERVAL_SECONDS`) and reads drafts only for attempts already past their deadline, which is the only case in which it can seal one. Work created by a different process cannot wake these loops, so with several instances a job can wait up to the maximum interval; the defaults suit one instance.
+
+The request path is separate: a 90-student burst (one question, three draft saves each, a synchronized submit) cost about 4,300 reads and 800 writes in total here, including one read of the legacy `users/{uid}` document per request (`get_current_user_uncached`), which also creates that document for a first-time user. A real exam has more questions and saves, so measure it before relying on the free plan.

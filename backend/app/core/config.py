@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     # Setting this false is the rollback lever, not a supported steady state.
     EXAM_FINALIZATION_SWEEP_ENABLED: bool = True
     EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS: float = 15.0
+    # Idle cap for the sweeper: it sleeps until the earliest known attempt deadline, never longer than this.
+    EXAM_FINALIZATION_SWEEP_MAX_INTERVAL_SECONDS: float = 120.0
     # Ended runs are still swept for this long after `ended_at` so a hard stop
     # never strands an unsealed attempt; older runs are not re-read every tick.
     EXAM_FINALIZATION_ENDED_RUN_WINDOW_HOURS: int = 24
@@ -117,6 +119,14 @@ class Settings(BaseSettings):
     EXAM_NEGATIVE_MARKING_ENABLED: bool = False
     EXAM_OUTBOX_LEASE_SECONDS: int = 60
     EXAM_OUTBOX_MAX_ATTEMPTS: int = 5
+    # Worker polling: fast while there is work, backing off to the max while idle (each empty poll still costs a
+    # Firestore read, and the free plan allows 50,000 a day). In-process work wakes the loops immediately.
+    EXAM_OUTBOX_POLL_MIN_SECONDS: float = 2.0
+    EXAM_OUTBOX_POLL_MAX_SECONDS: float = 120.0
+    EXAM_JUDGE_SWEEP_MIN_SECONDS: float = 2.0
+    EXAM_JUDGE_SWEEP_MAX_SECONDS: float = 120.0
+    EXAM_PROCTORING_SWEEP_MIN_SECONDS: float = 15.0
+    EXAM_PROCTORING_SWEEP_MAX_SECONDS: float = 600.0
 
     # ── Rollback lever (Prompt 11, docs/adr/0016) ────────────────────────────
     # A targeted alternative to flipping `EXAMS_ENABLED` off: blocks only NEW

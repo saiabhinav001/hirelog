@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from firebase_admin import firestore
 
+from app.core import background
 from app.domain.authz.staff_binding import AuthzAuditRepository, build_audit_event
 from app.domain.exams.clock import Clock, system_clock
 from app.domain.exams.models import AttemptStatus
@@ -56,6 +57,7 @@ class ProctoringLedgerService:
         self.attempts = AttemptRepository(db)
         self.runs = ExamRunRepository(db)
         self._audit = AuthzAuditRepository(db)
+        self.last_open_incident_count = 0
 
     def record_observation(
         self,
@@ -112,7 +114,10 @@ class ProctoringLedgerService:
                 self.attempts.update_in_transaction(transaction, run_id, uid, update)
             return outcome
 
-        return _txn(transaction)
+        outcome = _txn(transaction)
+        if outcome.action != "deduped":
+            background.wake("proctoring")  # an incident may now be open and need closing if its end event never arrives
+        return outcome
 
     def sweep_stale_incidents_once(self, *, grace_seconds: float, stale_after_seconds: float, limit: int = 50) -> int:
         """Bounded, idempotent, safe to call repeatedly — closes incidents for students who left the tab entirely
@@ -120,7 +125,9 @@ class ProctoringLedgerService:
         own, so one that cannot be processed never stops the rest; the run's own grace period applies; an attempt
         that is no longer live has its incident closed without counting."""
         closed = 0
-        for state in self.states.list_open_incidents(limit=limit):
+        open_states = self.states.list_open_incidents(limit=limit)
+        self.last_open_incident_count = len(open_states)
+        for state in open_states:
             try:
                 run = self.runs.get(state.run_id)
                 if run is None:

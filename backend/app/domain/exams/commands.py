@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from firebase_admin import firestore
 
+from app.core import background
 from app.core.config import settings
 from app.domain.authz.staff_binding import AuthzAuditRepository, build_audit_event
 from app.domain.exams.clock import Clock, system_clock
@@ -382,7 +383,11 @@ class ExamCommandService:
 
             return outcome
 
-        return _txn(transaction)
+        outcome = _txn(transaction)
+        if outcome.applied:
+            background.wake("finalization")  # the run's status changed: the sweeper must look at its attempts again
+            background.wake("outbox")
+        return outcome
 
     # -- per-attempt / per-student commands ------------------------------------
 
@@ -518,7 +523,9 @@ class ExamCommandService:
             )
             return AttemptCommandResult(command="terminate", uid=uid, status=decision.new_status.value)
 
-        return _txn(transaction)
+        result = _txn(transaction)
+        background.wake("outbox")
+        return result
 
     def change_access(
         self, *, run_id: str, action: str, uid: str, idempotency_key: str, actor_uid: str, reason: Optional[str]
@@ -595,4 +602,6 @@ class ExamCommandService:
             )
             return AttemptCommandResult(command="recover", uid=uid, status=attempt.status.value)
 
-        return _txn(transaction)
+        result = _txn(transaction)
+        background.wake("outbox")
+        return result

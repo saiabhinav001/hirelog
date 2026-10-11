@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
+from app.core import background
 from app.core.config import settings
 from app.core.rate_limit import SlidingWindowLimiter
 from app.domain.generation.repository import GenerationRepository
@@ -94,6 +95,7 @@ class JudgeService:
         )
         self._submissions.create(submission)
         self._worker.submit(submission, test_groups=public_tests, allowlist=allowlist)
+        background.wake("judge")
         return self._submissions.get(submission.id)
 
     def poll_public_run(self, submission_id: str, *, public_tests: list[TestGroupSpec]) -> Optional[CodeSubmission]:
@@ -129,6 +131,7 @@ class JudgeService:
             except RuntimeNotAllowedError:
                 # Not an infrastructure fault and not a score: a person decides (e.g. an unlisted language key).
                 self._exhaust(current, f"language {current.language_key!r} is not usable")
+        background.wake("judge")
         return self._submissions.get(submission_id) or current
 
     def poll_final_grade(self, submission_id: str, *, all_test_groups: list[TestGroupSpec]):

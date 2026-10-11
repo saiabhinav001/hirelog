@@ -11,6 +11,7 @@ from typing import Optional
 
 from firebase_admin import firestore
 
+from app.core import background
 from app.core.config import settings
 from app.domain.exams.clock import Clock, system_clock
 from app.domain.exams.decisions import (
@@ -133,7 +134,9 @@ class ExamStudentService:
             self.attempts.create_in_transaction(transaction, new_attempt)
             return new_attempt
 
-        return _txn(transaction)
+        attempt = _txn(transaction)
+        background.wake("finalization")  # a live attempt now has a deadline the sweeper must watch
+        return attempt
 
     # ── question delivery (allowlisted DTO only) ──────────────────────────
 
@@ -372,7 +375,10 @@ class ExamStudentService:
 
             return outcome
 
-        return _txn(transaction)
+        outcome = _txn(transaction)
+        if outcome.accepted and not outcome.reused_existing_receipt:
+            background.wake("outbox")  # the grading handler consumes the attempt_finalized entry
+        return outcome
 
     def submit(
         self, run_id: str, uid: str, *, idempotency_key: str, client_epoch: int, expected_draft_versions: dict[str, int]

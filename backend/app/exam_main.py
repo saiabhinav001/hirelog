@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi import Response as FastAPIResponse
@@ -36,6 +37,8 @@ from app.api.routes import (
     exams_proctoring,
     exams_student,
 )
+from app.core import background
+from app.core.background import AdaptivePoller
 from app.core.config import settings
 from app.core.firebase import db
 from app.core.logging_config import configure_logging
@@ -136,6 +139,19 @@ def _kt_ingestion_handler():
     return KtIngestionOutboxHandler(service, max_attempts=settings.EXAM_OUTBOX_MAX_ATTEMPTS)
 
 
+def _run_adaptive(
+    name: str, tick, *, min_interval: float, max_interval: float, burst_seconds: float = 30.0, hint=None
+) -> None:
+    """Runs one worker until `stop_exam_workers()`. Every empty poll costs a Firestore read and the free plan allows
+    50,000 a day, so a worker polls fast only while it finds work and is woken at once by `background.wake(name)`."""
+    if _stop_event.is_set():
+        return
+    poller = AdaptivePoller(
+        name, tick, min_interval=min_interval, max_interval=max_interval, burst_seconds=burst_seconds, hint=hint
+    )
+    background.register(poller).run()
+
+
 def _outbox_drain_loop() -> None:
     from app.domain.judge.outbox_handler import GradingTriggerOutboxHandler
     from app.domain.judge.runtime_allowlist import configured_allowlist
@@ -144,20 +160,25 @@ def _outbox_drain_loop() -> None:
     handler = CompositeOutboxHandler(
         [LoggingNoopHandler(), GradingTriggerOutboxHandler(db, _judge_provider(), configured_allowlist())]
     )
-    while not _stop_event.is_set():
-        try:
-            drain_outbox_once(
-                repo,
-                handler,
-                now=system_clock.now(),
-                limit=25,
-                lease_seconds=settings.EXAM_OUTBOX_LEASE_SECONDS,
-                max_attempts=settings.EXAM_OUTBOX_MAX_ATTEMPTS,
-                exclude_kinds=(KT_INGEST_KIND,),
-            )
-        except Exception:
-            logger.exception("exam outbox drain tick failed")
-        _stop_event.wait(2.0)
+
+    def tick() -> int:
+        handled = drain_outbox_once(
+            repo,
+            handler,
+            now=system_clock.now(),
+            limit=25,
+            lease_seconds=settings.EXAM_OUTBOX_LEASE_SECONDS,
+            max_attempts=settings.EXAM_OUTBOX_MAX_ATTEMPTS,
+            exclude_kinds=(KT_INGEST_KIND,),
+        )
+        if handled:
+            background.wake("judge")  # a grading trigger may just have queued FINAL_GRADE submissions
+        return handled
+
+    _run_adaptive(
+        "outbox", tick,
+        min_interval=settings.EXAM_OUTBOX_POLL_MIN_SECONDS, max_interval=settings.EXAM_OUTBOX_POLL_MAX_SECONDS,
+    )
 
 
 def _kt_ingestion_loop() -> None:
@@ -167,18 +188,18 @@ def _kt_ingestion_loop() -> None:
     if handler is None:
         return
     repo = OutboxRepository(db)
-    while not _stop_event.is_set():
-        try:
-            handled = drain_outbox_once(
-                repo, handler, now=system_clock.now(), limit=1,
-                lease_seconds=max(120, settings.EXAM_OUTBOX_LEASE_SECONDS * 2),
-                max_attempts=settings.EXAM_OUTBOX_MAX_ATTEMPTS, kinds=[KT_INGEST_KIND],
-            )
-        except Exception:
-            logger.exception("kt ingestion drain tick failed")
-            handled = 0
-        if not handled:
-            _stop_event.wait(2.0)
+
+    def tick() -> int:
+        return drain_outbox_once(
+            repo, handler, now=system_clock.now(), limit=1,
+            lease_seconds=max(120, settings.EXAM_OUTBOX_LEASE_SECONDS * 2),
+            max_attempts=settings.EXAM_OUTBOX_MAX_ATTEMPTS, kinds=[KT_INGEST_KIND],
+        )
+
+    _run_adaptive(
+        "kt", tick,
+        min_interval=settings.EXAM_OUTBOX_POLL_MIN_SECONDS, max_interval=settings.EXAM_OUTBOX_POLL_MAX_SECONDS,
+    )
 
 
 def _judge_sweep_loop() -> None:
@@ -189,12 +210,10 @@ def _judge_sweep_loop() -> None:
     from app.domain.judge.service import JudgeService
 
     service = JudgeService(db, _judge_provider())
-    while not _stop_event.is_set():
-        try:
-            service.sweep_pending_once(limit=25)
-        except Exception:
-            logger.exception("judge submission sweep tick failed")
-        _stop_event.wait(2.0)
+    _run_adaptive(
+        "judge", lambda: service.sweep_pending_once(limit=25),
+        min_interval=settings.EXAM_JUDGE_SWEEP_MIN_SECONDS, max_interval=settings.EXAM_JUDGE_SWEEP_MAX_SECONDS,
+    )
 
 
 def _proctoring_stale_incident_sweep_loop() -> None:
@@ -204,15 +223,18 @@ def _proctoring_stale_incident_sweep_loop() -> None:
     from app.domain.proctoring.ledger_service import ProctoringLedgerService
 
     service = ProctoringLedgerService(db)
-    while not _stop_event.is_set():
-        try:
-            service.sweep_stale_incidents_once(
-                grace_seconds=settings.EXAM_PROCTORING_GRACE_SECONDS,
-                stale_after_seconds=settings.EXAM_PROCTORING_STALE_INCIDENT_SECONDS,
-            )
-        except Exception:
-            logger.exception("proctoring stale-incident sweep tick failed")
-        _stop_event.wait(15.0)
+
+    def tick() -> int:
+        closed = service.sweep_stale_incidents_once(
+            grace_seconds=settings.EXAM_PROCTORING_GRACE_SECONDS,
+            stale_after_seconds=settings.EXAM_PROCTORING_STALE_INCIDENT_SECONDS,
+        )
+        return closed or service.last_open_incident_count  # stay on the fast cadence while incidents are still open
+
+    _run_adaptive(
+        "proctoring", tick, burst_seconds=180.0,
+        min_interval=settings.EXAM_PROCTORING_SWEEP_MIN_SECONDS, max_interval=settings.EXAM_PROCTORING_SWEEP_MAX_SECONDS,
+    )
 
 
 def _finalization_sweep_loop() -> None:
@@ -225,14 +247,25 @@ def _finalization_sweep_loop() -> None:
 
     sweeper = ExamFinalizationSweeper(db)
     interval = max(1.0, float(settings.EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS))
-    while not _stop_event.is_set():
-        try:
-            if settings.EXAM_SCHEDULE_AUTOMATION_ENABLED:
-                sweeper.run_schedule_automation_once()
-            sweeper.sweep_active_runs_once(batch_size=settings.EXAM_FINALIZATION_BATCH_SIZE)
-        except Exception:
-            logger.exception("exam finalization sweep tick failed")
-        _stop_event.wait(interval)
+
+    def tick() -> int:
+        applied = 0
+        if settings.EXAM_SCHEDULE_AUTOMATION_ENABLED:
+            applied = sweeper.run_schedule_automation_once()
+        sealed = sweeper.sweep_active_runs_once(batch_size=settings.EXAM_FINALIZATION_BATCH_SIZE)
+        if sealed:
+            background.wake("outbox")  # sealing enqueued grading triggers
+        return sealed + applied
+
+    def hint() -> Optional[float]:
+        if settings.EXAM_SCHEDULE_AUTOMATION_ENABLED:
+            return 0.0  # scheduled release/close is clock-driven: keep the configured cadence
+        return sweeper.seconds_until_next_deadline()
+
+    _run_adaptive(
+        "finalization", tick, hint=hint, min_interval=interval,
+        max_interval=max(interval, float(settings.EXAM_FINALIZATION_SWEEP_MAX_INTERVAL_SECONDS)),
+    )
 
 
 def _evidence_retention_sweep_loop() -> None:
@@ -302,6 +335,7 @@ def start_exam_workers() -> None:
 def stop_exam_workers() -> None:
     global _workers_started
     _stop_event.set()
+    background.stop_all()
     _workers_started = False
 
 

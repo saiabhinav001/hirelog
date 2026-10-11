@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from firebase_admin import firestore
 
+from app.core import background
 from app.domain.authz.staff_binding import AuthzAuditRepository, build_audit_event
 from app.domain.exams.clock import Clock, system_clock
 from app.domain.exams.errors import CommandRejectedError
@@ -194,6 +195,7 @@ class KtIngestionService:
         except Exception:
             self._storage.delete(storage_ref)  # nothing references the bytes
             raise
+        background.wake("kt")
         return upload
 
     def _job(self, upload: UploadedSource, now) -> OutboxEntry:
@@ -234,7 +236,9 @@ class KtIngestionService:
             )
             return updated
 
-        return _txn(transaction)
+        retried = _txn(transaction)
+        background.wake("kt")
+        return retried
 
     def delete(self, upload_id: str, *, actor_uid: str) -> UploadedSource:
         """Remove the bytes and extracted text; keep the metadata row and audit trail.
