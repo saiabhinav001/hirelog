@@ -1,6 +1,5 @@
 import { initializeApp, getApps, type FirebaseOptions } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
 
 // CI and local test builds may not provide Firebase env vars.
 // Use deterministic placeholder values so Next.js build does not crash.
@@ -16,4 +15,4 @@ const firebaseConfig: FirebaseOptions = {
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+// The browser never talks to Firestore directly; all data access goes through the API.

@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "overrides": {
-    "postcss": "^8.5.10"
+    "postcss": "^8.5.10",
+    "@grpc/grpc-js": "^1.14.6",
+    "eslint-plugin-react-hooks": "7.0.1"
   },
   "scripts": {
     "dev": "next dev",
@@ -27,7 +29,7 @@
     "codemirror": "^6.0.2",
     "firebase": "^12.8.0",
     "lucide-react": "^0.563.0",
-    "next": "16.2.10",
+    "next": "16.4.0",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },
@@ -46,7 +48,7 @@
     "jsdom": "^29.0.1",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^4.1.2",
+    "vitest": "^4.1.11",
     "vitest-axe": "^0.1.0"
   }
 }
