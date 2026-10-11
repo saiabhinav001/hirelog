@@ -1,0 +1,198 @@
+# HireLog Exams - staging deployment (free tiers)
+
+This is the runbook for the **independent staging** of HireLog Exams: its own web app (Vercel), its own
+API (Hugging Face Docker Space) and the Firebase **Spark** (free) plan. It is written for a cohort of at
+most 80-90 students. The general exam API guide is [exams/deployment-guide.md](exams/deployment-guide.md);
+the rollback levers are in [exams/rollback-runbook.md](exams/rollback-runbook.md).
+
+Everything below was verified locally unless it is marked **not yet verified**. Nothing has been deployed
+from this document yet: no Hugging Face Space, Vercel project or Firebase setting has been created or
+changed.
+
+```mermaid
+flowchart LR
+  B[Browser] -->|HTTPS| V[Vercel project hirelog-exams-staging<br/>Next.js, exams-only mode]
+  B -->|HTTPS + WSS, Firebase ID token| H[Hugging Face Docker Space<br/>app.exam_main:app :7862]
+  B -->|Auth only| FA[Firebase Auth]
+  H --> FS[(Firestore, Spark plan)]
+  H --> FA
+```
+
+## 1. What is separate from production, and what is not
+
+| | Production HireLog | Exams staging |
+|---|---|---|
+| Git branch | `main` (never touched) | `exams/phase-11-production-qualification` |
+| Web app | existing Vercel project | **new** Vercel project `hirelog-exams-staging` |
+| API | existing Hugging Face Space | **new** Space `hirelog-exams-staging` (`backend/Dockerfile.exams`) |
+| Firebase project | `placement-archive` | **open decision, see section 3** |
+
+Protections that are in the code, not only in configuration:
+
+- `EXAM_STORAGE_BOUNDARY=true` (set by `Dockerfile.exams`): the process can only open the exam and
+  institution collections; any other collection (including the legacy `users`, `interview_experiences`) raises
+  before a request is made. `EXAM_COLLECTION_PREFIX` optionally prefixes every collection name.
+- `NEXT_PUBLIC_EXAMS_STAGING=true`: the web build never contacts the legacy API (its CSP does not even list it),
+  shows no legacy navigation, sends `X-Robots-Tag: noindex` and sends `/` to `/exams/login`.
+- The API refuses every origin except `ALLOWED_ORIGINS`, and no protected route works without a Firebase ID
+  token. `backend/scripts/smoke_exams_api.py` checks this against a running instance.
+- Identity comes from the verified token only. Institutional access is re-checked on **every** request, so a
+  revoked student loses access immediately (browser-verified: section 8).
+
+## 2. Spark plan budget (the binding constraint)
+
+Spark gives, per project and per day: 50,000 document reads, 20,000 writes, 20,000 deletes (and 1 GiB stored).
+When the quota is exhausted every read/write of that project fails until the daily reset.
+
+Measured with `backend/tests/test_exam_firestore_budget.py` (an in-process simulation that counts every
+document operation; run it with `EXAM_BUDGET_FULL=1` for the full cohort):
+
+| Scenario | Reads | Writes |
+|---|---|---|
+| 90 students x 10 questions, whole exam (admit, answer, proctoring, faculty monitor, submit, grading) | 11,948 (24% of the day) | 5,584 (28% of the day) |
+| API idle for a day (adaptive background loops) | about 1,700 | about 0 |
+
+Consequences:
+
+- One 90-student exam fits. **Two cohorts in one day, or a second heavy use of the same project, may not.**
+- The browser's autosave waits for a 3 s pause and never re-saves identical content, the live screens refetch at
+  most every 20 s (students 3 s), and the candidate grid is cached - each of these exists only to stay inside the quota.
+- A project shared with production HireLog shares this quota with it. See section 3.
+- Spark has no Cloud Storage bucket: proctoring evidence is kept in memory and is lost when the API restarts.
+
+## 3. Firebase: decision needed
+
+The master prompt allows reusing the existing project only after an impact assessment and explicit approval.
+The assessment (read-only) found: project `placement-archive` is on Spark; it has only the `(default)` Firestore
+database; production HireLog already uses the same daily quota; a named database is impossible without billing;
+the deployed security rules differ from the repository's.
+
+| Option | Production risk | Cost | Needs |
+|---|---|---|---|
+| A. Reuse `placement-archive` (default DB) with the code-level boundary | A busy exam day can use about a quarter of production's daily quota; a compromised API credential would carry production's project | none | explicit approval, a service account, an authorized domain for the staging web origin |
+| B. A **new** free Spark Firebase project (recommended) | none | none | creating the project, enabling Auth (Google) and Firestore, a service account, the web app config |
+
+Whichever is chosen, nothing is written to Firebase until you approve it. Rules and indexes are never deployed
+by these scripts; `firestore.rules` already denies every exam and institution collection to browser clients
+(`backend/scripts/check_exam_rules_emulator.py` proves it against the emulator: 11/11 checks).
+
+## 4. Configuration reference
+
+**Hugging Face Space** (set by `backend/scripts/deploy_hf_exams_space.py`; secrets are Space secrets, the rest variables):
+
+| Name | Kind | Value |
+|---|---|---|
+| `EXAMS_ENABLED` | variable | `true` |
+| `ENV` | variable | `staging` |
+| `FIREBASE_PROJECT_ID` | variable | the Firebase project id |
+| `ALLOWED_ORIGINS` | variable | the exact web origin, e.g. `https://hirelog-exams-staging.vercel.app` (never `*`) |
+| `EXAM_STORAGE_BOUNDARY` | variable | `true` |
+| `EXAM_COLLECTION_PREFIX` | variable, optional | e.g. `stg_` |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | secret | the service account key (never committed or printed) |
+| `EXAM_OTP_HMAC_SECRET` | secret | a long random string; keeps one-time codes valid across restarts |
+| `EXAM_FACULTY_EMAILS` | secret | platform operators' Google emails (verified email required) |
+| `EXAM_OTP_SMTP_HOST`, `_PORT`, `EXAM_OTP_FROM_ADDRESS`, `EXAM_OTP_SMTP_USE_SSL` | variables | the mail provider; **without them sign-in codes cannot be delivered and login answers 503** |
+| `EXAM_OTP_SMTP_USERNAME`, `EXAM_OTP_SMTP_PASSWORD` | secrets | SMTP credentials |
+
+Never set `EXAM_OTP_ALLOW_DEV_SINK` outside local development (it prints codes to the log).
+
+**Vercel project** (Root Directory `frontend`, Production Branch `exams/phase-11-production-qualification`, Node 20 or newer):
+
+| Name | Value |
+|---|---|
+| `NEXT_PUBLIC_EXAMS_ENABLED` | `true` |
+| `NEXT_PUBLIC_EXAMS_STAGING` | `true` |
+| `NEXT_PUBLIC_EXAMS_API_BASE_URL` | the Space base URL, `https://<owner>-hirelog-exams-staging.hf.space` (no trailing slash, no `/api/exams/v1`) |
+| `NEXT_PUBLIC_FIREBASE_API_KEY`, `_AUTH_DOMAIN`, `_PROJECT_ID`, `_STORAGE_BUCKET`, `_MESSAGING_SENDER_ID`, `_APP_ID` | the Firebase web app config of the chosen project |
+
+Do **not** set `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL` or `NEXT_PUBLIC_E2E_BYPASS_AUTH`.
+The Firebase Auth "authorized domains" list must contain the web origin (needed for Google sign-in).
+
+## 5. First deployment
+
+Prerequisites you provide: the Firebase decision (section 3), a Hugging Face token with write access, Vercel
+access, and an SMTP account. Secrets go into the environment of your own terminal or the provider dashboards,
+never into the repository or a chat.
+
+1. **Review the branch.** The work is on `hardening/exams-staging` (not pushed). Open a pull request into
+   `exams/phase-11-production-qualification`; `.github/workflows/exams-ci.yml` runs on it.
+   *Pushing any branch to GitHub creates a Preview deployment in the existing production Vercel project (unless
+   its Ignored Build Step skips that branch). The preview does not touch production traffic or data, but it is an
+   unreviewed build of this code in that project; decide whether to accept it or set an Ignored Build Step first.*
+2. **API.** Dry run (no network): `python backend/scripts/deploy_hf_exams_space.py --dry-run --owner <hf-user> --firebase-project-id <id> --firebase-service-account-path <key.json> --allowed-origins <web origin> --otp-hmac-secret <secret>`.
+   Then the same command without `--dry-run`, with `HF_TOKEN` in the environment and `--visibility public`
+   (a browser cannot call a private Space; the API still requires a Firebase sign-in for every protected route).
+   The script only targets a Space whose name contains `staging`, never overwrites a Space it did not create,
+   and waits for `/health/live`. Needs `pip install huggingface_hub`. **Not yet verified against Hugging Face.**
+3. **Smoke test the API:** `python backend/scripts/smoke_exams_api.py --base-url https://<owner>-hirelog-exams-staging.hf.space --allowed-origin <web origin> --expect-ready`.
+4. **Web.** Create the Vercel project with the settings in section 4, deploy, then add the Vercel domain to the Firebase Auth
+   authorized domains. **Not yet verified on Vercel.**
+5. **Seed.** Sign in at `/exams/login` with a Google account listed in `EXAM_FACULTY_EMAILS`, open "Institution & roster",
+   create the institution, paste the roster (`college ID, email` per line), check it and apply it. Share the student sign-in
+   link shown on that screen (`/exams/login?institution=<id>`).
+6. **Browser E2E against the deployed stack** (section 8) - **not yet run**; the local journeys use the emulators.
+
+## 6. CI/CD
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` (existing) | every pull request, pushes to `main` | legacy backend and web checks. Its `npm audit --audit-level=high` also counts dev-only tooling that has no upstream fix (the `braces` chain under `eslint-config-next`), so it can be red on this branch for that reason alone |
+| `exams-ci.yml` | pull requests touching `backend/` or `frontend/`, pushes to `exams/**` and `hardening/**`, manual | exam API lint + tests on **only** the slim hash-pinned dependency set, `pip-audit` (strict), `bandit`, `npm audit --omit=dev` (strict), web lint/type-check/unit tests/staging build, and an image build that must boot and must not contain the ML stack |
+
+Neither workflow deploys. To inspect a run, open the Actions tab; to re-run, use "Re-run jobs" or `workflow_dispatch`.
+Deploys are manual: the script in step 2 for the API, and Vercel's own Git integration (or "Redeploy") for the web app.
+Regenerate the API lock after changing `backend/requirements-exams.txt`:
+`uv pip compile backend/requirements-exams.txt --universal --python-version 3.11 --generate-hashes -o backend/requirements-exams.lock`.
+
+## 7. Rollback
+
+| Layer | How |
+|---|---|
+| Stop new exam starts immediately | set `EXAM_NEW_ADMISSIONS_PAUSED=true` on the Space (in-progress attempts continue), or pause one session from the control screen |
+| Whole exam API | set `EXAMS_ENABLED=false` on the Space, or revert the Space repository to its previous commit (every deploy is one commit whose message carries the source SHA) |
+| API code | check out the previous good tag/commit and run the deploy script again |
+| Web app | Vercel dashboard, Deployments, "Promote to production" on the previous deployment |
+| Firebase data | nothing here migrates or deletes data; the exam collections can be cleared by deleting the `EXAM_COLLECTION_PREFIX` collections (if used) in the console. Never delete anything in a shared project without checking the prefix |
+| Production HireLog | not involved at any step; `main` is unchanged |
+
+## 8. Tests
+
+| Layer | Command | Result at the time of writing |
+|---|---|---|
+| Exam API | `cd backend && PYTHONPATH=. pytest --ignore=tests/test_concurrency.py --ignore=tests/test_experience_lifecycle.py` | 574 passed, 1 skipped (on the slim lock environment) |
+| Web | `cd frontend && npm run lint && npm run type-check && npm run test:ci && npm run build` | lint 1 pre-existing warning, 57 unit tests passed, build ok |
+| Firestore rules | `python backend/scripts/check_exam_rules_emulator.py` (emulator running) | 11/11 |
+| Image | `docker build -f backend/Dockerfile.exams backend` | builds from the hash-pinned lock, boots as a non-root user, `/health/live` 200 |
+| Real-browser journeys | `e2e-local\start-stack.ps1` then `e2e-local\run-e2e.ps1` (Windows PowerShell; needs Java, Node, Playwright's Chromium) | 11/11 passed on the local emulator-backed stack |
+| Cohort rehearsal | `python e2e-local/cohort_rehearsal.py` | 90 students x 10 questions, 2,700 autosaves: all 90 finalised, 0 errors, p95 at most 163 ms (max 226 ms) - **emulator on one laptop, not evidence of real Firestore or Hugging Face capacity** |
+
+The 11 journeys: staging landing (no legacy navigation, noindex), anonymous redirects, operator Google sign-in,
+institution and roster, authoring through scheduling, lobby release, a student's one-time-code sign-in to a
+confirmed receipt, the live grid, a wrong and a replayed code, faculty screens denied to a student, a student
+revoked mid-exam being cut off and unable to sign in again, and a student of another institution seeing nothing
+of the first institution's exam.
+
+## 9. Known limits (do not claim more than this)
+
+- **Question content is generated by a deterministic development generator** (questions are prefixed `[fake]`); no
+  real generation, independent-review, feedback or similarity provider is configured, and the coding judge is
+  the deterministic fake (the Judge0 adapter's `submit` is not implemented). Coding questions are therefore not graded for real.
+- A variant pool must hold at least as many approved questions as students, unless "share question variants" is
+  ticked in the lobby. The UI generates four candidates per click.
+- The malware scanner is the safe default (never "clean"), so uploaded files stay quarantined and only URL sources can be approved.
+- Proctoring evidence lives in memory (no Storage bucket on Spark). Camera capture and fullscreen are best-effort
+  browser signals, not lockdown.
+- One API instance only: the live socket, rate limiters and caches are per process. A Space restart drops live sockets
+  (clients reconnect) and in-memory evidence.
+- One-time codes need an SMTP provider. None is configured, so real delivery has **not** been verified; the local journeys read the code from the log.
+- Free Spaces sleep when idle; open the Space and check `/health/ready` before an exam.
+- The 11 journeys and the rehearsal ran on emulators. Real Firestore latency, quotas, IAM and Vercel/Hugging Face behaviour are unverified.
+
+## 10. Exam-day checklist
+
+1. `GET /health/ready` is 200 and `storage_boundary.enforced` is true; run the smoke script.
+2. The roster is applied and a test student has signed in from a different device.
+3. Questions are approved (at least as many variants as students, or balanced reuse ticked) and the session is scheduled
+   with the right duration; assign questions, publish, then release from the lobby.
+4. Keep one faculty tab on the control screen; use Refresh if the grid looks stale.
+5. After the exam, close the session; the day's Firestore usage should stay well under the Spark quota.

@@ -9,7 +9,11 @@ slim dependency set (no spaCy/sentence-transformers/FAISS/torch — see
 this process changes nothing for the legacy product until explicitly turned
 on.
 
-This guide covers deploying it; see [rollback-runbook.md](rollback-runbook.md)
+This guide covers deploying it; for the free-tier staging stack (Vercel, a
+Hugging Face Docker Space and Firebase Spark) follow
+[../exams-staging-deployment.md](../exams-staging-deployment.md), which also
+holds the Spark quota budget and the current list of verified and unverified
+claims. See [rollback-runbook.md](rollback-runbook.md)
 for rolling back a live deployment and
 [production-qualification-report.md](production-qualification-report.md) for
 what has and has not been verified before a real release.
