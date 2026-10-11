@@ -5,9 +5,19 @@ API (Hugging Face Docker Space) and the Firebase **Spark** (free) plan. It is wr
 most 80-90 students. The general exam API guide is [exams/deployment-guide.md](exams/deployment-guide.md);
 the rollback levers are in [exams/rollback-runbook.md](exams/rollback-runbook.md).
 
-Everything below was verified locally unless it is marked **not yet verified**. Nothing has been deployed
-from this document yet: no Hugging Face Space, Vercel project or Firebase setting has been created or
-changed.
+Everything below was verified locally unless it is marked **not yet verified**.
+
+## 0. Status (2026-10-11)
+
+| Piece | State | Evidence |
+|---|---|---|
+| Web app | **Deployed** at https://hirelog-exams-staging.vercel.app (project `hirelog-exams-staging`, a production-target deployment of branch `hardening/exams-staging`) | anonymous probes: `/` answers 307 to `/exams/login`, `/exams/login` answers 200, every response carries `X-Robots-Tag: noindex, nofollow`, the CSP `connect-src` lists only the exam API host and Google/Firebase hosts, and the served bundle holds the staging API host and the Firebase web config but no emulator URL |
+| Firebase (shared project) | The two approved writes are made (section 3) | the authorized-domain list was re-read after the change: 6 entries, none removed |
+| Real Firestore | Verified with the dedicated service account | an HTTP-level exam scenario ran against real Firestore inside the throwaway prefix `stg_smoke_`: institution, roster, exam release and admission, autosave, a stale draft refused, the faculty grid's ordered query, submit and its idempotent retry, a student denied the faculty grid, a revoked member refused on the next call. 9/9 checks, then every document under that prefix was removed. Firebase **Auth** was not part of that run (token verification was replaced by the test issuer) |
+| Exam API | **Not deployed.** Hugging Face answered `402 Payment Required` when the Space was created (section 5, step 2) | nothing was created or uploaded on Hugging Face |
+| Sign-in on the deployed stack | **Not testable until the API exists.** Anyone but the operator also needs an SMTP provider (none configured) | |
+
+Pending decision: where the exam API is hosted (section 5, step 2). Until then the web app is up but cannot sign anyone in.
 
 ```mermaid
 flowchart LR
@@ -22,7 +32,7 @@ flowchart LR
 
 | | Production HireLog | Exams staging |
 |---|---|---|
-| Git branch | `main` (never touched) | `exams/phase-11-production-qualification` |
+| Git branch | `main` (never touched) | `hardening/exams-staging`, to be merged into `exams/phase-11-production-qualification` by pull request |
 | Web app | existing Vercel project | **new** Vercel project `hirelog-exams-staging` |
 | API | existing Hugging Face Space | **new** Space `hirelog-exams-staging` (`backend/Dockerfile.exams`) |
 | Firebase project | `placement-archive` | the same project, every collection prefixed `stg_` (decision in section 3) |
@@ -60,7 +70,7 @@ Consequences:
 - A project shared with production HireLog shares this quota with it. See section 3.
 - Spark has no Cloud Storage bucket: proctoring evidence is kept in memory and is lost when the API restarts.
 
-## 3. Firebase: decision needed
+## 3. Firebase: decision and changes made
 
 The master prompt allows reusing the existing project only after an impact assessment and explicit approval.
 The assessment (read-only) found: project `placement-archive` is on Spark; it has only the `(default)` Firestore
@@ -75,13 +85,14 @@ the deployed security rules differ from the repository's.
 Whichever is chosen, nothing is written to Firebase until you approve it. Rules and indexes are never deployed
 by these scripts; `firestore.rules` already denies every exam and institution collection to browser clients
 (`backend/scripts/check_exam_rules_emulator.py` proves it against the emulator: 11/11 checks). A static audit of
-every exam query found only single-field and equality-only filters, so **no composite index is needed** (not
-yet confirmed against real Firestore).
+every exam query found only single-field and equality-only filters, so **no composite index is needed**; the
+scenario run against real Firestore (section 0) executed the ordered faculty-grid query without an index error.
 
 **Decision recorded: option A** (reuse `placement-archive`'s default database), run with
 `EXAM_COLLECTION_PREFIX=stg_` so every staging collection is namespaced and removable. Verified on the
 emulator: the 11 browser journeys with the prefix created 18 top-level collections, all `stg_`-prefixed, and
-nothing else. What option A still needs, each a write to the shared project that **has not been made yet**:
+nothing else. Option A needed two writes to the shared project. The owner approved both and they were made on
+2026-10-11:
 
 1. A dedicated service account for the API with only `roles/datastore.user` (the API uses only `verify_id_token`
    and `create_custom_token`, which sign locally with the key, so no Auth role is needed). Do not reuse the broad
@@ -90,10 +101,11 @@ nothing else. What option A still needs, each a write to the shared project that
 2. The Vercel staging origin added to Firebase Auth "authorized domains" (required for the operator's Google
    sign-in popup; students sign in with a one-time code and custom token).
 
-Current state of the project, read-only on the day of the assessment: one service account
-(`firebase-adminsdk-fbsvc`, broad) and the authorized domains `localhost`, `placement-archive.firebaseapp.com`,
-`placement-archive.web.app`, `hirelogapp.vercel.app`, `hirelog-exams.vercel.app`. The two writes, to be run only
-after explicit approval (the key is written to a local file and goes straight into a Space secret; it is never printed):
+Before the change the project had one service account (`firebase-adminsdk-fbsvc`, broad) and the authorized
+domains `localhost`, `placement-archive.firebaseapp.com`, `placement-archive.web.app`, `hirelogapp.vercel.app`,
+`hirelog-exams.vercel.app`. After it, the same five plus `hirelog-exams-staging.vercel.app` (re-read: nothing was
+removed), and the service account above with a key file kept outside the repository (it goes straight into the API
+host's secret store and is never printed). The commands:
 
 ```powershell
 gcloud iam service-accounts create exams-staging-api --project placement-archive --display-name "HireLog Exams staging API"
@@ -106,12 +118,18 @@ $body = '{"authorizedDomains":["localhost","placement-archive.firebaseapp.com","
 Invoke-RestMethod -Method Patch -Uri "https://identitytoolkit.googleapis.com/admin/v2/projects/placement-archive/config?updateMask=authorizedDomains" -Headers @{ Authorization = "Bearer $token"; "x-goog-user-project" = "placement-archive" } -ContentType "application/json" -Body $body
 ```
 
-Undo: `gcloud iam service-accounts delete exams-staging-api@placement-archive.iam.gserviceaccount.com --project placement-archive`
-and PATCH the domain list back without `hirelog-exams-staging.vercel.app`. Delete the local key file after it is in the Space secret.
+Undo (also the way to retire the staging): `gcloud iam service-accounts delete exams-staging-api@placement-archive.iam.gserviceaccount.com --project placement-archive`
+(this invalidates its key), PATCH the domain list back without `hirelog-exams-staging.vercel.app`, delete the local key
+file, and delete the `stg_*` collections in the console.
+
+Side effect that comes with option A: every student who signs in with a one-time code becomes a Firebase **Auth user**
+(uid `exam-<hex>`) in the shared project, listed in the console next to real HireLog users. They are inert, but they are
+only removable by deleting those users.
 
 ## 4. Configuration reference
 
-**Hugging Face Space** (set by `backend/scripts/deploy_hf_exams_space.py`; secrets are Space secrets, the rest variables):
+**Hugging Face Space** (set by `backend/scripts/deploy_hf_exams_space.py`; secrets are Space secrets, the rest variables;
+any other host needs the same names as environment variables):
 
 | Name | Kind | Value |
 |---|---|---|
@@ -123,49 +141,93 @@ and PATCH the domain list back without `hirelog-exams-staging.vercel.app`. Delet
 | `EXAM_COLLECTION_PREFIX` | variable, optional | e.g. `stg_` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | secret | the service account key (never committed or printed) |
 | `EXAM_OTP_HMAC_SECRET` | secret | a long random string; keeps one-time codes valid across restarts |
-| `EXAM_FACULTY_EMAILS` | secret | platform operators' Google emails (verified email required) |
+| `EXAM_FACULTY_EMAILS` | secret | platform operators' Google emails, comma-separated, as many as needed (a verified email is required; every operator can administer every institution and grant any role, so list only people you trust). The deploy script accepts spaces or commas and rejects anything that is not an address |
 | `EXAM_OTP_SMTP_HOST`, `_PORT`, `EXAM_OTP_FROM_ADDRESS`, `EXAM_OTP_SMTP_USE_SSL` | variables | the mail provider; **without them sign-in codes cannot be delivered and login answers 503** |
 | `EXAM_OTP_SMTP_USERNAME`, `EXAM_OTP_SMTP_PASSWORD` | secrets | SMTP credentials |
 
 Never set `EXAM_OTP_ALLOW_DEV_SINK` outside local development (it prints codes to the log).
 
-**Vercel project** (Root Directory `frontend`, Production Branch `exams/phase-11-production-qualification`, Node 20 or newer):
+**Vercel project** `hirelog-exams-staging` (created 2026-10-11 in the existing Vercel team; Root Directory `frontend`, Node 22.x,
+connected to this GitHub repository, framework preset Next.js). Its Ignored Build Step builds only the branch
+`hardening/exams-staging` and branches under `exams/`, so a push to `main` or any other branch never builds in this project:
 
 | Name | Value |
 |---|---|
 | `NEXT_PUBLIC_EXAMS_ENABLED` | `true` |
 | `NEXT_PUBLIC_EXAMS_STAGING` | `true` |
-| `NEXT_PUBLIC_EXAMS_API_BASE_URL` | the Space base URL, `https://<owner>-hirelog-exams-staging.hf.space` (no trailing slash, no `/api/exams/v1`) |
-| `NEXT_PUBLIC_FIREBASE_API_KEY`, `_AUTH_DOMAIN`, `_PROJECT_ID`, `_STORAGE_BUCKET`, `_MESSAGING_SENDER_ID`, `_APP_ID` | the Firebase web app config of the chosen project |
+| `NEXT_PUBLIC_EXAMS_API_BASE_URL` | the API base URL (no trailing slash, no `/api/exams/v1`). **Currently the placeholder `https://rockstar00-hirelog-exams-staging.hf.space`, which does not exist** (section 5, step 2). Changing it needs a redeploy: the build inlines it and derives the CSP `connect-src` from it |
+| `NEXT_PUBLIC_FIREBASE_API_KEY`, `_AUTH_DOMAIN`, `_PROJECT_ID`, `_STORAGE_BUCKET`, `_MESSAGING_SENDER_ID`, `_APP_ID` | the Firebase web app config of the chosen project (public values; the API key has no referrer restriction and allows the Identity Toolkit and Secure Token APIs) |
 
-Do **not** set `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL` or `NEXT_PUBLIC_E2E_BYPASS_AUTH`.
-The Firebase Auth "authorized domains" list must contain the web origin (needed for Google sign-in).
+The variables apply to the Production and Preview environments. Do **not** set `NEXT_PUBLIC_API_BASE_URL`,
+`NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL` or `NEXT_PUBLIC_E2E_BYPASS_AUTH`.
+The Firebase Auth "authorized domains" list must contain the web origin (needed for Google sign-in); only
+`hirelog-exams-staging.vercel.app` was added, so Google sign-in will not work on per-deployment Preview URLs.
+
+**Production Branch.** The Vercel REST API did not accept a production branch when tried (project update and Git
+re-link, 2026-10-11), so it is still `main`, which is harmless because the Ignored Build Step skips `main`. Consequently
+the production domain is not updated by a push; it is updated by creating a production-target deployment of the branch
+(section 5, step 4). To make pushes deploy automatically, set the branch in the Vercel dashboard (project Settings,
+Environments, Production, Branch Tracking) to `exams/phase-11-production-qualification` after the pull request is
+merged. Do not point it at `main`.
 
 ## 5. First deployment
 
-Prerequisites you provide: the Firebase decision (section 3), a Hugging Face token with write access, Vercel
-access, and an SMTP account. Secrets go into the environment of your own terminal or the provider dashboards,
-never into the repository or a chat.
+Prerequisites you provide: the Firebase decision (section 3, made), a Hugging Face token with write access **on an
+account that may create Docker Spaces (step 2)**, Vercel access, and an SMTP account. Secrets go into the environment
+of your own terminal or the provider dashboards, never into the repository or a chat.
 
 1. **Review the branch.** The work is on `hardening/exams-staging` (pushed; `main` and the exams branch are untouched).
    Open a pull request **with base `exams/phase-11-production-qualification`** (GitHub defaults to `main`; do not
    merge into `main`). `.github/workflows/exams-ci.yml` also runs on the push itself and is green.
-   *Pushing a branch creates a Preview deployment in the existing production Vercel project. It does not touch
-   production traffic or data, but it is a build of this code in that project; an Ignored Build Step in that project
-   would skip it.*
-2. **API.** Run `backend/scripts/deploy_exams_staging.ps1` (PowerShell). It asks for the Hugging Face token and the SMTP
-   password at hidden prompts, generates the one-time-code signing secret, and calls `deploy_hf_exams_space.py`:
-   `.\backend\scripts\deploy_exams_staging.ps1 -Owner <hf-user> -FirebaseProjectId <id> -ServiceAccountPath <key.json> -AllowedOrigin <web origin> -FacultyEmails <your google email> -SmtpHost <host> -SmtpFrom <address> -DryRun`
-   (the dry run needs no network or token; drop `-DryRun` to deploy; the Space is created public because a browser
-   cannot call a private Space, and the API still requires a Firebase sign-in for every protected route).
-   The script only targets a Space whose name contains `staging`, never overwrites a Space it did not create,
-   and waits for `/health/live`. Needs `pip install huggingface_hub`. **Not yet verified against Hugging Face.**
+   *Pushing a branch creates a Preview deployment in the existing production Vercel project (and, for this branch, in
+   the staging project). Previews do not touch production traffic or data, but they are builds of this code in those
+   projects; an Ignored Build Step in the production project would skip them.*
+2. **API - blocked on 2026-10-11, decision pending.** `backend/scripts/deploy_exams_staging.ps1` ran for
+   `rockstar00/hirelog-exams-staging` and stopped at its first write: Hugging Face answered `402 Payment Required`
+   ("hosting Gradio and Docker Spaces on free cpu-basic requires a PRO subscription"). Hugging Face's documentation says
+   creating a Gradio or Docker Space needs a paid plan (PRO, $9/month, for a personal account; Team or Enterprise for an
+   organisation) and that Static Spaces stay free. The account is on the free plan; the existing production Space was
+   created earlier (04/04/2026) and keeps running. Nothing was created or uploaded and the token was not stored.
+   Ways forward:
+   - **Upgrade the account to PRO**, then run the wrapper again unchanged (below). Same platform and size as production.
+   - **Host `backend/Dockerfile.exams` elsewhere.** The image is host-agnostic (port 7862, the environment names in
+     section 4, WebSocket support, exactly one instance, outbound SMTP) but the deploy script is Hugging Face only, so
+     another host needs its own script or dashboard steps. Render's free web service is a poor fit (0.1 CPU / 512 MB, it
+     spins down after 15 minutes without traffic and takes about a minute to wake, and it blocks outbound ports 25, 465
+     and 587); Google Cloud Run needs a Google Cloud project with billing enabled. Neither was tried.
+   - Whatever host is chosen, set `NEXT_PUBLIC_EXAMS_API_BASE_URL` (section 4) to its base URL and create a new
+     production-target deployment of the web app (step 4).
+
+   Running the wrapper (PowerShell). It asks for the Hugging Face token and the SMTP password at hidden prompts,
+   generates the one-time-code signing secret, and calls `deploy_hf_exams_space.py`:
+   `.\backend\scripts\deploy_exams_staging.ps1 -Owner <hf-user> -FirebaseProjectId <id> -ServiceAccountPath <key.json> -AllowedOrigin <web origin> -FacultyEmails <operator email>,<operator email> -SmtpHost <host> -SmtpFrom <address> -DryRun`
+   (the dry run needs no network or token and was run: it builds the 147-file bundle and prints the plan; drop `-DryRun`
+   to deploy; the Space is created public because a browser cannot call a private Space, and the API still requires a
+   Firebase sign-in for every protected route; a public Space also publishes the source of `backend/app`, and its
+   variables, but not its secrets). The script only targets a Space whose name contains `staging`, never overwrites a
+   Space it did not create, and waits for `/health/live`. Needs `pip install huggingface_hub` (use a throwaway
+   virtual environment). **Everything after the Space creation call is not yet verified against Hugging Face.**
 3. **Smoke test the API:** `python backend/scripts/smoke_exams_api.py --base-url https://<owner>-hirelog-exams-staging.hf.space --allowed-origin <web origin> --expect-ready`.
-4. **Web.** Create the Vercel project with the settings in section 4, deploy, then add the Vercel domain to the Firebase Auth
-   authorized domains. **Not yet verified on Vercel.**
-5. **Seed.** Sign in at `/exams/login` with a Google account listed in `EXAM_FACULTY_EMAILS`, open "Institution & roster",
-   create the institution, paste the roster (`college ID, email` per line), check it and apply it. Share the student sign-in
-   link shown on that screen (`/exams/login?institution=<id>`).
+4. **Web - done on 2026-10-11.** The project was created through the Vercel REST API with the settings in section 4, and
+   the first deployment was a production-target deployment of the branch, which is also how the production domain is
+   updated later (a push alone only creates a Preview; `$env:VERCEL_TOKEN` is an access token from your Vercel account
+   settings, kept in your shell only):
+   ```powershell
+   $h = @{ Authorization = "Bearer $env:VERCEL_TOKEN" }
+   $body = @{ name = 'hirelog-exams-staging'; project = 'hirelog-exams-staging'; target = 'production'
+              gitSource = @{ type = 'github'; repoId = 1156701802; ref = 'hardening/exams-staging' } } | ConvertTo-Json -Depth 4
+   Invoke-RestMethod -Method Post -Uri 'https://api.vercel.com/v13/deployments?slug=sai-abhinavs-projects' -Headers $h -ContentType 'application/json' -Body $body
+   ```
+   The build took about a minute and the deployment reached `READY` on https://hirelog-exams-staging.vercel.app (probes in
+   section 0). The domain was added to the Firebase Auth authorized domains (section 3). **Not verified:** a sign-in
+   and any call to the API, which does not exist yet.
+5. **Seed.** Sign in at `/exams/login` with a Google account listed in `EXAM_FACULTY_EMAILS` (a platform operator),
+   open "Institution & roster", create the institution, paste the roster (`college ID, email[, role]` per line; the role
+   defaults to `student`), check it and apply it. Share the student sign-in link shown on that screen
+   (`/exams/login?institution=<id>`). Who signs in how: the **operator** uses Google; **everyone in a roster**, students and
+   faculty alike, signs in with their college ID and a one-time code emailed to the roster address (SMTP required). There
+   are no passwords and no password-reset emails. An operator can add a faculty member with the role `faculty` (a faculty
+   member can only add students); that path is covered by API tests but has not been run in a browser journey.
 6. **Browser E2E against the deployed stack** (section 8) - **not yet run**; the local journeys use the emulators.
 
 ## 6. CI/CD
@@ -176,7 +238,9 @@ never into the repository or a chat.
 | `exams-ci.yml` | pull requests touching `backend/` or `frontend/`, pushes to `exams/**` and `hardening/**`, manual | exam API lint + tests on **only** the slim hash-pinned dependency set, `pip-audit` (strict), `bandit`, `npm audit --omit=dev` (strict), web lint/type-check/unit tests/staging build, and an image build that must boot and must not contain the ML stack |
 
 Neither workflow deploys. To inspect a run, open the Actions tab; to re-run, use "Re-run jobs" or `workflow_dispatch`.
-Deploys are manual: the script in step 2 for the API, and Vercel's own Git integration (or "Redeploy") for the web app.
+Deploys are manual: the script in step 2 for the API; for the web app, Vercel's Git integration builds Previews of the
+allowed branches and the production domain is updated by the production-target call in step 4 (or automatically once the
+production branch is switched, section 4).
 Regenerate the API lock after changing `backend/requirements-exams.txt`:
 `uv pip compile backend/requirements-exams.txt --universal --python-version 3.11 --generate-hashes -o backend/requirements-exams.lock`.
 
@@ -195,7 +259,7 @@ Regenerate the API lock after changing `backend/requirements-exams.txt`:
 
 | Layer | Command | Result at the time of writing |
 |---|---|---|
-| Exam API | `cd backend && PYTHONPATH=. pytest --ignore=tests/test_concurrency.py --ignore=tests/test_experience_lifecycle.py` | 574 passed, 1 skipped on the slim lock environment, on Windows and in a Linux container; the Exams CI run on the pushed branch is green (backend, security, web, image jobs) |
+| Exam API | `cd backend && PYTHONPATH=. pytest --ignore=tests/test_concurrency.py --ignore=tests/test_experience_lifecycle.py` | 575 passed, 1 skipped on the slim lock environment (re-run on 2026-10-11 on Windows, and earlier in a Linux container); the Exams CI run on the pushed branch is green (backend, security, web, image jobs) |
 | Web | `cd frontend && npm run lint && npm run type-check && npm run test:ci && npm run build` | lint 1 pre-existing warning, 57 unit tests passed, build ok |
 | Firestore rules | `python backend/scripts/check_exam_rules_emulator.py` (emulator running) | 11/11 |
 | Image | `docker build -f backend/Dockerfile.exams backend` | builds from the hash-pinned lock, boots as a non-root user, `/health/live` 200 |
