@@ -1,5 +1,14 @@
 # HireLog Exams - staging deployment (free tiers)
 
+> **Superseded in part (2026-10-11).** The exams branch (`exams/phase-11-production-qualification`) now serves the exam API
+> from the main backend (see `docs/exams/deployment-guide.md` there), so staging uses the **existing** backend Space and no
+> new Hugging Face Space is created (Hugging Face now requires a paid plan for new Docker Spaces). The Vercel project
+> `hirelog-exams-staging` is kept as the public front for that branch: it is deployed from the exams branch with
+> `NEXT_PUBLIC_EXAMS_API_BASE_URL` pointing at the existing Space. The sections below about a separate Space, `app.exam_main`
+> as its own service, the `stg_` prefix and the staging web mode describe the earlier design on this branch, which the
+> exams branch does not contain. Keeping the exam workers inside the free Firestore plan is handled in
+> `hardening/exams-spark-safe-workers`.
+
 This is the runbook for the **independent staging** of HireLog Exams: its own web app (Vercel), its own
 API (Hugging Face Docker Space) and the Firebase **Spark** (free) plan. It is written for a cohort of at
 most 80-90 students. The general exam API guide is [exams/deployment-guide.md](exams/deployment-guide.md);
