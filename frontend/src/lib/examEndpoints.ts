@@ -43,6 +43,8 @@ export type Attempt = {
   warning_count: number;
   current_slot_index: number;
   submit_receipt: { receipt_id: string; finalized_at: string } | null;
+  /** Set on the faculty candidate grid only: the student's college ID. */
+  college_id?: string | null;
 };
 
 export type PublicQuestion = {
@@ -89,6 +91,7 @@ export type ApprovedSourceSummary = {
   id: string;
   kind: "upload" | "url";
   review_status: "pending" | "approved" | "rejected";
+  institution_id?: string | null;
   url?: string;
 };
 
@@ -359,11 +362,16 @@ export const examEndpoints = {
       method: "POST",
       body: JSON.stringify({ expected_version: expectedVersion, idempotency_key: idempotencyKey, force }),
     }),
-  listAttemptsForRun: (token: string | undefined, runId: string, cursorUid?: string) =>
-    authed<{ results: Attempt[]; next_cursor_uid: string | null }>(
-      `/api/exams/v1/faculty/runs/${runId}/attempts${cursorUid ? `?cursor_uid=${encodeURIComponent(cursorUid)}` : ""}`,
+  listAttemptsForRun: (token: string | undefined, runId: string, cursorUid?: string, fresh = false) => {
+    const query = new URLSearchParams();
+    if (cursorUid) query.set("cursor_uid", cursorUid);
+    if (fresh) query.set("fresh", "true");
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return authed<{ results: Attempt[]; next_cursor_uid: string | null }>(
+      `/api/exams/v1/faculty/runs/${runId}/attempts${suffix}`,
       token
-    ),
+    );
+  },
   extendTime: (token: string | undefined, runId: string, uid: string, extraMinutes: number) =>
     authed(`/api/exams/v1/faculty/runs/${runId}/attempts/${uid}/extend`, token, {
       method: "POST",

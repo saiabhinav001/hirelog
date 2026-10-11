@@ -38,7 +38,12 @@ function DefinitionDetail() {
   const [enrollWholeRoster, setEnrollWholeRoster] = useState(false);
   const [durationMinutes, setDurationMinutes] = useState(60);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
   const [generatingBlueprintId, setGeneratingBlueprintId] = useState<string | null>(null);
+
+  // Sources are scoped to an institution: an exam may only draw on its own institution's
+  // approved material (or, for a pilot exam, on institution-less material).
+  const examSources = (sources ?? []).filter((s) => (s.institution_id ?? null) === (definition?.institution_id ?? null));
 
   const load = useCallback(async () => {
     try {
@@ -70,10 +75,20 @@ function DefinitionDetail() {
   const handleAddSourceUrl = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!sourceUrl.trim()) return;
-    const token = await getToken();
-    await examApiFetch("/api/exams/v1/faculty/kt/sources/from-url", { method: "POST", body: JSON.stringify({ url: sourceUrl.trim() }) }, token);
-    setSourceUrl("");
-    await load();
+    setSourceError(null);
+    try {
+      const token = await getToken();
+      const scope = definition?.institution_id ? `?institution_id=${encodeURIComponent(definition.institution_id)}` : "";
+      await examApiFetch(
+        `/api/exams/v1/faculty/kt/sources/from-url${scope}`,
+        { method: "POST", body: JSON.stringify({ url: sourceUrl.trim() }) },
+        token
+      );
+      setSourceUrl("");
+      await load();
+    } catch (err) {
+      setSourceError(err instanceof Error ? err.message : "Could not add that link.");
+    }
   };
 
   const handleReviewSource = async (sourceId: string, decision: "approve" | "reject") => {
@@ -120,7 +135,7 @@ function DefinitionDetail() {
   };
 
   const handleGenerateCandidates = async (blueprintId: string) => {
-    const approvedSources = (sources ?? []).filter((s) => s.review_status === "approved");
+    const approvedSources = examSources.filter((s) => s.review_status === "approved");
     if (approvedSources.length === 0) {
       setError("Approve at least one source before generating questions.");
       return;
@@ -208,9 +223,14 @@ function DefinitionDetail() {
           <input className="input-field flex-1" placeholder="https://approved-source.example.edu/notes" value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} />
           <button className="btn-secondary" type="submit">Add reference link</button>
         </form>
+        {sourceError && (
+          <p role="alert" className="mt-2 text-sm text-[var(--error)]">
+            {sourceError}
+          </p>
+        )}
         <div className="mt-4 space-y-2">
-          {sources.length === 0 && <p className="text-sm text-[var(--text-muted)]">No reference materials submitted yet.</p>}
-          {sources.map((s) => (
+          {examSources.length === 0 && <p className="text-sm text-[var(--text-muted)]">No reference materials submitted yet.</p>}
+          {examSources.map((s) => (
             <div key={s.id} className="flex items-center justify-between rounded-md border border-[var(--border)] p-3 text-sm">
               <div>
                 <span className="badge mr-2">{s.kind}</span>

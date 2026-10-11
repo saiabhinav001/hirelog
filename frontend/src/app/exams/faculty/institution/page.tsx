@@ -233,6 +233,14 @@ function InstitutionAdmin() {
               ))}
             </select>
           </div>
+          {selected && (
+            <p className="mt-3 text-sm text-[var(--text-muted)]">
+              Student sign-in link:{" "}
+              <code className="break-all" data-testid="student-signin-link">
+                {`${window.location.origin}/exams/login?institution=${selected.id}`}
+              </code>
+            </p>
+          )}
 
           <section className="card mt-4 p-5">
             <h2 className="text-lg font-semibold">Add students</h2>

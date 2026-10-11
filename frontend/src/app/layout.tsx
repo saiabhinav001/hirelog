@@ -70,11 +70,11 @@ export default function RootLayout({
           <AuthProvider>
             <ToastProvider>
               <div className="flex min-h-screen flex-col bg-[var(--bg)] text-[var(--text)]">
-                <Navbar />
+                {!EXAMS_STAGING && <Navbar />}
                 <main className="flex-1">
                   <ErrorBoundary>{children}</ErrorBoundary>
                 </main>
-                <Footer />
+                {!EXAMS_STAGING && <Footer />}
               </div>
             </ToastProvider>
           </AuthProvider>

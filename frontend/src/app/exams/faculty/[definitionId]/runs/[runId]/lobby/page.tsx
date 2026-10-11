@@ -23,6 +23,8 @@ function LobbyContent() {
   const [blueprints, setBlueprints] = useState<Blueprint[] | null>(null);
   const [assigning, setAssigning] = useState(false);
   const [assignedCount, setAssignedCount] = useState<number | null>(null);
+  const [allowReuse, setAllowReuse] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -59,6 +61,7 @@ function LobbyContent() {
   const handleAssignQuestions = async () => {
     if (!run || !blueprints) return;
     setAssigning(true);
+    setAssignError(null);
     try {
       const token = await getToken();
       let total = 0;
@@ -67,13 +70,14 @@ function LobbyContent() {
           const result = await examEndpoints.reserveVariantsForSlot(token, bp.id, slot.slot_index, {
             run_id: runId,
             uids: run.enrolled_uids,
+            allow_balanced_reuse: allowReuse,
           });
           total += Object.keys(result.assignments).length;
         }
       }
       setAssignedCount(total);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not assign questions to students.");
+      setAssignError(err instanceof Error ? err.message : "Could not assign questions to students.");
     } finally {
       setAssigning(false);
     }
@@ -118,9 +122,21 @@ function LobbyContent() {
           Before releasing, assign each enrolled student their own copy of the approved questions. This can be
           re-run safely — existing assignments are kept and only missing ones are filled in.
         </p>
+        <label className="mt-3 flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={allowReuse} onChange={(e) => setAllowReuse(e.target.checked)} />
+          <span>
+            Let students share question variants when there are fewer approved variants than students. Each variant is
+            still used as evenly as possible; leave this off if every student must get a different one.
+          </span>
+        </label>
         <button className="btn-secondary mt-2" onClick={handleAssignQuestions} disabled={assigning || !blueprints || blueprints.length === 0}>
           {assigning ? "Assigning…" : "Assign questions to students"}
         </button>
+        {assignError && (
+          <p role="alert" className="mt-2 text-sm text-[var(--error)]">
+            {assignError}
+          </p>
+        )}
         {assignedCount !== null && (
           <p className="mt-1 text-xs text-[var(--text-muted)]">{assignedCount} assignment(s) confirmed.</p>
         )}

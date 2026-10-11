@@ -44,3 +44,7 @@ yarn-error.log*
 
 # ── Generated operational reports ───────────────────────────────────────────
 docs/reports/*.json
+
+# ── Local end-to-end rehearsal (emulators, logs, throwaway keys) ─────────────
+/.e2e/
+frontend/test-results-exams-staging/

@@ -44,6 +44,11 @@ const examsApiConnectSrc = [
   ...examsApiHttpBases.map((b) => b.replace(/^http/, "ws")),
 ];
 
+// Local/CI rehearsal against the Firebase Auth emulator (see src/lib/firebase.ts).
+const authEmulatorConnectSrc = process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL
+  ? [process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL.replace(/\/+$/, "")]
+  : [];
+
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -57,13 +62,17 @@ const contentSecurityPolicy = [
     "connect-src 'self'",
     ...apiConnectSrc,
     ...examsApiConnectSrc,
+    ...authEmulatorConnectSrc,
     "https://*.googleapis.com",
     "https://*.firebaseio.com",
     "https://identitytoolkit.googleapis.com",
     "https://securetoken.googleapis.com",
     "https://*.firebaseapp.com",
   ].join(" "),
-  "frame-src 'self' https://*.firebaseapp.com https://accounts.google.com https://apis.google.com",
+  [
+    "frame-src 'self' https://*.firebaseapp.com https://accounts.google.com https://apis.google.com",
+    ...authEmulatorConnectSrc,
+  ].join(" "),
   "form-action 'self'",
 ].join("; ");
 
@@ -83,6 +92,8 @@ const nextConfig: NextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          // A staging deployment must never be indexed.
+          ...(examsStaging ? [{ key: "X-Robots-Tag", value: "noindex, nofollow" }] : []),
           {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",

@@ -55,6 +55,9 @@ export default function ExamsLoginPage() {
   const [resendIn, setResendIn] = useState(0);
 
   useEffect(() => {
+    // A sign-in link shared by the institution carries its ID, so students never type it.
+    const linked = new URLSearchParams(window.location.search).get("institution");
+    if (linked) setInstitutionId(linked.trim());
     try {
       const notice = window.sessionStorage.getItem(EXAM_SESSION_NOTICE_KEY);
       if (notice) {

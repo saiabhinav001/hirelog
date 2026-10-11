@@ -31,12 +31,12 @@ function ControlRoomContent() {
   const [acting, setActing] = useState(false);
 
   const loadPage = useCallback(
-    async (cursorUid?: string) => {
+    async (cursorUid?: string, fresh = false) => {
       try {
         const token = await getToken();
         const [runData, attemptsData, appealsData] = await Promise.all([
           examEndpoints.getRun(token, runId),
-          examEndpoints.listAttemptsForRun(token, runId, cursorUid),
+          examEndpoints.listAttemptsForRun(token, runId, cursorUid, fresh),
           examEndpoints.listAppealsForRun(token, runId),
         ]);
         setRun(runData);
@@ -120,12 +120,15 @@ function ControlRoomContent() {
       <div className="card mt-4 overflow-x-auto p-0">
         <div className="flex items-center justify-between border-b border-[var(--border)] p-3 text-xs text-[var(--text-muted)]">
           <span>Candidates ({attempts.length} shown)</span>
-          <span>Snapshot as of {fetchedAt ? new Date(fetchedAt).toLocaleTimeString() : "—"}</span>
+          <span className="flex items-center gap-3">
+            Snapshot as of {fetchedAt ? new Date(fetchedAt).toLocaleTimeString() : "—"}
+            <button className="btn-secondary" onClick={() => loadPage(cursor, true)}>Refresh</button>
+          </span>
         </div>
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-[var(--text-muted)]">
-              <th className="p-3">UID</th>
+              <th className="p-3">Student</th>
               <th className="p-3">Status</th>
               <th className="p-3">Warnings</th>
               <th className="p-3">Question</th>
@@ -135,7 +138,7 @@ function ControlRoomContent() {
           <tbody>
             {attempts.map((a) => (
               <tr key={a.uid} className="border-t border-[var(--border)]">
-                <td className="p-3 font-mono text-xs">{a.uid}</td>
+                <td className="p-3 font-mono text-xs">{a.college_id ?? a.uid}</td>
                 <td className="p-3"><span className={`badge ${statusBadge(a.status)}`}>{a.status}</span></td>
                 <td className="p-3">{a.warning_count}</td>
                 <td className="p-3">{a.current_slot_index + 1}</td>
