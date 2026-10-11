@@ -4,12 +4,15 @@ it, bypassing the OTP roster flow — the workaround docs/exams/user-guide.md
 §2 recommends for local demo/testing, since students have no email-based
 bootstrap the way faculty does via EXAM_FACULTY_EMAILS.
 
-Usage (from backend/):
+Usage (from backend/), with a throwaway account of your choosing:
+    $env:DEMO_STUDENT_EMAIL = "you+demo@example.com"
+    $env:DEMO_STUDENT_PASSWORD = "<choose a password>"
     .venv\\Scripts\\python.exe scripts\\seed_demo_student.py
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,8 +26,8 @@ from app.core.firebase import db, initialize_firebase  # noqa: E402
 from app.domain.institution.models import Institution, Membership, MembershipStatus, RoleScope  # noqa: E402
 from app.domain.institution.repository import InstitutionRepository, MembershipRepository  # noqa: E402
 
-STUDENT_EMAIL = "demo.student@hirelog.test"
-STUDENT_PASSWORD = "HirelogDemo!2026"
+STUDENT_EMAIL = os.environ.get("DEMO_STUDENT_EMAIL", "").strip()
+STUDENT_PASSWORD = os.environ.get("DEMO_STUDENT_PASSWORD", "")
 STUDENT_NAME = "Demo Student"
 INSTITUTION_ID = "demo-university"
 INSTITUTION_NAME = "Demo University"
@@ -67,6 +70,8 @@ def upsert_student_membership(uid: str, institution_id: str) -> None:
 
 
 def main() -> None:
+    if not STUDENT_EMAIL or not STUDENT_PASSWORD:
+        sys.exit("Set DEMO_STUDENT_EMAIL and DEMO_STUDENT_PASSWORD in the environment first.")
     initialize_firebase()
     uid = get_or_create_student_uid()
     institution_id = get_or_create_institution()
@@ -74,7 +79,6 @@ def main() -> None:
     print(f"uid={uid}")
     print(f"institution_id={institution_id}")
     print(f"email={STUDENT_EMAIL}")
-    print(f"password={STUDENT_PASSWORD}")
 
 
 if __name__ == "__main__":
