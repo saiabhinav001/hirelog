@@ -83,7 +83,8 @@ def resolve_and_validate_host(hostname: str) -> list[str]:
             continue
         if _is_disallowed_ip(ip):
             raise UnsafeUrlError(f"host {hostname!r} resolves to a disallowed address ({raw_ip})")
-        resolved_ips.append(raw_ip)
+        if raw_ip not in resolved_ips:  # getaddrinfo repeats an address once per socket type on Linux
+            resolved_ips.append(raw_ip)
 
     if not resolved_ips:
         raise UnsafeUrlError(f"host {hostname!r} did not resolve to any usable address")
