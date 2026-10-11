@@ -168,6 +168,30 @@ def test_submit_double_click_same_key_returns_identical_receipt() -> None:
     assert second.receipt.receipt_id == first.receipt.receipt_id
 
 
+def test_submit_retry_before_finalization_returns_the_same_receipt() -> None:
+    """A lost response followed by a retry can arrive while the attempt is SUBMITTED
+    (the outbox has not finalized it yet): it must not be told the attempt is not in progress."""
+    run = _run()
+    first = decide_submit(
+        attempt=_attempt(), run=run, now=NOW, idempotency_key="s1", client_epoch=1,
+        expected_draft_versions={"q1": 2}, current_draft_versions={"q1": 2},
+    )
+    submitted_attempt = _attempt(status=AttemptStatus.SUBMITTED, submit_receipt=first.receipt)
+    retry = decide_submit(
+        attempt=submitted_attempt, run=run, now=NOW + timedelta(seconds=1), idempotency_key="s1",
+        client_epoch=1, expected_draft_versions={}, current_draft_versions={"q1": 2},
+    )
+    assert retry.accepted and retry.reused_existing_receipt
+    assert retry.receipt.receipt_id == first.receipt.receipt_id
+
+    other = decide_submit(
+        attempt=submitted_attempt, run=run, now=NOW, idempotency_key="DIFFERENT", client_epoch=1,
+        expected_draft_versions={}, current_draft_versions={"q1": 2},
+    )
+    assert not other.accepted
+    assert other.conflict_reason == "attempt_not_in_progress"
+
+
 def test_submit_different_key_after_finalized_is_explicit_conflict() -> None:
     run = _run()
     first = decide_submit(

@@ -128,10 +128,11 @@ def decide_submit(
 ) -> SubmitOutcome:
     # Immutability: a finalized attempt is never reopened, by anyone,
     # including faculty preview/navigation (contract #4).
-    if attempt.status == AttemptStatus.FINALIZED:
+    if attempt.status in (AttemptStatus.SUBMITTED, AttemptStatus.FINALIZED):
         existing = attempt.submit_receipt
         if existing is not None and existing.idempotency_key == idempotency_key:
             return SubmitOutcome(True, existing, reused_existing_receipt=True)
+    if attempt.status == AttemptStatus.FINALIZED:
         return SubmitOutcome(False, None, conflict_reason="already_finalized")
 
     if attempt.status == AttemptStatus.BLOCKED:
