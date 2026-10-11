@@ -40,6 +40,17 @@ class LookupCache:
         with self._lock:
             self._data.pop(key, None)
 
+    def invalidate_where(self, predicate: Callable[[Any], bool]) -> None:
+        with self._lock:
+            for key in [key for key in self._data if predicate(key)]:
+                del self._data[key]
+
+    def age(self, key: Any) -> Optional[float]:
+        """Seconds since `key` was loaded, or None when it is not cached."""
+        with self._lock:
+            hit = self._data.get(key)
+            return None if hit is None else time.monotonic() - hit[0]
+
     def clear(self) -> None:
         with self._lock:
             self._data.clear()

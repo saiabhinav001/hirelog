@@ -28,6 +28,7 @@ from app.api.exams_dependencies import (
 from app.core.config import settings
 from app.core.firebase import db
 from app.core.lookup_cache import LookupCache as _LookupCache
+from app.domain.live.publisher import on_attempt_change
 
 logger = logging.getLogger("hirelog.exams.scope")
 
@@ -50,11 +51,40 @@ _owners = _LookupCache(max_entries=2048)
 _lockdown = _LookupCache(max_entries=256, ttl_seconds=15.0)
 # Faculty candidate-grid pages: every refetch of a 90-student grid is ~90 reads.
 attempt_pages = _LookupCache(max_entries=64, ttl_seconds=max(settings.EXAM_ATTEMPT_LIST_CACHE_SECONDS, 0.001))
+# A forced refresh is honoured only for an entry at least this old, so a refresh
+# button cannot be used to re-read the whole grid in a loop.
+ATTEMPT_PAGE_MIN_REFRESH_SECONDS = 3.0
+# uid -> college ID for one institution (a roster listing is one read per member, so
+# it is kept for a few minutes; a student's college ID never changes).
+_college_ids = _LookupCache(max_entries=64, ttl_seconds=300.0)
+
+
+def _drop_attempt_pages(run_id: str) -> None:
+    attempt_pages.invalidate_where(lambda key: key[0] == run_id)
+
+
+# Any committed attempt change (admit, submit, block, extension, ...) makes the cached
+# grid for that run stale: drop it so the next refetch shows the change immediately.
+on_attempt_change(_drop_attempt_pages)
 
 
 def reset_caches() -> None:
-    for cache in (_runs, _owners, _lockdown, attempt_pages):
+    for cache in (_runs, _owners, _lockdown, attempt_pages, _college_ids):
         cache.clear()
+
+
+def college_ids_by_uid(institution_id: Optional[str]) -> dict[str, str]:
+    """Which college ID belongs to which account in an institution (empty for a pilot
+    exam, which has no roster). Lets staff screens show people, not opaque ids."""
+    if institution_id is None:
+        return {}
+
+    def load() -> dict[str, str]:
+        from app.domain.institution.repository import MembershipRepository
+
+        return {m.uid: m.identity_key for m in MembershipRepository(db).list_by_institution(institution_id) if m.uid}
+
+    return _college_ids.get(institution_id, load)
 
 
 # ── resolvers: entity id -> owning institution (None = pre-institution/pilot) ─

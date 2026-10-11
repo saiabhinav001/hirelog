@@ -17,7 +17,15 @@ from pydantic import BaseModel, Field
 
 from app.api.exams_dependencies import can_act_as_faculty, require_exam_faculty, require_exams_enabled
 from app.api.exams_errors import raise_for_domain_error
-from app.api.exams_scope import assert_faculty_scope, attempt_pages, make_faculty_scope_guard, resolve_creation_institution
+from app.api.exams_scope import (
+    ATTEMPT_PAGE_MIN_REFRESH_SECONDS,
+    assert_faculty_scope,
+    attempt_pages,
+    college_ids_by_uid,
+    make_faculty_scope_guard,
+    resolve_creation_institution,
+    run_access,
+)
 from app.core import background
 from app.core.firebase import db
 from app.domain.exams.commands import ExamCommandService
@@ -236,14 +244,31 @@ def list_blueprints_for_definition(definition_id: str, user: dict = Depends(requ
 
 
 @router.get("/runs/{run_id}/attempts")
-def list_attempts_for_run(run_id: str, user: dict = Depends(require_exam_faculty), limit: int = 100, cursor_uid: str | None = None) -> dict:
+def list_attempts_for_run(
+    run_id: str,
+    user: dict = Depends(require_exam_faculty),
+    limit: int = 100,
+    cursor_uid: str | None = None,
+    fresh: bool = False,
+) -> dict:
     """Candidate grid data — paginated (contract: 'pagination/virtualization').
     Served from a short-lived cache: a refetch burst (many live events, several
-    tabs) must not re-read every attempt each time."""
+    tabs) must not re-read every attempt each time. Any committed attempt change
+    drops the cache, and `fresh=true` forces a re-read when the cached page is at
+    least ATTEMPT_PAGE_MIN_REFRESH_SECONDS old."""
     bounded_limit = max(1, min(limit, 200))
+    key = (run_id, bounded_limit, cursor_uid)
 
     def load() -> dict:
         attempts, next_cursor = AttemptRepository(db).list_page_for_run(run_id, limit=bounded_limit, cursor_uid=cursor_uid)
-        return {"results": [a.model_dump(mode="json") for a in attempts], "next_cursor_uid": next_cursor}
+        college_ids = college_ids_by_uid(run_access(run_id).institution_id)
+        return {
+            "results": [{**a.model_dump(mode="json"), "college_id": college_ids.get(a.uid)} for a in attempts],
+            "next_cursor_uid": next_cursor,
+        }
 
-    return attempt_pages.get((run_id, bounded_limit, cursor_uid), load)
+    if fresh:
+        age = attempt_pages.age(key)
+        if age is not None and age >= ATTEMPT_PAGE_MIN_REFRESH_SECONDS:
+            attempt_pages.invalidate(key)
+    return attempt_pages.get(key, load)
