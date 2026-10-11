@@ -52,6 +52,17 @@ It is not the production HireLog API. Health: `/health/live`, `/health/ready`.
 """
 
 _BUNDLE_IGNORED_DIRS = {"__pycache__", ".pytest_cache", ".ruff_cache", ".venv"}
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def normalize_operator_emails(raw: str) -> str:
+    """The API splits EXAM_FACULTY_EMAILS on commas only; a list separated by spaces or semicolons would match
+    nobody and lock every operator out without any error."""
+    emails = list(dict.fromkeys(item.lower() for item in re.split(r"[,;\s]+", raw or "") if item))
+    for item in emails:
+        if not _EMAIL_PATTERN.fullmatch(item):
+            raise SystemExit(f"--faculty-emails: {item!r} is not an email address")
+    return ",".join(emails)
 
 
 def check_space_name(name: str) -> None:
@@ -129,7 +140,7 @@ def build_settings(args: argparse.Namespace, service_account_json: str) -> tuple
     secrets = {"FIREBASE_SERVICE_ACCOUNT_JSON": service_account_json}
     optional_secrets = {
         "EXAM_OTP_HMAC_SECRET": args.otp_hmac_secret,
-        "EXAM_FACULTY_EMAILS": args.faculty_emails,
+        "EXAM_FACULTY_EMAILS": normalize_operator_emails(args.faculty_emails),
         "EXAM_OTP_SMTP_USERNAME": args.smtp_username,
         "EXAM_OTP_SMTP_PASSWORD": args.smtp_password,
     }
@@ -255,6 +266,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print(f"[deploy] bundle: {len(files)} files ({', '.join(f for f in files if '/' not in f)}, app/...)")
         print("[deploy] variables:", ", ".join(sorted(variables)))
         print("[deploy] secrets (values never printed):", ", ".join(sorted(secrets)))
+        if secrets.get("EXAM_FACULTY_EMAILS"):
+            print(f"[deploy] platform operators: {len(secrets['EXAM_FACULTY_EMAILS'].split(','))}")
         if args.dry_run:
             print("[deploy] dry run: nothing was uploaded")
             return 0

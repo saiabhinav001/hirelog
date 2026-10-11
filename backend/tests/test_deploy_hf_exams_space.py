@@ -114,9 +114,25 @@ def test_sensitive_values_are_secrets_not_public_variables() -> None:
 def test_dry_run_prints_the_plan_without_secret_values(capsys) -> None:
     assert deploy.main(_argv()) == 0
     out = capsys.readouterr().out
-    assert "dry run" in out and "FIREBASE_SERVICE_ACCOUNT_JSON" in out
+    assert "dry run" in out and "FIREBASE_SERVICE_ACCOUNT_JSON" in out and "platform operators: 1" in out
     for secret_value in ("TOP-SECRET-KEY", "HMAC-SECRET-VALUE", "operator@example.edu"):
         assert secret_value not in out
+
+
+def test_operator_emails_become_the_comma_list_the_api_expects() -> None:
+    expected = "a@x.edu,b@y.com,c@z.org"
+    assert deploy.normalize_operator_emails("a@x.edu,b@y.com,c@z.org") == expected
+    assert deploy.normalize_operator_emails("A@X.edu b@y.com;  C@z.org") == expected  # the API would match none of these as given
+    assert deploy.normalize_operator_emails("a@x.edu,a@x.edu,\nb@y.com c@z.org") == expected
+    assert deploy.normalize_operator_emails("") == ""
+    with pytest.raises(SystemExit, match="not an email address"):
+        deploy.normalize_operator_emails("a@x.edu, nobody")
+
+
+def test_several_operators_reach_the_secret_as_one_comma_list() -> None:
+    args = deploy.parse_args(_argv(**{"--faculty-emails": "One@Example.edu Two@example.edu"}))
+    _, secrets = deploy.build_settings(args, SERVICE_ACCOUNT)
+    assert secrets["EXAM_FACULTY_EMAILS"] == "one@example.edu,two@example.edu"
 
 
 def test_deploy_refuses_a_service_account_from_another_project() -> None:

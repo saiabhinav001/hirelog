@@ -9,14 +9,15 @@
     -ServiceAccountPath C:\keys\exams-staging-api.json -AllowedOrigin https://hirelog-exams-staging.vercel.app `
     -FacultyEmails me@gmail.com -SmtpHost smtp.example.com -SmtpFrom exams@example.com -DryRun
 
-  Drop -DryRun to deploy. Needs `pip install huggingface_hub` for the real run.
+  Drop -DryRun to deploy. Needs `pip install huggingface_hub` for the real run. -FacultyEmails takes several
+  platform operators: -FacultyEmails a@x.com,b@y.com (or one quoted, comma-separated string).
 #>
 param(
   [Parameter(Mandatory)][string]$Owner,
   [Parameter(Mandatory)][string]$FirebaseProjectId,
   [Parameter(Mandatory)][string]$ServiceAccountPath,
   [Parameter(Mandatory)][string]$AllowedOrigin,
-  [string]$FacultyEmails = "",
+  [string[]]$FacultyEmails = @(),
   [string]$CollectionPrefix = "stg_",
   [string]$SmtpHost = "",
   [int]$SmtpPort = 587,
@@ -54,7 +55,7 @@ try {
     '--allowed-origins', $AllowedOrigin,
     '--collection-prefix', $CollectionPrefix
   )
-  if ($FacultyEmails) { $arguments += @('--faculty-emails', $FacultyEmails) }
+  if ($FacultyEmails) { $arguments += @('--faculty-emails', ($FacultyEmails -join ',')) }
   if ($SmtpHost) { $arguments += @('--smtp-host', $SmtpHost, '--smtp-port', "$SmtpPort") }
   if ($SmtpFrom) { $arguments += @('--smtp-from', $SmtpFrom) }
   if ($SmtpUseSsl) { $arguments += '--smtp-use-ssl' }
