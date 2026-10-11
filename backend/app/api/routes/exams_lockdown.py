@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.api.exams_dependencies import require_exams_enabled
 from app.api.exams_scope import require_run_scope
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.domain.lockdown.service import LockdownService
 
 router = APIRouter(

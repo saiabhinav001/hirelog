@@ -30,7 +30,7 @@ from app.api.exams_dependencies import (
     resolve_principal,
 )
 from app.api.exams_scope import require_institution_admin_scope, require_institution_roster_scope
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.domain.authz.policy import can_administer_institution, max_grantable_role_scope
 from app.domain.authz.staff_binding import AuthzAuditRepository, build_audit_event
 from app.domain.institution.auth_service import InstitutionAuthService

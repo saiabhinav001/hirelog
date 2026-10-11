@@ -37,7 +37,7 @@ from uuid import uuid4
 root = Path(__file__).resolve().parents[1]
 sys.path.append(str(root))
 
-from app.core.firebase import db  # noqa: E402
+from app.core.firebase import exam_db as db  # noqa: E402
 from app.domain.exams.clock import system_clock  # noqa: E402
 from app.domain.exams.commands import ExamCommandService  # noqa: E402
 from app.domain.exams.policy import ExamPolicy  # noqa: E402

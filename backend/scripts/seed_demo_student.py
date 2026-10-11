@@ -22,7 +22,7 @@ sys.path.append(str(root))
 
 from firebase_admin import auth as firebase_auth  # noqa: E402
 
-from app.core.firebase import db, initialize_firebase  # noqa: E402
+from app.core.firebase import exam_db as db, initialize_firebase  # noqa: E402
 from app.domain.institution.models import Institution, Membership, MembershipStatus, RoleScope  # noqa: E402
 from app.domain.institution.repository import InstitutionRepository, MembershipRepository  # noqa: E402
 

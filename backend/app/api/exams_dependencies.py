@@ -21,7 +21,7 @@ from fastapi import Depends, HTTPException, Request, status
 
 from app.api.dependencies import get_current_user_uncached
 from app.core.config import settings
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.domain.authz.policy import (
     ExamPrincipal,
     ExamRole,

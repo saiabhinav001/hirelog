@@ -22,7 +22,7 @@ from app.api.exams_scope import (
     validate_enrollment_scope,
 )
 from app.core.config import settings
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.core.rate_limit import SlidingWindowLimiter
 from app.domain.exams.commands import ExamCommandService
 from app.domain.exams.finalization import ExamFinalizationSweeper

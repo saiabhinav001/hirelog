@@ -154,7 +154,12 @@ def get_current_user_uncached(
     name = decoded.get("name") or decoded.get("user_id")
     if not uid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload.")
-    user_data = _get_or_create_user(uid, email, name)
+    if settings.exam_data_is_separate():
+        # Exam data has its own Firebase project: identity comes from the token alone, so an exam request
+        # never reads or writes the live site's users collection (and its free quota).
+        user_data = {"uid": uid}
+    else:
+        user_data = _get_or_create_user(uid, email, name)
     user_data.setdefault("email", email or "")
     user_data.setdefault("name", name or "")
     user_data["auth_time"] = decoded.get("auth_time")

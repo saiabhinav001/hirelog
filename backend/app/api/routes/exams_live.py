@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from app.api.exams_dependencies import get_current_exam_user, require_exams_enabled, resolve_principal
 from app.api.exams_scope import user_can_manage_run
 from app.core.config import settings
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.domain.authz.policy import can_participate_as_student
 from app.domain.exams.commands import ExamCommandService
 from app.domain.live.connection_manager import Connection, live_connection_manager

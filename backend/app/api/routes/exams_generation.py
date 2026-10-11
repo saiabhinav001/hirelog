@@ -31,7 +31,7 @@ from app.api.exams_scope import (
     validate_variant_targets,
 )
 from app.core.config import settings
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.domain.exams.repository import ExamDefinitionRepository
 from app.domain.generation.blueprint_spec import BlueprintSpec, expand_spec
 from app.domain.generation.capacity import compute_capacity

@@ -21,7 +21,7 @@ from app.api.exams_dependencies import (
 )
 from app.api.exams_errors import raise_for_conflict_reason, raise_for_domain_error
 from app.core.config import settings
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.core.rate_limit import SlidingWindowLimiter
 from app.domain.authz.policy import can_participate_as_student
 from app.domain.exams.commands import ExamCommandService

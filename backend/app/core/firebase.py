@@ -79,5 +79,61 @@ class _LazyDB:
 
 db = _LazyDB()
 
+_EXAM_APP_NAME = "exams"
+_exam_db = None
 
-__all__ = ["db", "get_db", "firebase_auth"]
+
+def _build_exam_credential() -> credentials.Certificate:
+    """Credential for the separate exam project; the main credential is reused only against the local emulator."""
+    if settings.EXAM_FIREBASE_SERVICE_ACCOUNT_JSON:
+        logger.info("Loading exam Firebase credentials from EXAM_FIREBASE_SERVICE_ACCOUNT_JSON env var")
+        return credentials.Certificate(json.loads(settings.EXAM_FIREBASE_SERVICE_ACCOUNT_JSON))
+
+    if settings.EXAM_FIREBASE_SERVICE_ACCOUNT_PATH:
+        service_path = Path(settings.EXAM_FIREBASE_SERVICE_ACCOUNT_PATH)
+        if not service_path.is_absolute():
+            service_path = (BASE_DIR / service_path).resolve()
+        if not service_path.exists():
+            raise FileNotFoundError(f"Exam service account file not found: {service_path}")
+        logger.info("Loading exam Firebase credentials from file: %s", service_path)
+        return credentials.Certificate(str(service_path))
+
+    if os.environ.get("FIRESTORE_EMULATOR_HOST"):
+        return _build_credential()
+
+    raise ValueError(
+        "EXAM_FIREBASE_PROJECT_ID is set but no exam credentials were provided. "
+        "Set EXAM_FIREBASE_SERVICE_ACCOUNT_JSON (production) or EXAM_FIREBASE_SERVICE_ACCOUNT_PATH (local dev)."
+    )
+
+
+def get_exam_db() -> firestore.Client:
+    """Firestore client for exam data: the separate exam project when configured, otherwise the shared client."""
+    global _exam_db
+    if not settings.exam_data_is_separate():
+        return get_db()
+    if _exam_db is None:
+        get_db()  # the main app (Auth and legacy data) must exist first; it takes the same lock
+        with _firebase_init_lock:
+            if _exam_db is None:
+                try:
+                    app = firebase_admin.get_app(_EXAM_APP_NAME)
+                except ValueError:
+                    app = firebase_admin.initialize_app(
+                        _build_exam_credential(), {"projectId": settings.EXAM_FIREBASE_PROJECT_ID}, name=_EXAM_APP_NAME
+                    )
+                _exam_db = firestore.client(app=app)
+                logger.info("Exam data uses its own Firebase project %r", settings.EXAM_FIREBASE_PROJECT_ID)
+    return _exam_db
+
+
+class _LazyExamDB:
+    """Proxy that resolves the exam Firestore client on first attribute access."""
+    def __getattr__(self, name):
+        return getattr(get_exam_db(), name)
+
+
+exam_db = _LazyExamDB()
+
+
+__all__ = ["db", "get_db", "exam_db", "get_exam_db", "firebase_auth"]

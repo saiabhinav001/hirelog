@@ -21,7 +21,7 @@ from typing import Optional, Sequence
 from fastapi import Depends, HTTPException, status
 
 from app.api.exams_dependencies import require_exam_faculty, resolve_principal
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.domain.authz.policy import (
     InstitutionRequiredError,
     ScopeDeniedError,

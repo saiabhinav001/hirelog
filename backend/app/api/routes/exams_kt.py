@@ -22,7 +22,7 @@ from app.api.exams_dependencies import require_exam_faculty, require_exams_enabl
 from app.api.exams_errors import raise_for_domain_error
 from app.api.exams_scope import authorize_upload, filter_accessible_sources, require_source_scope, require_upload_scope
 from app.core.config import settings
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.core.rate_limit import SlidingWindowLimiter
 from app.domain.kt.file_validation import validate_fetched_bytes, validate_upload_bytes
 from app.domain.kt.ingestion import DuplicateUploadError, KtIngestionService, UploadLimitError

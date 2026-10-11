@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.api.exams_dependencies import get_current_exam_user, require_exams_enabled
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.domain.institution.auth_service import InstitutionAuthService
 from app.domain.institution.errors import AccountAlreadyLinkedError, IdentityAlreadyLinkedError
 

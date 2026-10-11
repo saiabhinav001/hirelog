@@ -153,3 +153,18 @@ Every worker poll costs at least one Firestore read even when nothing is waiting
 The outbox, judge, proctoring and finalization workers now poll at their minimum interval only while they find work, and back off while idle (`EXAM_OUTBOX_POLL_*`, `EXAM_JUDGE_SWEEP_*`, `EXAM_PROCTORING_SWEEP_*` and `EXAM_FINALIZATION_SWEEP_*` in `.env.example`; the defaults keep the old minimums, so exam-time latency is unchanged). Work done in the same process wakes them at once: admission, submit, run commands, terminate and recover, KT uploads, judge runs and proctoring observations. The finalization sweeper sleeps until the earliest known attempt deadline (never longer than `EXAM_FINALIZATION_SWEEP_MAX_INTERVAL_SECONDS`) and reads drafts only for attempts already past their deadline, which is the only case in which it can seal one. Work created by a different process cannot wake these loops, so with several instances a job can wait up to the maximum interval; the defaults suit one instance.
 
 The request path is separate: a 90-student burst (one question, three draft saves each, a synchronized submit) cost about 4,300 reads and 800 writes in total here, including one read of the legacy `users/{uid}` document per request (`get_current_user_uncached`), which also creates that document for a first-time user. A real exam has more questions and saves, so measure it before relying on the free plan.
+
+### Keeping exam data in its own free Firebase project
+
+Free quotas are per project, so a project shared with the live site means exams and the site spend the same daily budget, and when the site uses it up every exam read also fails with `429 Quota exceeded`. Google enforces "read operations per project per day"; on the one day observed this ran about 1.9 times the document reads shown in the Firebase console's Usage tab, so check Google Cloud console > APIs & Services > Cloud Firestore API > Quotas rather than that tab.
+
+Set these on the backend to keep all exam data in a second (also free) project. Sign-in stays on the main project, and the second project needs only Firestore (no Auth, no Storage, no composite indexes):
+
+| Variable | Value |
+|---|---|
+| `EXAM_FIREBASE_PROJECT_ID` | the new project's id |
+| `EXAM_FIREBASE_SERVICE_ACCOUNT_JSON` (secret) or `EXAM_FIREBASE_SERVICE_ACCOUNT_PATH` | a service-account key for the new project, as a one-line JSON string or a file path |
+
+With `EXAM_FIREBASE_PROJECT_ID` empty (the default) nothing changes. When it is set, every exam module and worker uses the exam project, and the exam identity dependency stops reading and creating `users/{uid}` in the main project, so an exam request never touches the live site's database. Existing exam data is not moved if you switch later. A project id equal to `FIREBASE_PROJECT_ID` is treated as "not separate", and a missing key fails at the first exam request with a clear error.
+
+Checked on local emulators with two projects: a 90-student burst (three draft saves each, synchronized submit) returned 200 for every request with 90 distinct receipts, all exam collections existed only in the exam project, and no student profile document appeared in the main project.

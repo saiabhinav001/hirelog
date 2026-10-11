@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Response
 
 from app.api.exams_dependencies import require_exam_super_admin, require_exams_enabled
 from app.core.config import settings
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.domain.exams.clock import system_clock
 from app.domain.exams.ops_health import collect_queue_health
 

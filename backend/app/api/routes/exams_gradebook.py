@@ -19,7 +19,7 @@ from app.api.exams_errors import raise_for_domain_error
 from app.api.exams_scope import require_export_job_scope, require_grade_appeal_scope, require_run_scope
 from app.api.routes.exams_proctoring import _storage
 from app.core.config import settings
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.domain.exams.repository import ExamRunRepository
 from app.domain.gradebook.aggregation_service import GradebookAggregationService
 from app.domain.gradebook.export_service import GradebookExportService

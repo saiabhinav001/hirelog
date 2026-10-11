@@ -40,7 +40,7 @@ from app.api.routes import (
 from app.core import background
 from app.core.background import AdaptivePoller
 from app.core.config import settings
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.core.logging_config import configure_logging
 from app.domain.exams.clock import system_clock
 from app.domain.exams.outbox import CompositeOutboxHandler, LoggingNoopHandler, drain_outbox_once

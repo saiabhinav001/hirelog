@@ -24,7 +24,7 @@ from app.api.exams_dependencies import (
 from app.api.exams_errors import raise_for_domain_error
 from app.api.exams_scope import require_proctoring_appeal_scope, require_run_scope, require_snapshot_scope
 from app.core.config import settings
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.core.rate_limit import SlidingWindowLimiter
 from app.domain.exams.repository import AttemptRepository
 from app.domain.live.publisher import publish_attempt_status_changed

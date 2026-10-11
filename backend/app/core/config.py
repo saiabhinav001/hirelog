@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     FIREBASE_SERVICE_ACCOUNT_PATH: Optional[str] = None
     FIREBASE_PROJECT_ID: Optional[str] = None
 
+    # Optional second Firebase project that holds ALL exam data, so exams never share the live site's free
+    # Firestore quota. Empty = exam data lives in the main project. Sign-in (Auth) stays on the main project.
+    EXAM_FIREBASE_PROJECT_ID: Optional[str] = None
+    EXAM_FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
+    EXAM_FIREBASE_SERVICE_ACCOUNT_PATH: Optional[str] = None
+
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://localhost:3002"
 
     EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
@@ -291,6 +297,10 @@ class Settings(BaseSettings):
             for email in self.EXAM_FACULTY_EMAILS.split(",")
             if email.strip()
         }
+
+    def exam_data_is_separate(self) -> bool:
+        project = (self.EXAM_FIREBASE_PROJECT_ID or "").strip()
+        return bool(project) and project != (self.FIREBASE_PROJECT_ID or "").strip()
 
     def exam_super_admin_emails_set(self) -> set[str]:
         return {

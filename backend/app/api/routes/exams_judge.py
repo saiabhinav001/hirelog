@@ -21,7 +21,7 @@ from app.api.exams_scope import (
     require_short_answer_review_scope,
     require_submission_scope,
 )
-from app.core.firebase import db
+from app.core.firebase import exam_db as db
 from app.domain.authz.staff_binding import AuthzAuditRepository, build_audit_event
 from app.domain.exams.student_service import ExamStudentService
 from app.domain.generation.repository import GenerationRepository, VariantAssignmentRepository

@@ -340,7 +340,7 @@ def verify_firestore(run_id: str) -> dict:
     """Reads the run's attempts and outbox straight from the Firestore the target used (emulator or staging): states, one
     outbox entry per finalized attempt, and how long each entry waited (created -> processed)."""
     sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from app.core.firebase import db  # noqa: PLC0415
+    from app.core.firebase import exam_db as db  # noqa: PLC0415
 
     attempts = [d.to_dict() for d in db.collection("exam_runs").document(run_id).collection("attempts").stream()]
     outbox = [d.to_dict() for d in db.collection("exam_outbox").where("run_id", "==", run_id).stream()]
