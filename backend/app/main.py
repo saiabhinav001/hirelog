@@ -121,10 +121,19 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_bg_search_index_bootstrap, daemon=True).start()
     logger.info("Background tasks started")
 
+    if settings.EXAMS_ENABLED:
+        from app.exam_main import start_exam_workers
+
+        start_exam_workers()
+
     logger.info("Startup complete — ENV=%s", settings.ENV)
     yield
     # ── Shutdown ─────────────────────────────────────────────────────────────
     logger.info("Shutting down gracefully")
+    if settings.EXAMS_ENABLED:
+        from app.exam_main import stop_exam_workers
+
+        stop_exam_workers()
 
 
 app = FastAPI(title=settings.API_TITLE, lifespan=lifespan)
@@ -148,7 +157,12 @@ async def request_context_middleware(request: Request, call_next):
     request_id_var.set(request_id)  # propagates to every log line for this request
     started_at = time.perf_counter()
 
-    if request.method in _WRITE_METHODS and request.url.path.startswith("/api/"):
+    # Exam autosave and submit retries are far more frequent than 80 writes a minute; the exam API has its own limits.
+    if (
+        request.method in _WRITE_METHODS
+        and request.url.path.startswith("/api/")
+        and not request.url.path.startswith("/api/exams/")
+    ):
         try:
             _mutation_limiter.check(
                 client_identifier(request),
@@ -243,3 +257,9 @@ app.include_router(experiences.router)
 app.include_router(search.router)
 app.include_router(dashboard.router)
 app.include_router(practice.router)
+
+# Optional: serve the exam API from this process. Off unless EXAMS_ENABLED, so nothing changes by default.
+if settings.EXAMS_ENABLED:
+    from app.exam_main import mount_exam_api
+
+    mount_exam_api(app)

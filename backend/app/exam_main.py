@@ -276,6 +276,42 @@ def _export_expiry_sweep_loop() -> None:
         _stop_event.wait(900.0)
 
 
+_workers_started = False
+
+
+def start_exam_workers() -> None:
+    """Starts the exam background loops once per process. Used by this entry point's lifespan and by `app.main`
+    when the exam API is mounted into it (a mounted sub-app's own lifespan never runs)."""
+    global _workers_started
+    if _workers_started or not settings.EXAMS_ENABLED:
+        return
+    _workers_started = True
+    _stop_event.clear()
+    threading.Thread(target=_outbox_drain_loop, daemon=True).start()
+    threading.Thread(target=_kt_ingestion_loop, daemon=True).start()
+    threading.Thread(target=_judge_sweep_loop, daemon=True).start()
+    threading.Thread(target=_proctoring_stale_incident_sweep_loop, daemon=True).start()
+    threading.Thread(target=_evidence_retention_sweep_loop, daemon=True).start()
+    threading.Thread(target=_export_expiry_sweep_loop, daemon=True).start()
+    if settings.EXAM_FINALIZATION_SWEEP_ENABLED:
+        threading.Thread(target=_finalization_sweep_loop, daemon=True).start()
+    else:
+        logger.warning("EXAM_FINALIZATION_SWEEP_ENABLED is false - expired attempts will NOT be auto-finalized")
+
+
+def stop_exam_workers() -> None:
+    global _workers_started
+    _stop_event.set()
+    _workers_started = False
+
+
+def mount_exam_api(parent: FastAPI) -> None:
+    """Serves the exam API from an existing FastAPI app (the main HireLog backend) without touching its routes,
+    middleware or error handling: the exam app keeps its own handlers and no-store middleware. Mounted last, so
+    every existing route still matches first."""
+    parent.mount("/", app)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not settings.EXAMS_ENABLED:
@@ -289,20 +325,10 @@ async def lifespan(app: FastAPI):
             logger.error("Exam API: Firestore check failed — %s", report.get("detail"))
 
     threading.Thread(target=_bg_bootstrap, daemon=True).start()
-    if settings.EXAMS_ENABLED:
-        threading.Thread(target=_outbox_drain_loop, daemon=True).start()
-        threading.Thread(target=_kt_ingestion_loop, daemon=True).start()
-        threading.Thread(target=_judge_sweep_loop, daemon=True).start()
-        threading.Thread(target=_proctoring_stale_incident_sweep_loop, daemon=True).start()
-        threading.Thread(target=_evidence_retention_sweep_loop, daemon=True).start()
-        threading.Thread(target=_export_expiry_sweep_loop, daemon=True).start()
-        if settings.EXAM_FINALIZATION_SWEEP_ENABLED:
-            threading.Thread(target=_finalization_sweep_loop, daemon=True).start()
-        else:
-            logger.warning("EXAM_FINALIZATION_SWEEP_ENABLED is false - expired attempts will NOT be auto-finalized")
+    start_exam_workers()
     logger.info("Exam API startup complete — ENV=%s EXAMS_ENABLED=%s", settings.ENV, settings.EXAMS_ENABLED)
     yield
-    _stop_event.set()
+    stop_exam_workers()
     logger.info("Exam API shutting down")
 
 

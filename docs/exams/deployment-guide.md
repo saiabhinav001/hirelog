@@ -129,3 +129,14 @@ the router level (regression-tested in `test_exams_routes_smoke.py`) — a 503
 with the flag on means the deployed process is reading a different
 `EXAMS_ENABLED` value than you expect (check env var propagation into the
 actual running container, not just the `.env` file on the build host).
+
+## Alternative: serve the exam API from the main HireLog backend
+
+Use this when a second service is not available (for example a Hugging Face Space that already runs `app.main:app` for search). Nothing changes unless `EXAMS_ENABLED=true`.
+
+1. On the main backend host set the exam variables from Step 1 (`EXAMS_ENABLED=true`, `EXAM_SUPER_ADMIN_EMAILS`, `EXAM_OTP_HMAC_SECRET` and the rest) and `ALLOWED_ORIGINS` for the frontend. Install `requirements.txt`, which now includes the four exam-only packages.
+2. `app.main` then mounts the exam app after its own routes (every existing route still matches first), starts the exam workers (outbox, finalization, judge sweep, proctoring and retention sweeps) in its own startup, and exempts `/api/exams/` from the legacy 80-writes-a-minute limiter, which would otherwise throttle autosave. The exam app keeps its own error handling and `Cache-Control: no-store`.
+3. Point the frontend at the same host: `NEXT_PUBLIC_EXAMS_API_BASE_URL=https://<main-backend-host>` (`NEXT_PUBLIC_EXAMS_ENABLED=true`), then rebuild the frontend.
+4. Verify `GET /health/live` (the main app's) and `GET /api/exams/v1/me` (should answer 401 or 403 without a token).
+
+Limits: the exam workers and live-event registry run inside the one process that serves search, so a restart or a cold start of that service also restarts them, and a second instance does not share live events. Do not rely on this for a real exam run until the release-pack gates are met.

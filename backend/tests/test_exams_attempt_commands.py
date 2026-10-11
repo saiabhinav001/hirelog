@@ -543,8 +543,9 @@ def test_the_exam_api_starts_the_sweeper_loop_behind_its_flag() -> None:
 
     from app import exam_main
 
-    lifespan_source = inspect.getsource(exam_main.lifespan)
+    lifespan_source = inspect.getsource(exam_main.start_exam_workers)
     assert "_finalization_sweep_loop" in lifespan_source and "EXAM_FINALIZATION_SWEEP_ENABLED" in lifespan_source
+    assert "start_exam_workers()" in inspect.getsource(exam_main.lifespan)
     loop_source = inspect.getsource(exam_main._finalization_sweep_loop)
     assert "sweep_active_runs_once" in loop_source
     assert loop_source.index("EXAM_SCHEDULE_AUTOMATION_ENABLED") < loop_source.index("run_schedule_automation_once")

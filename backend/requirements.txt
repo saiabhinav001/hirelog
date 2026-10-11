@@ -16,3 +16,8 @@ typesense==0.21.0
 redis==5.2.1
 # IANA zone names for per-exam display timezone validation (Prompt 3).
 tzdata==2026.4
+# Needed only when EXAMS_ENABLED=true serves the exam API from this process (same pins as requirements-exams.txt).
+httpx==0.28.1
+pypdf==6.19.0
+python-docx==1.2.0
+python-multipart==0.0.32
