@@ -184,6 +184,8 @@ class Settings(BaseSettings):
     # (never "clean") and DeterministicFakeProvider (test/dev only, no live
     # model). Configuring these is an institutional decision, not a code change.
     EXAM_MALWARE_SCANNER_ENDPOINT: Optional[str] = None
+    # Skips malware scanning of KT uploads so local dev works without clamd. Honoured only when ENV=development.
+    EXAM_MALWARE_SCAN_DEV_BYPASS: bool = False
     # Prompt 4 (docs/adr/0020): `host:port` of a clamd daemon enables the ClamdScanner
     # adapter; unset/invalid keeps the fail-closed default. Uploaded bytes need private
     # storage: EXAM_EVIDENCE_STORAGE_BUCKET (same bucket, `kt-quarantine/` prefix) —
@@ -194,6 +196,8 @@ class Settings(BaseSettings):
     EXAM_KT_URL_ALLOWED_HOSTS: str = ""
     EXAM_GENERATION_PROVIDER_BASE_URL: Optional[str] = None
     EXAM_GENERATION_PROVIDER_API_KEY: Optional[str] = None
+    # Model used when a provider base URL points at api.groq.com (OpenAI-style chat completions).
+    EXAM_GROQ_MODEL: str = "openai/gpt-oss-120b"
     # Prompt 5 (docs/adr/0021): neutral JSON-over-HTTPS transport limits for the generation and review
     # adapters, and the default-off gate that keeps coding items unapprovable until the judge has run them.
     EXAM_GENERATION_HTTP_TIMEOUT_SECONDS: float = 60.0
@@ -337,6 +341,9 @@ class Settings(BaseSettings):
 
     def unverified_staff_email_allowed(self) -> bool:
         return bool(self.EXAM_ALLOW_UNVERIFIED_STAFF_EMAIL) and self.ENV.strip().lower() != "production"
+
+    def malware_scan_dev_bypass_allowed(self) -> bool:
+        return bool(self.EXAM_MALWARE_SCAN_DEV_BYPASS) and self.ENV.strip().lower() == "development"
 
     def search_warmup_queries_list(self) -> list[str]:
         return [

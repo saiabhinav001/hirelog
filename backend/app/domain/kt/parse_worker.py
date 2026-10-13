@@ -31,10 +31,12 @@ def _apply_limits() -> None:
 
 def _emit(payload: dict) -> int:
     data = json.dumps(payload, ensure_ascii=False)
-    if len(data.encode("utf-8")) > MAX_OUTPUT_BYTES:
-        data = json.dumps({"ok": False, "code": "output_too_large", "message": "The extracted text is too large to process."})
-    sys.stdout.write(data)
-    sys.stdout.flush()
+    encoded = data.encode("utf-8")
+    if len(encoded) > MAX_OUTPUT_BYTES:
+        encoded = json.dumps({"ok": False, "code": "output_too_large", "message": "The extracted text is too large to process."}).encode("utf-8")
+    # Raw UTF-8 bytes: the Windows text stream is cp1252 and cannot encode arbitrary document characters.
+    sys.stdout.buffer.write(encoded)
+    sys.stdout.buffer.flush()
     return 0
 
 

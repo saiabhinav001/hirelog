@@ -100,6 +100,7 @@ function DefinitionDetail() {
             variants_per_slot: variantsPerQuestion,
           },
           topics: parseTopics(topicsText),
+          topics_confirmed: true,
           shuffle_options: shuffleOptions,
         }),
       },
@@ -126,12 +127,17 @@ function DefinitionDetail() {
   };
 
   const handlePublishRevision = async () => {
-    const token = await getToken();
-    await examApiFetch(`/api/exams/v1/faculty/definitions/${definitionId}/publish`, {
-      method: "POST",
-      body: JSON.stringify({ slot_count: slotCount }),
-    }, token);
-    await load();
+    try {
+      const token = await getToken();
+      await examApiFetch(`/api/exams/v1/faculty/definitions/${definitionId}/publish`, {
+        method: "POST",
+        body: JSON.stringify({ slot_count: slotCount }),
+      }, token);
+      setNotice("Revision published. You can now schedule a session.");
+      await load();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not publish a revision.");
+    }
   };
 
   const handleScheduleRun = async (event: React.FormEvent) => {
@@ -149,7 +155,7 @@ function DefinitionDetail() {
     const definitionsResp = await examEndpoints.listMyDefinitions(token);
     const def = definitionsResp.results.find((d) => d.id === definitionId);
     if (!def?.latest_published_revision_id) {
-      setError("Publish a revision before scheduling a run.");
+      setNotice("Publish a revision first (use \"Publish revision\" above), then schedule the session.");
       return;
     }
     await examApiFetch(

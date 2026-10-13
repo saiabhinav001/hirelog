@@ -27,7 +27,7 @@ from app.core.rate_limit import SlidingWindowLimiter
 from app.domain.kt.file_validation import validate_fetched_bytes, validate_upload_bytes
 from app.domain.kt.ingestion import DuplicateUploadError, KtIngestionService, UploadLimitError
 from app.domain.kt.limits import MAX_UPLOAD_BYTES
-from app.domain.kt.malware_scan import MalwareScanner, build_scanner
+from app.domain.kt.malware_scan import DevBypassScanner, MalwareScanner, build_scanner
 from app.domain.kt.models import ApprovedSource, RightsEvidence, SourceReviewStatus, UploadedSource, UploadStatus
 from app.domain.kt.repository import ApprovedSourceRepository, UploadedSourceRepository
 from app.domain.kt.source_registry import decide_approve_source, decide_reject_source
@@ -52,6 +52,10 @@ def _scanner() -> MalwareScanner:
     """Fail closed unless EXAM_MALWARE_SCANNER_ENDPOINT names a clamd daemon (docs/adr/0020)."""
     global _scanner_singleton
     if _scanner_singleton is None:
+        if settings.malware_scan_dev_bypass_allowed():
+            logger.warning("EXAM_MALWARE_SCAN_DEV_BYPASS is on - KT uploads are NOT virus-scanned (development only)")
+            _scanner_singleton = DevBypassScanner()
+            return _scanner_singleton
         _scanner_singleton = build_scanner(settings.EXAM_MALWARE_SCANNER_ENDPOINT)
         if settings.EXAM_MALWARE_SCANNER_ENDPOINT and not _scanner_singleton.configured:
             logger.warning("EXAM_MALWARE_SCANNER_ENDPOINT is set but not a valid host:port - uploads stay SCAN_UNAVAILABLE")
