@@ -579,7 +579,7 @@ export const examEndpoints = {
     answer: Record<string, unknown>,
     options: { clientEpoch?: number; clientSaveId?: string; markedForReview?: boolean } = {}
   ) =>
-    authed<{ accepted: boolean; version: number; replayed?: boolean }>(
+    authed<{ accepted: boolean; version: number; replayed?: boolean; answered?: boolean }>(
       `/api/exams/v1/student/runs/${runId}/drafts/${encodeURIComponent(questionId)}`,
       token,
       {

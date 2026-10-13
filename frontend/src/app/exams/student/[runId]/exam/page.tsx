@@ -18,7 +18,10 @@ import { useCameraCapture } from "@/lib/useCameraCapture";
 import { useExamServiceWorker } from "@/lib/useExamServiceWorker";
 import { timeWarningMessage, useServerClock } from "@/lib/useServerClock";
 
-const AUTOSAVE_DEBOUNCE_MS = 1200;
+// Every save costs database reads and a write on the free plan: save after a pause in typing, and at least every
+// AUTOSAVE_MAX_WAIT_MS while typing continues. Moving to another question, submitting and hiding the tab still save at once.
+const AUTOSAVE_DEBOUNCE_MS = Number(process.env.NEXT_PUBLIC_EXAM_AUTOSAVE_DEBOUNCE_MS) || 3000;
+const AUTOSAVE_MAX_WAIT_MS = Number(process.env.NEXT_PUBLIC_EXAM_AUTOSAVE_MAX_WAIT_MS) || 12000;
 const DEFAULT_TIME_WARNINGS = [10];
 const FINALIZING_POLL_MS = 3000;
 
@@ -61,6 +64,7 @@ function ExamContent() {
 
   const draftVersionsRef = useRef<Record<string, number>>({});
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const firstUnsavedAtRef = useRef<number | null>(null);
   const redirectedRef = useRef(false);
   const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewIndexRef = useRef<number | null>(null);
@@ -239,7 +243,21 @@ function ExamContent() {
           setDraftVersion(result.version);
           draftVersionsRef.current[question.question_id] = result.version;
           setSaveReceipt({ savedAt: new Date().toISOString(), version: result.version });
-          void refreshSlots();
+          // The save itself says what the navigator shows for this question, so the list is not fetched again.
+          const savedQuestionId = question.question_id;
+          const answered = result.answered ?? Object.keys(nextAnswer).length > 0;
+          setSlots((current) =>
+            current
+              ? {
+                  ...current,
+                  slots: current.slots.map((slot) =>
+                    slot.question_id === savedQuestionId
+                      ? { ...slot, answered, version: result.version, marked_for_review: marked ?? slot.marked_for_review }
+                      : slot
+                  ),
+                }
+              : current
+          );
           return;
         } catch {
           // fall through: retry once with the same id, then reconcile
@@ -249,7 +267,7 @@ function ExamContent() {
       // recently — reconcile from the server rather than overwrite it.
       await loadQuestion();
     },
-    [attempt?.epoch, draftVersion, getToken, loadQuestion, question, refreshSlots, runId]
+    [attempt?.epoch, draftVersion, getToken, loadQuestion, question, runId]
   );
 
   const remaining = remainingMs(attempt?.deadline, clock.now());
@@ -269,18 +287,36 @@ function ExamContent() {
     (next: Record<string, unknown>) => {
       if (timeUp) return;
       setAnswer(next);
+      const now = Date.now();
+      if (firstUnsavedAtRef.current === null) firstUnsavedAtRef.current = now;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = setTimeout(() => persistDraft(next), AUTOSAVE_DEBOUNCE_MS);
+      const waited = now - firstUnsavedAtRef.current;
+      const delay = Math.max(0, Math.min(AUTOSAVE_DEBOUNCE_MS, AUTOSAVE_MAX_WAIT_MS - waited));
+      saveTimerRef.current = setTimeout(() => {
+        saveTimerRef.current = null;
+        firstUnsavedAtRef.current = null;
+        void persistDraft(next);
+      }, delay);
     },
     [persistDraft, timeUp]
   );
 
   const flushPendingSave = useCallback(async () => {
-    if (!saveTimerRef.current) return;
+    if (!saveTimerRef.current) return; // nothing unsaved: do not write the same answer again
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = null;
+    firstUnsavedAtRef.current = null;
     await persistDraft(answer);
   }, [answer, persistDraft]);
+
+  // A hidden tab may be suspended or closed; whatever was typed since the last save goes out now.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden) void flushPendingSave();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [flushPendingSave]);
 
   const toggleMarked = useCallback(async () => {
     if (timeUp) return;
@@ -290,6 +326,7 @@ function ExamContent() {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
     }
+    firstUnsavedAtRef.current = null;
     await persistDraft(answer, next);
   }, [answer, markedForReview, persistDraft, timeUp]);
 
@@ -375,6 +412,7 @@ function ExamContent() {
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
+      firstUnsavedAtRef.current = null;
       await persistDraft(answer);
     }
     // Best-effort only — a failed/denied capture never blocks submission

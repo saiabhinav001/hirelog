@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -137,6 +137,31 @@ describe("Student exam page — submit confirmation", () => {
     expect(first[5].clientSaveId).toBeTruthy();
     expect(second[5]).toEqual(first[5]);
     expect(first[5].clientEpoch).toBe(1);
+  });
+
+  it("saves while typing never pauses once the maximum wait has passed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockSingle();
+    saveDraftMock.mockResolvedValue({ accepted: true, version: 1 });
+    render(<ExamPage />);
+    const box = await screen.findByRole("textbox", { name: "Your answer" });
+    for (let i = 1; i <= 8; i += 1) {
+      fireEvent.change(box, { target: { value: "a".repeat(i) } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); }); // never a pause long enough for the debounce
+    }
+    expect(saveDraftMock).toHaveBeenCalled(); // forced by the maximum wait, not by a pause
+  });
+
+  it("does not save an answer again when moving on after it was already saved", async () => {
+    mockSingle({}, 3);
+    saveDraftMock.mockResolvedValue({ accepted: true, version: 1 });
+    advanceMock.mockResolvedValue({ accepted: true, slot_index: 1 });
+    render(<ExamPage />);
+    await userEvent.type(await screen.findByRole("textbox", { name: "Your answer" }), "x");
+    await waitFor(() => expect(saveDraftMock).toHaveBeenCalledTimes(1), { timeout: 4000 });
+    await userEvent.click(await screen.findByRole("button", { name: "Next question" }));
+    await waitFor(() => expect(advanceMock).toHaveBeenCalledTimes(1));
+    expect(saveDraftMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -290,6 +315,19 @@ describe("Student exam page — navigator, previous/next, mark for review", () =
     await waitFor(() => expect(saveDraftMock).toHaveBeenCalled());
     expect(saveDraftMock.mock.calls[0][5].markedForReview).toBe(true);
     expect(await screen.findByRole("button", { name: "Marked for review" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("updates the navigator from the save response without asking the server for the list again", async () => {
+    mockThree();
+    saveDraftMock.mockResolvedValue({ accepted: true, version: 1, answered: true });
+    render(<ExamPage />);
+    const nav = await screen.findByRole("navigation", { name: "Question navigator" });
+    await waitFor(() => expect(within(nav).getByTestId("navigator-counts")).toHaveTextContent("Answered 1 · Unanswered 1"));
+    const listCalls = listReleasedSlotsMock.mock.calls.length;
+    await userEvent.type(await screen.findByRole("textbox", { name: "Your answer" }), "z");
+    await waitFor(() => expect(saveDraftMock).toHaveBeenCalledTimes(1), { timeout: 4000 });
+    await waitFor(() => expect(within(nav).getByTestId("navigator-counts")).toHaveTextContent("Answered 2 · Unanswered 0 · Marked for review 1 · Locked 2"));
+    expect(listReleasedSlotsMock.mock.calls.length).toBe(listCalls);
   });
 
   it("loads state, question and navigator from the server on entry (the same path a reconnect reconcile takes)", async () => {
