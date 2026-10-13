@@ -47,6 +47,8 @@ from app.domain.exams.repository import (
     ExamDefinitionRepository,
     ExamRunRepository,
     OutboxRepository,
+    invalidate_definition_cache,
+    invalidate_run_cache,
     new_outbox_entry,
 )
 from app.domain.generation.repository import GenerationRepository
@@ -233,6 +235,7 @@ class ExamCommandService:
             return revision
 
         published = _txn(transaction)
+        invalidate_definition_cache(self._db, definition_id)
         if published.slots and blueprint_id:
             # approved -> published for the frozen candidates; idempotent, a crash here leaves them
             # `approved`, which is still servable and gradable.
@@ -284,6 +287,7 @@ class ExamCommandService:
             )
 
         _txn(transaction)
+        invalidate_run_cache(self._db, run.id)
         return run
 
     # -- run lifecycle ---------------------------------------------------------
@@ -384,6 +388,7 @@ class ExamCommandService:
             return outcome
 
         outcome = _txn(transaction)
+        invalidate_run_cache(self._db, run_id)
         if outcome.applied:
             background.wake("finalization")  # the run's status changed: the sweeper must look at its attempts again
             background.wake("outbox")
@@ -558,7 +563,9 @@ class ExamCommandService:
             )
             return AttemptCommandResult(command=action, uid=uid, changed=decision.changed)
 
-        return _txn(transaction)
+        result = _txn(transaction)
+        invalidate_run_cache(self._db, run_id)
+        return result
 
     def recover_attempt(
         self, *, run_id: str, uid: str, idempotency_key: str, actor_uid: str, reason: str

@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
+from app.core.config import settings
+from app.core.read_cache import cache_for
 from app.domain.lockdown.decisions import verify_seb_admission
 from app.domain.lockdown.errors import LockdownAdmissionDeniedError
 from app.domain.lockdown.models import LockdownAdmissionLogEntry, LockdownAdmissionOutcome, LockdownProfile
@@ -25,8 +27,21 @@ class LockdownService:
         self.profiles = LockdownProfileRepository(db)
         self.admission_log = LockdownAdmissionLogRepository(db)
 
+    def _profile_cache(self):
+        db = getattr(self, "_db", None)
+        if db is None:
+            return None
+        return cache_for(db, "lockdown_profiles", ttl_seconds=settings.EXAM_LOCKDOWN_CACHE_SECONDS, max_entries=256)
+
     def get_or_default_profile(self, run_id: str) -> LockdownProfile:
-        return self.profiles.get(run_id) or LockdownProfile(run_id=run_id)
+        """Read by every admission check, so it is cached (also the default for runs without a profile)."""
+
+        def load() -> LockdownProfile:
+            return self.profiles.get(run_id) or LockdownProfile(run_id=run_id)
+
+        cache = self._profile_cache()
+        profile = load() if cache is None else cache.get_or_load(run_id, load)
+        return profile.model_copy(deep=True)
 
     def configure_profile(
         self,
@@ -48,6 +63,9 @@ class LockdownService:
             updated_at=_utc_now(),
         )
         self.profiles.upsert(profile)
+        cache = self._profile_cache()
+        if cache is not None:
+            cache.invalidate(run_id)
         return profile
 
     def check_admission(

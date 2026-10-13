@@ -73,19 +73,22 @@ def test_get_current_user_rejects_invalid_token(monkeypatch: pytest.MonkeyPatch)
     assert exc.value.status_code == 401
 
 
-def test_get_current_user_uncached_bypasses_stale_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    """New authorization-sensitive routes (e.g. exams) must observe a role
-    change immediately, unlike legacy `get_current_user`'s 5-minute cache."""
+def test_get_current_user_uncached_verifies_every_call_and_never_reads_the_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exam routes take identity from the verified token alone: no caching layer to serve a stale claim, and no read
+    (or creation) of the legacy `users/{uid}` document, which cost a billable read on every exam request."""
     calls = {"verify": 0, "lookup": 0}
-    roles = iter(["viewer", "placement_cell"])
 
     def fake_verify(_: str) -> dict:
         calls["verify"] += 1
-        return {"uid": "u-2", "email": "demo2@example.edu", "name": "Demo2", "exp": int(time.time()) + 1800}
+        return {
+            "uid": "u-2", "email": "Demo2@Example.edu", "name": "Demo2", "exp": int(time.time()) + 1800,
+            "email_verified": True, "auth_time": 1700000000, "exam_authz_version": 3, "exam_institution_id": "inst-1",
+            "firebase": {"sign_in_provider": "custom"},
+        }
 
     def fake_get_or_create(uid: str, email: str | None, name: str | None = None) -> dict:
         calls["lookup"] += 1
-        return {"uid": uid, "email": email or "", "name": name or "", "role": next(roles)}
+        return {"uid": uid, "role": "placement_cell"}
 
     monkeypatch.setattr(deps.firebase_auth, "verify_id_token", fake_verify)
     monkeypatch.setattr(deps, "_get_or_create_user", fake_get_or_create)
@@ -95,11 +98,16 @@ def test_get_current_user_uncached_bypasses_stale_cache(monkeypatch: pytest.Monk
     first = deps.get_current_user_uncached(creds)
     second = deps.get_current_user_uncached(creds)
 
-    # Every call re-verifies and re-reads — no caching layer to serve a stale role.
     assert calls["verify"] == 2
-    assert calls["lookup"] == 2
-    assert first["role"] == "viewer"
-    assert second["role"] == "placement_cell"
+    assert calls["lookup"] == 0
+    assert first == second
+    assert first["uid"] == "u-2"
+    assert first["token_email"] == "demo2@example.edu"
+    assert first["email_verified"] is True
+    assert first["exam_authz_version"] == 3
+    assert first["exam_institution_id"] == "inst-1"
+    assert first["sign_in_provider"] == "custom"
+    assert "role" not in first  # authority never comes from a stored profile field
 
 
 def test_legacy_get_current_user_still_verifies_and_caches(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -378,14 +378,16 @@ def test_uncached_user_exposes_the_verified_token_identity_not_the_stored_email(
         "uid": "u1", "email": "Real@College.edu", "email_verified": True, "auth_time": 1,
         "firebase": {"sign_in_provider": "google.com"},
     })
-    monkeypatch.setattr(api_deps, "_get_or_create_user", lambda uid, email, name=None: {
-        "uid": uid, "email": "owner@college.edu", "name": "", "role": "viewer",  # forged stored e-mail
-    })
+
+    def forbidden(uid, email, name=None):
+        raise AssertionError("an exam request must not read the stored (client-writable) profile")
+
+    monkeypatch.setattr(api_deps, "_get_or_create_user", forbidden)
     user = api_deps.get_current_user_uncached(HTTPAuthorizationCredentials(scheme="Bearer", credentials="t"))
 
     assert user["token_email"] == "real@college.edu"
     assert user["email_verified"] is True and user["sign_in_provider"] == "google.com"
-    assert user["role"] == "viewer"  # legacy role resolution is unchanged
+    assert "role" not in user  # authority never comes from a stored profile field
 
 
 def test_uncached_user_without_verification_claim_defaults_to_unverified(monkeypatch) -> None:

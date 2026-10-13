@@ -315,6 +315,28 @@ def test_a_submission_the_judge_never_finishes_is_handed_to_an_operator_not_poll
     assert service._submissions.get(run.id).status == SubmissionStatus.POLLING  # a student's own test run is left alone
 
 
+def test_a_test_run_nobody_is_waiting_for_any_more_stops_being_polled(clock) -> None:
+    provider = DeterministicFakeJudgeProvider()
+    service = _svc(provider, clock)
+    run = service.run_public_test(
+        candidate_id="c", run_id="run-s", uid="u-s", question_id="q", language_key="python3.11", source_code="x",
+        public_tests=_public_groups(), allowlist=ALLOWLIST_ENTRIES,
+    )
+    for token in list(run.provider_tokens.values()):
+        provider.mark_still_processing(token)
+
+    clock.advance(timedelta(seconds=settings.EXAM_JUDGE_PUBLIC_RUN_STALE_SECONDS - 1))
+    service.sweep_pending_once()
+    assert service._submissions.get(run.id).status == SubmissionStatus.POLLING  # still within the allowed time
+
+    clock.advance(timedelta(seconds=2))
+    service.sweep_pending_once()
+    abandoned = service._submissions.get(run.id)
+    assert abandoned.status == SubmissionStatus.INFRA_EXHAUSTED
+    assert "abandoned" in (abandoned.last_error or "")
+    assert service._grading_results.store == {}  # a test run never scores anything
+
+
 def test_a_language_that_is_not_usable_goes_to_an_operator_instead_of_failing_the_whole_attempt(clock) -> None:
     service = _svc(DeterministicFakeJudgeProvider(), clock)
     sub = _final(service, language_key="cobol")

@@ -23,6 +23,8 @@ from uuid import uuid4
 from google.api_core.exceptions import AlreadyExists
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
+from app.core.read_cache import cache_for
 from app.domain.institution.normalization import normalize_email
 
 logger = logging.getLogger("hirelog.exams.authz")
@@ -121,14 +123,30 @@ class AuthzAuditRepository:
 
 class StaffBindingService:
     def __init__(self, db, *, now_fn: Optional[Callable[[], datetime]] = None) -> None:
+        self._db = db
         self._bindings = StaffBindingRepository(db)
         self._audit = AuthzAuditRepository(db)
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
 
+    def _ok_cache(self):
+        return cache_for(self._db, "staff_binding_ok", ttl_seconds=settings.EXAM_STAFF_BINDING_CACHE_SECONDS, max_entries=256)
+
     def ensure_bound(
         self, *, email: str, uid: str, roles: Sequence[str], sign_in_provider: Optional[str] = None
     ) -> BindOutcome:
+        """A confirmed binding is remembered for a minute (every staff request asks); a conflict is never cached."""
         normalized = normalize_email(email)
+        key = (normalized, uid)
+        if self._ok_cache().peek(key):
+            return "already_bound"
+        outcome = self._ensure_bound_uncached(normalized, uid, roles, sign_in_provider)
+        if outcome != "conflict":
+            self._ok_cache().put(key, True)
+        return outcome
+
+    def _ensure_bound_uncached(
+        self, normalized: str, uid: str, roles: Sequence[str], sign_in_provider: Optional[str]
+    ) -> BindOutcome:
         existing = self._bindings.get(normalized)
         if existing is not None:
             return self._outcome_for_existing(existing, normalized, uid)

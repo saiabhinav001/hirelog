@@ -226,6 +226,10 @@ class FakeFirestore:
     def transaction(self) -> FakeTransaction:
         return FakeTransaction(self)
 
+    def get_all(self, refs):
+        """Batched point reads, like `Client.get_all`."""
+        return [ref.get() for ref in refs]
+
     # -- internals ---------------------------------------------------------------
 
     def apply(self, writes) -> None:

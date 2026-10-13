@@ -312,6 +312,9 @@ class JudgeService:
                 if submission.purpose == SubmissionPurpose.FINAL_GRADE and self._overdue(submission, now):
                     self._exhaust(submission, f"no result from the judge within {settings.EXAM_JUDGE_STALL_SECONDS} seconds")
                     continue
+                if submission.purpose == SubmissionPurpose.PUBLIC_RUN and self._abandoned_public_run(submission, now):
+                    self._abandon_public_run(submission)
+                    continue
                 candidate = generation.get_candidate(submission.candidate_id)
                 if candidate is None:
                     continue  # orphaned submission - nothing sane to grade against
@@ -340,6 +343,8 @@ class JudgeService:
         resent = 0
         for submission in self._submissions.list_by_status(["pending", "infra_error"], limit=limit):
             if submission.purpose != SubmissionPurpose.FINAL_GRADE:
+                if self._abandoned_public_run(submission, now):
+                    self._abandon_public_run(submission)
                 continue  # a student's test run is not retried on their behalf; they run it again
             try:
                 if submission.attempts >= settings.EXAM_JUDGE_MAX_INFRA_ATTEMPTS:
@@ -362,6 +367,21 @@ class JudgeService:
 
     def _overdue(self, submission: CodeSubmission, now: datetime) -> bool:
         return (now - submission.updated_at).total_seconds() > settings.EXAM_JUDGE_STALL_SECONDS
+
+    def _abandoned_public_run(self, submission: CodeSubmission, now: datetime) -> bool:
+        return (now - submission.created_at).total_seconds() > settings.EXAM_JUDGE_PUBLIC_RUN_STALE_SECONDS
+
+    def _abandon_public_run(self, submission: CodeSubmission) -> None:
+        """The student closed the tab or the judge was down: nothing is waiting for this, so stop reading it every sweep.
+        It scores nothing and the student simply runs the tests again."""
+        self._submissions.update(
+            submission.id,
+            {
+                "status": SubmissionStatus.INFRA_EXHAUSTED.value,
+                "last_error": "test run abandoned: not finished within the allowed time",
+                "updated_at": _utc_now().isoformat(),
+            },
+        )
 
     def _exhaust(self, submission: CodeSubmission, reason: str) -> None:
         self._submissions.update(

@@ -9,6 +9,8 @@ from typing import Optional, Sequence
 
 from google.api_core.exceptions import AlreadyExists
 
+from app.core.config import settings
+from app.core.read_cache import cache_for
 from app.domain.institution.models import Institution, Membership, RosterImportJob
 from app.domain.institution.normalization import make_membership_doc_id
 from app.domain.institution.otp import OtpRecord
@@ -23,6 +25,11 @@ _GET_ALL_CHUNK = 300
 
 def _model_dict(model) -> dict:
     return model.model_dump(mode="json")
+
+
+def invalidate_membership_cache(db) -> None:
+    """Any membership write can change any uid's answer, and writes are rare: drop the whole by-uid cache."""
+    cache_for(db, "memberships_by_uid", ttl_seconds=settings.EXAM_MEMBERSHIP_CACHE_SECONDS, max_entries=2048).clear()
 
 
 class InstitutionRepository:
@@ -49,6 +56,12 @@ class MembershipRepository:
     def __init__(self, db) -> None:
         self._db = db
 
+    def _by_uid_cache(self):
+        return cache_for(self._db, "memberships_by_uid", ttl_seconds=settings.EXAM_MEMBERSHIP_CACHE_SECONDS, max_entries=2048)
+
+    def invalidate_cache(self) -> None:
+        invalidate_membership_cache(self._db)
+
     def _ref(self, institution_id: str, identity_key: str):
         doc_id = make_membership_doc_id(institution_id, identity_key)
         return self._db.collection(MEMBERSHIPS_COLLECTION).document(doc_id)
@@ -67,6 +80,7 @@ class MembershipRepository:
 
     def upsert(self, membership: Membership) -> None:
         self._ref(membership.institution_id, membership.identity_key).set(_model_dict(membership))
+        self.invalidate_cache()
 
     def get_many(self, institution_id: str, identity_keys: Sequence[str]) -> dict[str, Membership]:
         """Point reads (batched `get_all`) for just the keys asked for, keyed by
@@ -87,13 +101,16 @@ class MembershipRepository:
             self._ref(membership.institution_id, membership.identity_key).create(_model_dict(membership))
         except AlreadyExists:
             return False
+        self.invalidate_cache()
         return True
 
     def create_in_transaction(self, transaction, membership: Membership) -> None:
         transaction.create(self._ref(membership.institution_id, membership.identity_key), _model_dict(membership))
+        self.invalidate_cache()
 
     def update_in_transaction(self, transaction, institution_id: str, identity_key: str, update: dict) -> None:
         transaction.update(self._ref(institution_id, identity_key), update)
+        self.invalidate_cache()
 
     def existing_identity_keys(self, institution_id: str) -> set[str]:
         from firebase_admin import firestore
@@ -112,10 +129,16 @@ class MembershipRepository:
         return [Membership.model_validate(doc.to_dict() or {}) for doc in query.stream()]
 
     def find_by_uid(self, uid: str) -> list[Membership]:
+        """Read on every exam request that needs the caller's institution role; cached for a few seconds and cleared
+        by any membership write made through this process."""
         from firebase_admin import firestore
 
-        query = self._db.collection(MEMBERSHIPS_COLLECTION).where(filter=firestore.FieldFilter("uid", "==", uid))
-        return [Membership.model_validate(doc.to_dict() or {}) for doc in query.stream()]
+        def load() -> list[Membership]:
+            query = self._db.collection(MEMBERSHIPS_COLLECTION).where(filter=firestore.FieldFilter("uid", "==", uid))
+            return [Membership.model_validate(doc.to_dict() or {}) for doc in query.stream()]
+
+        found = self._by_uid_cache().get_or_load(uid, load)
+        return [membership.model_copy(deep=True) for membership in found]
 
 
 class RosterImportRepository:

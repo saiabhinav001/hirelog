@@ -56,6 +56,7 @@ def seed(
     duration_minutes: int,
     warning_threshold: int,
     dry_run: bool,
+    slot_count: int = 1,
 ) -> dict:
     uids = build_synthetic_uids(student_count, student_prefix)
     plan = {
@@ -65,13 +66,14 @@ def seed(
         "student_uids_sample": uids[:5],
         "duration_minutes": duration_minutes,
         "warning_threshold": warning_threshold,
+        "slot_count": slot_count,
     }
     if dry_run:
         return {"dry_run": True, "plan": plan}
 
     service = ExamCommandService(db, clock=system_clock)
     definition = service.create_definition(title=title, owner_uid=faculty_uid)
-    revision = service.publish_revision(definition_id=definition.id, slot_count=1, published_by=faculty_uid)
+    revision = service.publish_revision(definition_id=definition.id, slot_count=slot_count, published_by=faculty_uid)
     policy = ExamPolicy(duration_minutes=duration_minutes, warning_threshold=warning_threshold)
     run = service.create_run(
         definition_id=definition.id, revision=revision, policy=policy, enrolled_uids=uids
@@ -90,6 +92,7 @@ def seed(
         "run_id": run.id,
         "student_uids": uids,
         "duration_minutes": duration_minutes,
+        "slot_count": slot_count,
     }
 
 
@@ -103,6 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--student-prefix", default="staging-student", help="Synthetic student uid prefix")
     parser.add_argument("--duration-minutes", type=int, default=60)
     parser.add_argument("--warning-threshold", type=int, default=3)
+    parser.add_argument("--slot-count", type=int, default=1, help="Number of questions (slots) in the exam")
     parser.add_argument(
         "--dry-run", action="store_true", help="Print the plan without writing anything to Firestore"
     )
@@ -120,6 +124,7 @@ def main() -> None:
         duration_minutes=max(args.duration_minutes, 1),
         warning_threshold=max(args.warning_threshold, 1),
         dry_run=args.dry_run,
+        slot_count=max(args.slot_count, 1),
     )
     if args.output_file:
         output_path = Path(args.output_file)

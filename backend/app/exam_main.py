@@ -262,8 +262,9 @@ def _finalization_sweep_loop() -> None:
             return 0.0  # scheduled release/close is clock-driven: keep the configured cadence
         return sweeper.seconds_until_next_deadline()
 
+    # No burst after a wake: every wake comes after its commit, and one extra tick is enough to learn the new deadline.
     _run_adaptive(
-        "finalization", tick, hint=hint, min_interval=interval,
+        "finalization", tick, hint=hint, min_interval=interval, burst_seconds=0.0,
         max_interval=max(interval, float(settings.EXAM_FINALIZATION_SWEEP_MAX_INTERVAL_SECONDS)),
     )
 

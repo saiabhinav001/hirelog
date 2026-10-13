@@ -13,6 +13,7 @@ from firebase_admin import firestore
 
 from app.core import background
 from app.core.config import settings
+from app.domain.exams import sweep_hints
 from app.domain.exams.clock import Clock, system_clock
 from app.domain.exams.decisions import (
     AdvanceSlotOutcome,
@@ -91,9 +92,11 @@ class ExamStudentService:
         deadline once, here, from policy + accommodation. Idempotent: calling
         admit() again on an already-admitted attempt just returns it."""
         transaction = self._db.transaction()
+        created: list[Attempt] = []
 
         @firestore.transactional
         def _txn(transaction) -> Attempt:
+            created.clear()  # the callback re-runs when the transaction is retried
             now = self._clock.now()
             run = self.runs.get_in_transaction(transaction, run_id)
             if run is None:
@@ -132,10 +135,13 @@ class ExamStudentService:
                 updated_at=now,
             )
             self.attempts.create_in_transaction(transaction, new_attempt)
+            created.append(new_attempt)
             return new_attempt
 
         attempt = _txn(transaction)
-        background.wake("finalization")  # a live attempt now has a deadline the sweeper must watch
+        if created:
+            # A live attempt now has a deadline the sweeper must watch; it only wakes if this one is the earliest.
+            sweep_hints.note_attempt_started(run_id, attempt.deadline)
         return attempt
 
     # ── question delivery (allowlisted DTO only) ──────────────────────────
@@ -177,17 +183,17 @@ class ExamStudentService:
     def list_released_slots(self, run_id: str, uid: str, revision: ExamRevision) -> dict:
         """Navigator data for released slots only - ids and answer state, never content."""
         _, attempt = self._reachable_attempt(run_id, uid)
-        drafts = {d.question_id: d for d in self.drafts.list_all(run_id, uid)}
+        summaries = self.drafts.summaries(run_id, uid)
         slots = []
         for index in range(0, attempt.current_slot_index + 1):
             question_id = f"{revision.id}:slot:{index}"
-            draft = drafts.get(question_id)
+            summary = summaries.get(question_id)
             slots.append({
                 "slot_index": index,
                 "question_id": question_id,
-                "answered": bool(draft and draft.answer),
-                "marked_for_review": bool(draft and draft.marked_for_review),
-                "version": draft.version if draft else 0,
+                "answered": bool(summary and summary.answered),
+                "marked_for_review": bool(summary and summary.marked_for_review),
+                "version": summary.version if summary else 0,
             })
         return {
             "current_slot_index": attempt.current_slot_index,
@@ -233,7 +239,7 @@ class ExamStudentService:
         @firestore.transactional
         def _txn(transaction) -> AdvanceSlotOutcome:
             now = self._clock.now()
-            run = self.runs.get_in_transaction(transaction, run_id)
+            run = self.runs.get(run_id)  # only gates (paused/ended); same cached read as the save path
             if run is None:
                 raise LookupError(f"exam run {run_id} not found")
             self._require_enrolled(run, uid)
@@ -268,11 +274,15 @@ class ExamStudentService:
         if len(json.dumps(answer, separators=(",", ":"), default=str).encode("utf-8")) > settings.EXAM_DRAFT_MAX_BYTES:
             return DraftSaveOutcome(False, conflict_reason="answer_too_large")
         transaction = self._db.transaction()
+        written: list[Draft] = []
 
         @firestore.transactional
         def _txn(transaction) -> DraftSaveOutcome:
+            written.clear()  # the callback re-runs when the transaction is retried
             now = self._clock.now()
-            run = self.runs.get_in_transaction(transaction, run_id)
+            # The run only gates (paused/ended) and names the revision; a write this process makes drops the cached
+            # copy, so the hot save path spends its reads on the attempt and the draft it actually decides on.
+            run = self.runs.get(run_id)
             if run is None:
                 raise LookupError(f"exam run {run_id} not found")
             self._require_enrolled(run, uid)
@@ -310,9 +320,13 @@ class ExamStudentService:
                     marked_for_review=marked, last_save_id=client_save_id, last_content_hash=content_hash,
                 )
                 self.drafts.set_in_transaction(transaction, run_id, uid, draft)
+                written.append(draft)
             return outcome
 
-        return _txn(transaction)
+        outcome = _txn(transaction)
+        if written and outcome.accepted and not outcome.replayed:
+            self.drafts.record_saved(run_id, uid, written[-1])
+        return outcome
 
     # ── final submit (the bounded transaction) ────────────────────────────
 

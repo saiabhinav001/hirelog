@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     EXAM_FINALIZATION_SWEEP_ENABLED: bool = True
     EXAM_FINALIZATION_SWEEP_INTERVAL_SECONDS: float = 15.0
     # Idle cap for the sweeper: it sleeps until the earliest known attempt deadline, never longer than this.
-    EXAM_FINALIZATION_SWEEP_MAX_INTERVAL_SECONDS: float = 120.0
+    EXAM_FINALIZATION_SWEEP_MAX_INTERVAL_SECONDS: float = 600.0
     # Ended runs are still swept for this long after `ended_at` so a hard stop
     # never strands an unsealed attempt; older runs are not re-read every tick.
     EXAM_FINALIZATION_ENDED_RUN_WINDOW_HOURS: int = 24
@@ -128,11 +128,26 @@ class Settings(BaseSettings):
     # Worker polling: fast while there is work, backing off to the max while idle (each empty poll still costs a
     # Firestore read, and the free plan allows 50,000 a day). In-process work wakes the loops immediately.
     EXAM_OUTBOX_POLL_MIN_SECONDS: float = 2.0
-    EXAM_OUTBOX_POLL_MAX_SECONDS: float = 120.0
+    EXAM_OUTBOX_POLL_MAX_SECONDS: float = 600.0
     EXAM_JUDGE_SWEEP_MIN_SECONDS: float = 2.0
-    EXAM_JUDGE_SWEEP_MAX_SECONDS: float = 120.0
+    EXAM_JUDGE_SWEEP_MAX_SECONDS: float = 600.0
     EXAM_PROCTORING_SWEEP_MIN_SECONDS: float = 15.0
     EXAM_PROCTORING_SWEEP_MAX_SECONDS: float = 600.0
+    # A run with no live attempt is not re-read by the finalization sweep for this long (an admission wakes it at once).
+    EXAM_FINALIZATION_DORMANT_RUN_SECONDS: float = 1800.0
+
+    # In-process read cache (core/read_cache.py). Entries are dropped when this process writes the document; the TTL
+    # only bounds staleness for writes made by another process. EXAM_READ_CACHE_ENABLED=false turns every cache off.
+    EXAM_READ_CACHE_ENABLED: bool = True
+    EXAM_RUN_CACHE_SECONDS: float = 5.0
+    EXAM_DEFINITION_CACHE_SECONDS: float = 15.0
+    EXAM_REVISION_CACHE_SECONDS: float = 900.0
+    EXAM_LOCKDOWN_CACHE_SECONDS: float = 30.0
+    EXAM_MEMBERSHIP_CACHE_SECONDS: float = 10.0
+    EXAM_STAFF_BINDING_CACHE_SECONDS: float = 60.0
+    EXAM_DRAFT_SUMMARY_CACHE_SECONDS: float = 1800.0
+    # The faculty candidate grid is kept in memory and patched row by row; a full re-read happens at most this often.
+    EXAM_ATTEMPT_VIEW_RESYNC_SECONDS: float = 180.0
 
     # ── Rollback lever (Prompt 11, docs/adr/0016) ────────────────────────────
     # A targeted alternative to flipping `EXAMS_ENABLED` off: blocks only NEW
@@ -158,6 +173,10 @@ class Settings(BaseSettings):
     # unavailable) in production. No real provider adapter exists yet — that is
     # an institutional decision (SSO vs verified-e-mail OTP, D-6).
     EXAM_OTP_DELIVERY_PROVIDER: str = ""
+    # `webhook` provider: an HTTPS mail relay you run (docs/exams/otp-email-relay.md). Both are secrets.
+    EXAM_OTP_WEBHOOK_URL: Optional[str] = None
+    EXAM_OTP_WEBHOOK_SECRET: Optional[str] = None
+    EXAM_OTP_WEBHOOK_TIMEOUT_SECONDS: float = 10.0
     EXAM_STAFF_REAUTH_MAX_AGE_SECONDS: int = 900
 
     # ── KT ingestion / generation providers (Prompt 5, docs/adr/0009) ────────
@@ -217,6 +236,8 @@ class Settings(BaseSettings):
     EXAM_JUDGE_MAX_INFRA_ATTEMPTS: int = 5
     # A final-grade submission still unfinished after this long is handed to an operator instead of polling forever.
     EXAM_JUDGE_STALL_SECONDS: int = 900
+    # A student's test run that never finished (the tab was closed, the judge was down) stops being polled after this long.
+    EXAM_JUDGE_PUBLIC_RUN_STALE_SECONDS: int = 3600
     # Student-initiated test runs are refused (503) while this many submissions are already waiting on the judge.
     EXAM_JUDGE_MAX_IN_FLIGHT: int = 200
 

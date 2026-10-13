@@ -33,7 +33,12 @@ from app.domain.institution.identity_provider import OtpDelivery, UnconfiguredOt
 from app.domain.institution.models import IdentityKeyPolicy, Membership, MembershipStatus, RoleScope
 from app.domain.institution.normalization import normalize_email, normalize_identity_key
 from app.domain.institution.otp import OtpVerifyOutcome, new_otp_record, verify_otp
-from app.domain.institution.repository import InstitutionRepository, MembershipRepository, OtpRepository
+from app.domain.institution.repository import (
+    InstitutionRepository,
+    MembershipRepository,
+    OtpRepository,
+    invalidate_membership_cache,
+)
 from app.domain.institution.roster_import import can_grant_role
 
 logger = logging.getLogger("hirelog.institution.auth")
@@ -186,6 +191,7 @@ class InstitutionAuthService:
             return new_uid
 
         uid = _txn(transaction)
+        invalidate_membership_cache(self._db)
         refreshed = self._memberships.get(institution_id, key)
         custom_token = firebase_auth.create_custom_token(
             uid, developer_claims={"exam_authz_version": refreshed.authorization_version, "exam_institution_id": institution_id}
@@ -236,6 +242,7 @@ class InstitutionAuthService:
             return "linked", None
 
         outcome, bound_uid = _txn(transaction)
+        invalidate_membership_cache(self._db)
         if outcome == "conflict":
             logger.warning(
                 "Account-link conflict: identity_key=%s already linked to uid=%s, attempted by uid=%s",
@@ -360,4 +367,6 @@ class InstitutionAuthService:
             )
             return Membership.model_validate({**current.model_dump(), **update})
 
-        return _txn(transaction)
+        changed = _txn(transaction)
+        invalidate_membership_cache(self._db)
+        return changed

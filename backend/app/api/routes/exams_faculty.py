@@ -25,6 +25,7 @@ from app.core.config import settings
 from app.core.firebase import exam_db as db
 from app.core.rate_limit import SlidingWindowLimiter
 from app.domain.exams.commands import ExamCommandService
+from app.domain.exams.attempts_view import page_for_run
 from app.domain.exams.finalization import ExamFinalizationSweeper
 from app.domain.exams.institution_enrollment import InstructorAssignmentError, assign_instructors
 from app.domain.exams.models import RunStatus
@@ -381,7 +382,7 @@ def list_blueprints_for_definition(definition_id: str, user: dict = Depends(requ
 def list_attempts_for_run(run_id: str, user: dict = Depends(require_run_scope), limit: int = 100, cursor_uid: str | None = None) -> dict:
     """Candidate grid data — paginated (contract: 'pagination/virtualization')."""
     bounded_limit = max(1, min(limit, 200))
-    attempts, next_cursor = AttemptRepository(db).list_page_for_run(run_id, limit=bounded_limit, cursor_uid=cursor_uid)
+    attempts, next_cursor = page_for_run(db, run_id, limit=bounded_limit, cursor_uid=cursor_uid)
     return {
         "results": [a.model_dump(mode="json") for a in attempts],
         "next_cursor_uid": next_cursor,

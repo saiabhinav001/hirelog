@@ -20,6 +20,7 @@ receipts, version checks and audit trail are identical to a faculty command.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -27,6 +28,7 @@ from firebase_admin import firestore
 
 from app.core.config import settings
 from app.domain.authz.staff_binding import AuthzAuditRepository, build_audit_event
+from app.domain.exams import sweep_hints
 from app.domain.exams.clock import Clock, system_clock
 from app.domain.exams.commands import SYSTEM_SCHEDULER_ACTOR, ExamCommandService
 from app.domain.exams.decisions import decide_finalization_batch, decide_scheduled_command, decide_seal_on_expiry
@@ -60,6 +62,8 @@ class ExamFinalizationSweeper:
         self._tick_backlog = False
         self._next_deadline: Optional[datetime] = None
         self._backlog = False
+        # Runs found with no live attempt are not re-read until this monotonic time (an admission clears the entry).
+        self._dormant_until: dict[str, float] = {}
 
     def seconds_until_next_deadline(self) -> Optional[float]:
         """Seconds until a sweep can next find something to seal: 0 while a backlog remains, None when no attempt is live."""
@@ -81,6 +85,11 @@ class ExamFinalizationSweeper:
         this call - callers loop until this returns 0."""
         now = self._clock.now()
         candidates = self._attempts.list_in_progress(run_id) + self._attempts.list_blocked(run_id)
+        dormant_for = float(settings.EXAM_FINALIZATION_DORMANT_RUN_SECONDS)
+        if candidates or dormant_for <= 0:
+            self._dormant_until.pop(run_id, None)
+        else:
+            self._dormant_until[run_id] = time.monotonic() + dormant_for
         # Only an attempt past its deadline can be sealed, so only those need their drafts read.
         expired = [attempt for attempt in candidates if attempt.deadline is not None and now > attempt.deadline]
         draft_versions_by_uid = {
@@ -118,13 +127,21 @@ class ExamFinalizationSweeper:
         total = 0
         self._tick_deadline = None
         self._tick_backlog = False
+        for run_id in sweep_hints.drain_woken_runs():
+            self._dormant_until.pop(run_id, None)
+        monotonic_now = time.monotonic()
         for run_id in runs:
+            if self._dormant_until.get(run_id, 0.0) > monotonic_now:
+                continue  # nothing was live the last time this run was read, and nobody has been admitted since
             try:
                 total += self.sweep_once(run_id, batch_size=batch_size)
             except Exception:  # noqa: BLE001 - one bad run must not stop the sweep
                 logger.exception("finalization sweep failed for run %s", run_id)
                 self._tick_backlog = True
+        for run_id in [known for known in self._dormant_until if known not in runs]:
+            del self._dormant_until[run_id]
         self._next_deadline, self._backlog = self._tick_deadline, self._tick_backlog
+        sweep_hints.set_planned_deadline(self._next_deadline)
         return total
 
     def _seal_one(self, run_id: str, uid: str) -> bool:

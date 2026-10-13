@@ -265,7 +265,7 @@ def save_draft(
         raise
     if not outcome.accepted:
         raise_for_conflict_reason(outcome.conflict_reason or "draft_version_conflict")
-    return {"accepted": True, "version": outcome.new_version, "replayed": outcome.replayed}
+    return {"accepted": True, "version": outcome.new_version, "replayed": outcome.replayed, "answered": bool(payload.answer)}
 
 
 @router.get("/runs/{run_id}/drafts/{question_id}")
@@ -290,7 +290,7 @@ def list_my_draft_versions(run_id: str, response: Response, user: dict = Depends
     `expected_draft_versions` map final-submit needs, without requiring the
     client to have remembered every slot's version across the whole session."""
     _set_no_store(response)
-    versions = _service().drafts.all_versions(run_id, user["uid"])
+    versions = {question_id: summary.version for question_id, summary in _service().drafts.summaries(run_id, user["uid"]).items()}
     return {"versions": versions}
 
 

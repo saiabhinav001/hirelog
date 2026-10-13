@@ -17,7 +17,7 @@ from typing import Optional, Sequence
 from firebase_admin import firestore
 
 from app.domain.authz.staff_binding import AuthzAuditRepository, build_audit_event
-from app.domain.exams.repository import ExamDefinitionRepository
+from app.domain.exams.repository import ExamDefinitionRepository, invalidate_definition_cache
 from app.domain.institution.models import MembershipStatus, RoleScope
 from app.domain.institution.normalization import normalize_identity_key
 from app.domain.institution.repository import InstitutionRepository, MembershipRepository
@@ -84,6 +84,7 @@ def assign_instructors(db, *, definition_id: str, identity_keys: Sequence[str], 
         )
 
     _txn(transaction)
+    invalidate_definition_cache(db, definition_id)
     return uids
 
 

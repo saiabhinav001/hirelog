@@ -137,15 +137,14 @@ def get_current_user(
 def get_current_user_uncached(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> dict:
-    """Always re-verifies the token and re-reads the Firestore role fresh.
+    """Verifies the token on every call and takes identity from the token alone.
 
-    Intended for new authorization-sensitive routes (exam faculty/admission
-    checks and similar) that must not act on a role that could be up to 5
-    minutes stale — e.g. immediately after a revocation or role change.
+    Used only by the exam routes. Exam authority never depends on the legacy `users/{uid}` document (see
+    `exams_dependencies`), so an exam request neither reads nor creates it: that read alone was a billable Firestore
+    read on every exam request. Memberships and the staff allowlist are resolved separately from verified claims.
 
-    Also surfaces `auth_time` and any `exam_*` custom claims (set at
-    institutional sign-in — see `app.domain.institution.auth_service`) so
-    institution-membership/recent-reauth checks (Prompt 2) can be built on
+    Also surfaces `auth_time` and any `exam_*` custom claims (set at institutional sign-in — see
+    `app.domain.institution.auth_service`) so institution-membership/recent-reauth checks (Prompt 2) can be built on
     top of this same verified token without a second verification.
     """
     decoded = _verify_firebase_token(credentials.credentials)
@@ -154,19 +153,10 @@ def get_current_user_uncached(
     name = decoded.get("name") or decoded.get("user_id")
     if not uid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload.")
-    if settings.exam_data_is_separate():
-        # Exam data has its own Firebase project: identity comes from the token alone, so an exam request
-        # never reads or writes the live site's users collection (and its free quota).
-        user_data = {"uid": uid}
-    else:
-        user_data = _get_or_create_user(uid, email, name)
-    user_data.setdefault("email", email or "")
-    user_data.setdefault("name", name or "")
+    user_data = {"uid": uid, "email": email or "", "name": name or ""}
     user_data["auth_time"] = decoded.get("auth_time")
-    # Identity facts for AUTHORIZATION come from the verified token only. The
-    # `email` above may be the stored `users/{uid}.email`, which a client can
-    # set when it creates its own profile document (firestore.rules allow the
-    # key), so it must never decide authority — `token_email` must (ADR 0017).
+    # Identity facts for AUTHORIZATION come from the verified token only (ADR 0017): `token_email` decides authority,
+    # never a client-writable profile field.
     user_data["token_email"] = str(email or "").strip().lower()
     user_data["email_verified"] = bool(decoded.get("email_verified"))
     user_data["sign_in_provider"] = (decoded.get("firebase") or {}).get("sign_in_provider")

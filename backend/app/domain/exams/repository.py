@@ -12,12 +12,16 @@ callbacks.").
 from __future__ import annotations
 
 import logging
+import threading
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 
 from firebase_admin import firestore
 
+from app.core.config import settings
+from app.core.read_cache import cache_for
 from app.domain.exams.models import (
     Attempt,
     CommandReceipt,
@@ -44,6 +48,23 @@ def _model_dict(model) -> dict:
     return model.model_dump(mode="json")
 
 
+def _run_cache(db):
+    return cache_for(db, "exam_runs", ttl_seconds=settings.EXAM_RUN_CACHE_SECONDS, max_entries=256)
+
+
+def _definition_cache(db):
+    return cache_for(db, "exam_definitions", ttl_seconds=settings.EXAM_DEFINITION_CACHE_SECONDS, max_entries=512)
+
+
+def invalidate_run_cache(db, run_id: str) -> None:
+    """Drop the cached run after any write of the run document."""
+    _run_cache(db).invalidate(run_id)
+
+
+def invalidate_definition_cache(db, definition_id: str) -> None:
+    _definition_cache(db).invalidate(definition_id)
+
+
 class ExamDefinitionRepository:
     """Draft definitions are mutable; revisions (once created) are immutable
     — never updated, only created and read."""
@@ -57,20 +78,41 @@ class ExamDefinitionRepository:
     def _revisions(self, definition_id: str):
         return self._ref(definition_id).collection(REVISIONS_SUBCOLLECTION)
 
-    def get(self, definition_id: str) -> Optional[ExamDefinition]:
+    def _definition_cache(self):
+        return _definition_cache(self._db)
+
+    def _revision_cache(self):
+        return cache_for(self._db, "exam_revisions", ttl_seconds=settings.EXAM_REVISION_CACHE_SECONDS, max_entries=256)
+
+    def invalidate(self, definition_id: str) -> None:
+        invalidate_definition_cache(self._db, definition_id)
+
+    def _load(self, definition_id: str) -> Optional[ExamDefinition]:
         snap = self._ref(definition_id).get()
         if not snap.exists:
             return None
         return ExamDefinition.model_validate({**(snap.to_dict() or {}), "id": snap.id})
 
+    def get(self, definition_id: str) -> Optional[ExamDefinition]:
+        definition = self._definition_cache().get_or_load(definition_id, lambda: self._load(definition_id))
+        return None if definition is None else definition.model_copy(deep=True)
+
     def create(self, definition: ExamDefinition) -> None:
         self._ref(definition.id).set(_model_dict(definition))
+        self.invalidate(definition.id)
 
-    def get_revision(self, definition_id: str, revision_id: str) -> Optional[ExamRevision]:
+    def _load_revision(self, definition_id: str, revision_id: str) -> Optional[ExamRevision]:
         snap = self._revisions(definition_id).document(revision_id).get()
         if not snap.exists:
             return None
         return ExamRevision.model_validate({**(snap.to_dict() or {}), "id": snap.id})
+
+    def get_revision(self, definition_id: str, revision_id: str) -> Optional[ExamRevision]:
+        """A published revision never changes, so it is cached for a long time (a missing one is never cached)."""
+        revision = self._revision_cache().get_or_load(
+            (definition_id, revision_id), lambda: self._load_revision(definition_id, revision_id)
+        )
+        return None if revision is None else revision.model_copy(deep=True)
 
     def get_revision_in_transaction(self, transaction, definition_id: str, revision_id: str) -> Optional[ExamRevision]:
         snap = self._revisions(definition_id).document(revision_id).get(transaction=transaction)
@@ -98,6 +140,7 @@ class ExamDefinitionRepository:
             self._ref(definition_id),
             {"latest_published_revision_id": revision_id, "updated_at": now.isoformat()},
         )
+        self.invalidate(definition_id)
 
     def list_revisions(self, definition_id: str) -> list[ExamRevision]:
         return [
@@ -121,6 +164,7 @@ class ExamDefinitionRepository:
         self, transaction, definition_id: str, instructor_uids: list[str], now: datetime
     ) -> None:
         transaction.update(self._ref(definition_id), {"instructor_uids": instructor_uids, "updated_at": now.isoformat()})
+        self.invalidate(definition_id)
 
 
 class ExamRunRepository:
@@ -130,11 +174,24 @@ class ExamRunRepository:
     def _ref(self, run_id: str):
         return self._db.collection(RUNS_COLLECTION).document(run_id)
 
-    def get(self, run_id: str) -> Optional[ExamRun]:
+    def _cache(self):
+        return _run_cache(self._db)
+
+    def invalidate(self, run_id: str) -> None:
+        """Drop the cached run; call it after any write of the run document (the writers below do it themselves)."""
+        invalidate_run_cache(self._db, run_id)
+
+    def _load(self, run_id: str) -> Optional[ExamRun]:
         snap = self._ref(run_id).get()
         if not snap.exists:
             return None
         return ExamRun.model_validate({**(snap.to_dict() or {}), "id": snap.id})
+
+    def get(self, run_id: str) -> Optional[ExamRun]:
+        """Cached for a few seconds and dropped on every write made through this process. Anything that decides a
+        write must still use `get_in_transaction`."""
+        run = self._cache().get_or_load(run_id, lambda: self._load(run_id))
+        return None if run is None else run.model_copy(deep=True)
 
     def get_in_transaction(self, transaction, run_id: str) -> Optional[ExamRun]:
         snap = self._ref(run_id).get(transaction=transaction)
@@ -144,9 +201,11 @@ class ExamRunRepository:
 
     def create(self, run: ExamRun) -> None:
         self._ref(run.id).set(_model_dict(run))
+        self.invalidate(run.id)
 
     def create_in_transaction(self, transaction, run: ExamRun) -> None:
         transaction.create(self._ref(run.id), _model_dict(run))
+        self.invalidate(run.id)
 
     def apply_command_in_transaction(
         self, transaction, run_id: str, *, new_status, new_version: int, now: datetime, extra: dict
@@ -159,12 +218,14 @@ class ExamRunRepository:
             **extra,
         }
         transaction.update(ref, update)
+        self.invalidate(run_id)
 
     def set_enrolled_in_transaction(self, transaction, run_id: str, enrolled_uids: list[str], now: datetime) -> None:
         """Access grant/revoke. Deliberately does NOT bump `version`: version
         guards lifecycle commands, and enrollment edits must not invalidate a
         faculty member's in-flight pause/close."""
         transaction.update(self._ref(run_id), {"enrolled_uids": enrolled_uids, "updated_at": now.isoformat()})
+        self.invalidate(run_id)
 
     def list_by_statuses(self, statuses: list[RunStatus]) -> list[ExamRun]:
         """Single-field `in` query (no composite index) - the sweeper's view of
@@ -251,6 +312,22 @@ class AttemptRepository:
         )
         return [Attempt.model_validate(doc.to_dict() or {}) for doc in query.stream()]
 
+    def list_all_for_run(self, run_id: str, *, cap: int) -> list[Attempt]:
+        """Every attempt of the run in uid order, at most `cap` (callers pass limit+1 to detect an oversize run)."""
+        query = self._db.collection(RUNS_COLLECTION).document(run_id).collection(ATTEMPTS_SUBCOLLECTION).order_by("uid").limit(cap)
+        return [Attempt.model_validate(doc.to_dict() or {}) for doc in query.stream()]
+
+    def get_many(self, run_id: str, uids: list[str]) -> dict[str, Attempt]:
+        """Point reads (one batched request) of just these students' attempts; absent ones are left out."""
+        if not uids:
+            return {}
+        found: dict[str, Attempt] = {}
+        for snap in self._db.get_all([self._ref(run_id, uid) for uid in uids]):
+            if snap.exists:
+                attempt = Attempt.model_validate(snap.to_dict() or {})
+                found[attempt.uid] = attempt
+        return found
+
     def list_page_for_run(self, run_id: str, *, limit: int, cursor_uid: Optional[str] = None) -> tuple[list[Attempt], Optional[str]]:
         """Candidate grid data, paginated by uid. Fetches one extra row to
         decide whether a next page exists without a separate count query."""
@@ -269,9 +346,57 @@ class AttemptRepository:
         return attempts, next_cursor
 
 
+@dataclass(frozen=True)
+class DraftSummary:
+    """What the navigator needs about one saved answer - never the answer itself."""
+
+    version: int
+    answered: bool
+    marked_for_review: bool
+
+
+_summary_lock = threading.Lock()
+
+
 class DraftRepository:
     def __init__(self, db) -> None:
         self._db = db
+
+    def _summary_cache(self):
+        return cache_for(self._db, "draft_summaries", ttl_seconds=settings.EXAM_DRAFT_SUMMARY_CACHE_SECONDS, max_entries=4096)
+
+    def _load_summaries(self, run_id: str, uid: str) -> dict[str, DraftSummary]:
+        summaries: dict[str, DraftSummary] = {}
+        for doc in self._collection(run_id, uid).stream():
+            data = doc.to_dict() or {}
+            summaries[doc.id] = DraftSummary(
+                version=int(data.get("version", 0)),
+                answered=bool(data.get("answer")),
+                marked_for_review=bool(data.get("marked_for_review")),
+            )
+        return summaries
+
+    def summaries(self, run_id: str, uid: str) -> dict[str, DraftSummary]:
+        """Per-question summary of one student's drafts for the navigator and the version list. Loaded once, then kept
+        current by `record_saved` (the only writer of drafts is this process's save path); never used to decide a write."""
+        loaded = self._summary_cache().get_or_load((run_id, uid), lambda: self._load_summaries(run_id, uid))
+        return dict(loaded)
+
+    def record_saved(self, run_id: str, uid: str, draft: Draft) -> None:
+        """Write-through after an accepted, committed save. When nothing is cached the key is only fenced, so a load that
+        started before this save cannot store a result that misses it."""
+        cache = self._summary_cache()
+        key = (run_id, uid)
+        with _summary_lock:
+            current = cache.peek(key)
+            if current is None:
+                cache.invalidate(key)
+                return
+            updated = dict(current)
+            updated[draft.question_id] = DraftSummary(
+                version=draft.version, answered=bool(draft.answer), marked_for_review=bool(draft.marked_for_review)
+            )
+            cache.put(key, updated)
 
     def _collection(self, run_id: str, uid: str):
         return (

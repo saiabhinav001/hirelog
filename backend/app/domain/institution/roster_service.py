@@ -31,7 +31,12 @@ from app.domain.institution.models import (
     RosterRowResult,
 )
 from app.domain.institution.normalization import normalize_email, normalize_identity_key
-from app.domain.institution.repository import InstitutionRepository, MembershipRepository, RosterImportRepository
+from app.domain.institution.repository import (
+    InstitutionRepository,
+    MembershipRepository,
+    RosterImportRepository,
+    invalidate_membership_cache,
+)
 from app.domain.institution.roster_csv import RosterRowCandidate
 from app.domain.institution.roster_import import (
     batch_identity_keys,
@@ -268,4 +273,6 @@ class RosterService:
             )
             return decision
 
-        return _txn(transaction)
+        decided = _txn(transaction)
+        invalidate_membership_cache(self._db)
+        return decided

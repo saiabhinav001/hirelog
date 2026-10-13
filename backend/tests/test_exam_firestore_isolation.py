@@ -119,19 +119,19 @@ def test_isolated_identity_never_touches_the_live_users_collection(monkeypatch: 
     assert "role" not in user
 
 
-def test_shared_project_identity_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[str] = []
-
-    def fake_profile(uid, email, name=None):
-        calls.append(uid)
-        return {"uid": uid, "email": "stored@example.edu", "role": "viewer"}
+def test_shared_project_identity_no_longer_reads_the_profile_either(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exam identity is token-only in every deployment: the per-request users/{uid} read was pure cost (no exam
+    decision uses a stored profile field), so the shared-project path no longer makes it."""
+    def forbidden(*args, **kwargs):
+        raise AssertionError("an exam request must not read the legacy users collection")
 
     monkeypatch.setattr(deps, "_verify_firebase_token", lambda token: _decoded_token())
-    monkeypatch.setattr(deps, "_get_or_create_user", fake_profile)
+    monkeypatch.setattr(deps, "_get_or_create_user", forbidden)
     monkeypatch.setattr(deps.settings, "EXAM_FIREBASE_PROJECT_ID", None)
 
     user = deps.get_current_user_uncached(SimpleNamespace(credentials="token"))
 
-    assert calls == ["u1"]
-    assert user["role"] == "viewer"
+    assert user["uid"] == "u1"
+    assert user["email"] == "Student@Example.edu"
     assert user["token_email"] == "student@example.edu"
+    assert "role" not in user

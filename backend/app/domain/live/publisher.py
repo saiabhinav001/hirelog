@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from app.domain.exams.attempts_view import mark_dirty
 from app.domain.exams.models import Attempt, ExamRun
 from app.domain.live.connection_manager import LiveConnectionManager, live_connection_manager
 from app.domain.live.events import attempt_status_changed_event, run_state_changed_event
@@ -19,5 +20,6 @@ def publish_run_state_changed(run: ExamRun, *, now: datetime, manager: LiveConne
 
 
 def publish_attempt_status_changed(attempt: Attempt, *, now: datetime, manager: LiveConnectionManager = live_connection_manager) -> None:
+    mark_dirty(attempt.run_id, attempt.uid)  # the faculty grid re-reads just this row (the change has committed)
     seq = manager.next_seq(attempt.run_id)
     manager.publish(attempt_status_changed_event(attempt, seq=seq, now=now))

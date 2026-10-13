@@ -27,6 +27,7 @@ from app.domain.exams.decisions import (
 from app.domain.exams.errors import CommandRejectedError
 from app.domain.exams.models import Attempt, AttemptStatus, ExamRevision, ExamRun, RunStatus, SubmitReceipt
 from app.domain.exams.policy import ExamPolicy
+from app.domain.exams.repository import ExamRunRepository
 from app.domain.exams.student_service import ExamStudentService
 from app.domain.generation.models import CandidateStatus, GenerationCandidate, ItemType
 from app.domain.generation.repository import VariantAssignmentRepository
@@ -240,6 +241,16 @@ def test_the_navigator_lists_released_slots_without_content_and_counts_locked(ap
     assert "prompt" not in json.dumps(body) and "options" not in json.dumps(body)
 
 
+def test_a_saved_draft_reports_what_the_navigator_will_show_so_the_client_need_not_ask_again(api) -> None:
+    assert api.save(Q0, 0, {"selected": "A"}).json()["answered"] is True
+    assert api.save(Q0, 1, {}).json()["answered"] is False
+    saved = api.save(Q0, 2, {"selected": "B"}, client_save_id="s-1").json()
+    replay = api.save(Q0, 2, {"selected": "B"}, client_save_id="s-1").json()
+    assert (saved["answered"], replay["answered"], replay["replayed"]) == (True, True, True)
+    slot = api.client.get(f"{BASE}/runs/{RUN}/slots").json()["slots"][0]
+    assert (slot["answered"], slot["version"]) == (True, 3)
+
+
 def test_marking_for_review_is_a_flag_that_a_later_save_keeps_unless_told_otherwise(api) -> None:
     api.save(Q0, 0, {"selected": "A"}, marked_for_review=True)
     api.save(Q0, 1, {"selected": "B"})  # flag omitted: unchanged
@@ -392,6 +403,7 @@ def _race(*targets) -> list:
 def _fresh_attempt(api, uid: str, **extra) -> None:
     run = api.env.db.get("exam_runs", RUN)
     api.env.db.put("exam_runs", RUN, {**run, "enrolled_uids": [*run["enrolled_uids"], uid]})
+    ExamRunRepository(api.env.db).invalidate(RUN)  # a write that bypasses the repository must drop the cached run
     seed_attempt(api.env.db, RUN, uid, **extra)
 
 

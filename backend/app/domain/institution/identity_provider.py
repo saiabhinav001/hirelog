@@ -11,13 +11,21 @@ writing one-time codes to logs. A real provider (SES/Twilio/etc.) implements
 the same `OtpDelivery` protocol and is registered in `build_otp_delivery`.
 An e-mail OTP alone is a proof of mailbox control, NOT multi-factor
 authentication, and must never be described as MFA.
+
+The `webhook` adapter hands the code to an HTTPS mail relay you operate (a Google Apps Script web app, a small
+serverless function, any service that accepts one JSON POST). It exists because a Hugging Face Space can only make
+outbound calls on ports 80, 443 and 8080, so SMTP cannot work there. See docs/exams/otp-email-relay.md.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
-from typing import Protocol
+import urllib.error
+import urllib.request
+from typing import Callable, Protocol
+from urllib.parse import urlparse
 
 
 logger = logging.getLogger("hirelog.institution.identity_provider")
@@ -58,6 +66,52 @@ class OtpDelivery(Protocol):
 
 class OtpDeliveryUnavailableError(RuntimeError):
     """No OTP delivery provider is configured for this deployment."""
+
+
+class OtpDeliveryError(RuntimeError):
+    """The provider was reached but did not accept the message (never carries the code)."""
+
+
+def _post_json(url: str, body: dict, timeout: float) -> tuple[int, str]:
+    """One JSON POST. Redirects are followed (an Apps Script web app answers through one) and an HTTP error status is
+    returned rather than raised, so the caller decides."""
+    request = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"), method="POST", headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - https only, checked at construction
+            return response.status, response.read(4096).decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, ""
+
+
+class WebhookOtpDelivery:
+    """Posts `{secret, to, code, ttl_minutes}` to an HTTPS relay that composes and sends the e-mail itself, so a leaked
+    secret can only ever send sign-in-code messages. The relay answers `{"ok": true}`. The code is never logged."""
+
+    def __init__(
+        self, *, url: str, secret: str, ttl_minutes: int, timeout: float = 10.0,
+        post: Callable[[str, dict, float], tuple[int, str]] = _post_json,
+    ) -> None:
+        if urlparse(url).scheme != "https":
+            raise ValueError("the OTP relay URL must be https")
+        self._url, self._secret, self._ttl, self._timeout, self._post = url, secret, ttl_minutes, timeout, post
+
+    def send(self, *, contact_email: str, code: str) -> None:
+        try:
+            status_code, text = self._post(
+                self._url, {"secret": self._secret, "to": contact_email, "code": code, "ttl_minutes": self._ttl}, self._timeout
+            )
+        except OSError as exc:  # timeouts, DNS and TLS failures are all OSError subclasses
+            raise OtpDeliveryError(f"relay unreachable: {type(exc).__name__}") from exc
+        if status_code != 200:
+            raise OtpDeliveryError(f"relay answered HTTP {status_code}")
+        try:
+            accepted = bool(json.loads(text).get("ok"))
+        except (ValueError, AttributeError):
+            accepted = False
+        if not accepted:
+            raise OtpDeliveryError("relay did not accept the message")
 
 
 class UnconfiguredOtpDelivery:
@@ -121,5 +175,20 @@ def build_otp_delivery(*, provider: str, production: bool) -> OtpDelivery:
             _log_once("No OTP delivery provider is configured: institutional OTP sign-in is unavailable")
             return UnconfiguredOtpDelivery()
         return DevSinkOtpDelivery()
+    if name == "webhook":
+        from app.core.config import settings
+
+        url, secret = (settings.EXAM_OTP_WEBHOOK_URL or "").strip(), (settings.EXAM_OTP_WEBHOOK_SECRET or "").strip()
+        if not url or not secret:
+            _log_once("EXAM_OTP_DELIVERY_PROVIDER=webhook needs EXAM_OTP_WEBHOOK_URL and EXAM_OTP_WEBHOOK_SECRET")
+            return UnconfiguredOtpDelivery()
+        try:
+            return WebhookOtpDelivery(
+                url=url, secret=secret, ttl_minutes=max(1, round(settings.EXAM_OTP_TTL_SECONDS / 60)),
+                timeout=float(settings.EXAM_OTP_WEBHOOK_TIMEOUT_SECONDS),
+            )
+        except ValueError:
+            _log_once("EXAM_OTP_WEBHOOK_URL must be an https URL; OTP sign-in is unavailable")
+            return UnconfiguredOtpDelivery()
     _log_once("EXAM_OTP_DELIVERY_PROVIDER=%r has no registered adapter; OTP sign-in is unavailable", name)
     return UnconfiguredOtpDelivery()
