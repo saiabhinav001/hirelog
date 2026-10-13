@@ -20,16 +20,28 @@ def _to_iso(value: object) -> str | None:
     return None
 
 
-def firestore_health_check() -> dict:
+_OK_REUSE_SECONDS = 120.0
+_ok_cache: tuple[float, dict] | None = None
+
+
+def firestore_health_check(*, fresh: bool = False) -> dict:
+    """A recent "ok" is reused for two minutes because every probe is a billable read; an error is never cached."""
+    global _ok_cache
+    cached = _ok_cache
+    if not fresh and cached is not None and time.monotonic() - cached[0] < _OK_REUSE_SECONDS:
+        return dict(cached[1])
     started = time.perf_counter()
     try:
         _ = db.collection("metadata").document("bootstrap").get()
         latency_ms = round((time.perf_counter() - started) * 1000.0, 2)
-        return {
+        result = {
             "status": "ok",
             "latency_ms": latency_ms,
         }
+        _ok_cache = (time.monotonic(), result)
+        return dict(result)
     except Exception as exc:
+        _ok_cache = None
         latency_ms = round((time.perf_counter() - started) * 1000.0, 2)
         return {
             "status": "error",
@@ -94,7 +106,7 @@ def _overall_status(checks: dict) -> str:
 
 
 def build_api_health_report(*, deep: bool) -> dict:
-    firestore = firestore_health_check()
+    firestore = firestore_health_check(fresh=deep)
     queue = search_index_queue.status(include_stats=deep)
     index_freshness = _index_freshness_check(queue)
 
@@ -127,7 +139,7 @@ def build_api_health_report(*, deep: bool) -> dict:
 
 
 def build_worker_health_report(*, deep: bool) -> dict:
-    firestore = firestore_health_check()
+    firestore = firestore_health_check(fresh=deep)
     queue = search_index_queue.status(include_stats=deep)
     index_freshness = _index_freshness_check(queue)
 
