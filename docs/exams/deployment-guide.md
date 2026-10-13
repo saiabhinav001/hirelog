@@ -37,7 +37,12 @@ At minimum, beyond the legacy API's existing Firebase variables
 EXAMS_ENABLED=true
 EXAM_FACULTY_EMAILS=                 # or rely on real institution membership (ADR 0010)
 EXAM_OTP_HMAC_SECRET=                # REQUIRED for any multi-instance deployment — see ADR 0010
+EXAM_SUPER_ADMIN_EMAILS=             # platform administrators; keep it a secret on a hosted service
 ```
+
+Students sign in with an e-mailed code. A host that blocks SMTP (Hugging Face Spaces allow outbound 80/443/8080 only)
+needs the HTTPS relay in [otp-email-relay.md](otp-email-relay.md) (`EXAM_OTP_DELIVERY_PROVIDER=webhook`); without a
+delivery provider, student OTP sign-in answers 503 and only staff who sign in with Google can use the exam pages.
 
 Everything else in `backend/.env.example`'s "Exams module" section has a safe
 default and can be left unset for an initial deployment; each unset/default
@@ -152,7 +157,33 @@ Every worker poll costs at least one Firestore read even when nothing is waiting
 
 The outbox, judge, proctoring and finalization workers now poll at their minimum interval only while they find work, and back off while idle (`EXAM_OUTBOX_POLL_*`, `EXAM_JUDGE_SWEEP_*`, `EXAM_PROCTORING_SWEEP_*` and `EXAM_FINALIZATION_SWEEP_*` in `.env.example`; the defaults keep the old minimums, so exam-time latency is unchanged). Work done in the same process wakes them at once: admission, submit, run commands, terminate and recover, KT uploads, judge runs and proctoring observations. The finalization sweeper sleeps until the earliest known attempt deadline (never longer than `EXAM_FINALIZATION_SWEEP_MAX_INTERVAL_SECONDS`) and reads drafts only for attempts already past their deadline, which is the only case in which it can seal one. Work created by a different process cannot wake these loops, so with several instances a job can wait up to the maximum interval; the defaults suit one instance.
 
-The request path is separate: a 90-student burst (one question, three draft saves each, a synchronized submit) cost about 4,300 reads and 800 writes in total here, including one read of the legacy `users/{uid}` document per request (`get_current_user_uncached`), which also creates that document for a first-time user. A real exam has more questions and saves, so measure it before relying on the free plan.
+The request path is separate; see the next section.
+
+### Read economy of the request path
+
+Firestore bills one read per document returned (a query that matches nothing costs one) and one write per document written. Measured by counting the requests of one exam API process against the local emulator while 30 students each worked through 6 questions with 8 saves per question (48 saves a student, a heavier typist than the client's throttled autosave produces) and one faculty console reloaded the candidate grid every second:
+
+| | Reads per student | Writes per student |
+|---|---|---|
+| Before | about 1,160 | about 59 |
+| Server-side caching and guards | about 223 | about 58 |
+| Plus the client updating its navigator from the save response | about 175 | about 58 |
+
+With tab hidden/visible observations (6 a student) and the live-socket reconcile modelled as well the figure was about 198 reads and 71 writes a student.
+
+Run at full size (90 students, 10 questions, 12 saves a question, so 10,800 saves, one faculty console, the live-socket reconcile modelled, no tab observations) every student submitted with a distinct receipt and no request failed or was refused. The totals were about 32,600 reads and 12,200 writes (363 and 135 a student), against the free plan's 50,000 and 20,000 a day. Saves account for about two thirds of the reads and nine tenths of the writes. The floor is 2 reads and 1 write per accepted save, because a save decides inside a transaction on the attempt and the draft it replaces, so fewer saves per student cost proportionally less: the client's autosave throttle is the lever. One exam of that size uses about two thirds of a day's free quota (the day ends at midnight Pacific time), so a second exam the same day, or other traffic on a shared project, can use it up.
+
+What produces the saving, in order of size:
+
+- Per-request guards no longer re-read stable documents. The run, definition, revision, lockdown configuration, memberships, staff bindings and each student's draft summaries are cached in process (`app/core/read_cache.py`, `EXAM_*_CACHE_SECONDS`). A write made by the process drops the entry at once, so the TTL only bounds staleness for a write made by another process (relevant only with more than one instance). A save, a submit and a command always decide on a fresh transactional read.
+- Identity is the verified token alone: the exam API no longer reads or creates the legacy `users/{uid}` document per request.
+- The navigator list is no longer fetched after every save: the save response carries `answered` and the client updates its own list. Autosave waits for a pause of 3 s and at most 12 s while typing (`NEXT_PUBLIC_EXAM_AUTOSAVE_DEBOUNCE_MS`, `NEXT_PUBLIC_EXAM_AUTOSAVE_MAX_WAIT_MS`); moving to another question, submitting and hiding the tab still save immediately.
+- The faculty candidate grid is kept in memory and patched one row at a time when an attempt changes, with a full re-read at most every `EXAM_ATTEMPT_VIEW_RESYNC_SECONDS`.
+- The finalization sweep sleeps while a run has no live attempt (`EXAM_FINALIZATION_DORMANT_RUN_SECONDS`) and is woken by an admission; the judge sweep stops polling a student's test run that never finished (`EXAM_JUDGE_PUBLIC_RUN_STALE_SECONDS`).
+
+Idle cost with exams enabled and nobody using them is now about 2 reads a minute (about 2,900 a day), lower than the idle-adaptive figure in the table above because the idle caps were raised to 10 minutes and the finalization sweep sleeps while no run has a live attempt.
+
+Limits of the measurement: it counts requests against the emulator, not bills; it does not include the Firebase Auth or hosting traffic; the live socket was modelled as a ticket request plus one extra reconcile rather than a real WebSocket; and the project quota is shared with every other client of the same project, which this process cannot see or control.
 
 ### Keeping exam data in its own free Firebase project
 
