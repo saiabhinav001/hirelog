@@ -180,6 +180,8 @@ What produces the saving, in order of size:
 - The navigator list is no longer fetched after every save: the save response carries `answered` and the client updates its own list. Autosave waits for a pause of 3 s and at most 12 s while typing (`NEXT_PUBLIC_EXAM_AUTOSAVE_DEBOUNCE_MS`, `NEXT_PUBLIC_EXAM_AUTOSAVE_MAX_WAIT_MS`); moving to another question, submitting and hiding the tab still save immediately.
 - The faculty candidate grid is kept in memory and patched one row at a time when an attempt changes, with a full re-read at most every `EXAM_ATTEMPT_VIEW_RESYNC_SECONDS`.
 - The finalization sweep sleeps while a run has no live attempt (`EXAM_FINALIZATION_DORMANT_RUN_SECONDS`) and is woken by an admission; the judge sweep stops polling a student's test run that never finished (`EXAM_JUDGE_PUBLIC_RUN_STALE_SECONDS`).
+- The outbox claims one page of entries at a time, so a burst of submissions does not re-read the whole backlog on every tick, and grading reads each draft once.
+- When a browser cannot open the live socket, the student page polls with one state read every 20 s (it reloads the question only if the attempt changed) and asks for a new socket ticket every two minutes. Before this a refused socket meant five requests every 10 s from every student.
 
 Idle cost with exams enabled and nobody using them is now about 2 reads a minute (about 2,900 a day), lower than the idle-adaptive figure in the table above because the idle caps were raised to 10 minutes and the finalization sweep sleeps while no run has a live attempt.
 
