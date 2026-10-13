@@ -137,15 +137,9 @@ def get_current_user(
 def get_current_user_uncached(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> dict:
-    """Verifies the token on every call and takes identity from the token alone.
+    """Verifies the token on every call; identity comes from the token alone, so exam routes never read `users/{uid}`.
 
-    Used only by the exam routes. Exam authority never depends on the legacy `users/{uid}` document (see
-    `exams_dependencies`), so an exam request neither reads nor creates it: that read alone was a billable Firestore
-    read on every exam request. Memberships and the staff allowlist are resolved separately from verified claims.
-
-    Also surfaces `auth_time` and any `exam_*` custom claims (set at institutional sign-in — see
-    `app.domain.institution.auth_service`) so institution-membership/recent-reauth checks (Prompt 2) can be built on
-    top of this same verified token without a second verification.
+    Also surfaces `auth_time` and any `exam_*` custom claims set at institutional sign-in (`app.domain.institution.auth_service`).
     """
     decoded = _verify_firebase_token(credentials.credentials)
     uid = decoded.get("uid")
@@ -155,8 +149,7 @@ def get_current_user_uncached(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload.")
     user_data = {"uid": uid, "email": email or "", "name": name or ""}
     user_data["auth_time"] = decoded.get("auth_time")
-    # Identity facts for AUTHORIZATION come from the verified token only (ADR 0017): `token_email` decides authority,
-    # never a client-writable profile field.
+    # Authority comes from the verified token only (ADR 0017), never a client-writable profile field.
     user_data["token_email"] = str(email or "").strip().lower()
     user_data["email_verified"] = bool(decoded.get("email_verified"))
     user_data["sign_in_provider"] = (decoded.get("firebase") or {}).get("sign_in_provider")

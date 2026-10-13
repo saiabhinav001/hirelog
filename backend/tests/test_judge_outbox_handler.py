@@ -25,11 +25,8 @@ class _FakeDraftRepo:
     def __init__(self, drafts: dict[str, Draft]) -> None:
         self._drafts = drafts
 
-    def all_versions(self, run_id: str, uid: str) -> dict[str, int]:
-        return {qid: d.version for qid, d in self._drafts.items()}
-
-    def get(self, run_id: str, uid: str, question_id: str):
-        return self._drafts.get(question_id)
+    def list_all(self, run_id: str, uid: str) -> list[Draft]:
+        return [draft.model_copy(update={"question_id": qid}) for qid, draft in self._drafts.items()]
 
 
 class _FakeAssignmentRepo:
@@ -164,6 +161,26 @@ def test_blank_answer_is_skipped(monkeypatch) -> None:
     handler.handle(_finalized_entry())
 
     assert recording.final_grade_calls == []
+
+
+def test_blank_answer_needs_no_variant_or_candidate_lookup(monkeypatch) -> None:
+    question_id = "rev-1:slot:0"
+    handler, recording = _handler(
+        monkeypatch, drafts={question_id: Draft(question_id=question_id, version=1, answer={})}, assignments={}, candidates={}
+    )
+
+    class _Forbidden:
+        def get_assignment(self, **_kwargs):
+            raise AssertionError("looked up a variant for a blank answer")
+
+        def get_candidate(self, _candidate_id):
+            raise AssertionError("looked up a candidate for a blank answer")
+
+    handler._assignments = handler._generation = _Forbidden()
+
+    handler.handle(_finalized_entry())
+
+    assert recording.final_grade_calls == recording.mcq_calls == recording.short_answer_calls == []
 
 
 def test_missing_variant_assignment_is_skipped_without_raising(monkeypatch) -> None:

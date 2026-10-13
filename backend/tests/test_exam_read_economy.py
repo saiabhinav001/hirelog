@@ -10,8 +10,8 @@ from app.core import background, read_cache
 from app.core.config import settings
 from app.domain.authz.staff_binding import StaffBindingService
 from app.domain.exams import attempts_view, sweep_hints
-from app.domain.exams.models import AttemptStatus, RunStatus
-from app.domain.exams.repository import AttemptRepository, ExamDefinitionRepository, ExamRunRepository
+from app.domain.exams.models import AttemptStatus, OutboxEntry, RunStatus
+from app.domain.exams.repository import AttemptRepository, ExamDefinitionRepository, ExamRunRepository, OutboxRepository
 from app.domain.exams.student_service import ExamStudentService
 from app.domain.institution.models import Membership
 from app.domain.institution.repository import MembershipRepository
@@ -394,3 +394,39 @@ def test_an_admission_reports_its_deadline_to_the_sweep(monkeypatch) -> None:
     assert sweep_hints.drain_woken_runs() == {"run-1"}
     service.admit("run-1", "s1")  # an idempotent replay is not a new live attempt
     assert sweep_hints.drain_woken_runs() == set()
+
+
+# -- the outbox ------------------------------------------------------------------------------------------------------
+
+def _outbox_entry(entry_id: str, kind: str = "attempt_finalized") -> OutboxEntry:
+    return OutboxEntry(id=entry_id, kind=kind, run_id="run-1", payload={}, created_at=T0)
+
+
+def _queue(db, entries) -> OutboxRepository:
+    repo = OutboxRepository(db)
+    for entry in entries:
+        transaction = db.transaction()
+        repo.add_in_transaction(transaction, entry)
+        assert transaction.commit()
+    return repo
+
+
+def test_a_backlog_is_claimed_a_page_at_a_time(monkeypatch, reads) -> None:
+    repo = _queue(mem.FakeFirestore(), [_outbox_entry(f"e{index:02d}") for index in range(9)])
+    reads.reset()
+    first = repo.claim_batch(limit=3, lease_seconds=60, worker_id="w", now=T0)
+    assert [entry.id for entry in first] == ["e00", "e01", "e02"]
+    assert reads.billed == 3  # the rest of the backlog is not read
+    for entry in first:
+        repo.mark_processed(entry.id, now=T0)
+    reads.reset()
+    assert [entry.id for entry in repo.claim_batch(limit=3, lease_seconds=60, worker_id="w", now=T0)] == ["e03", "e04", "e05"]
+    assert reads.billed == 3
+
+
+def test_entries_a_loop_must_not_touch_do_not_starve_the_others(monkeypatch) -> None:
+    excluded = [_outbox_entry(f"a{index}", kind="kt_ingest") for index in range(6)]
+    repo = _queue(mem.FakeFirestore(), excluded + [_outbox_entry("b0"), _outbox_entry("b1")])
+    claimed = repo.claim_batch(limit=2, lease_seconds=60, worker_id="w", now=T0, exclude_kinds=("kt_ingest",))
+    assert [entry.id for entry in claimed] == ["b0", "b1"]
+    assert repo.claim_batch(limit=2, lease_seconds=60, worker_id="w", now=T0, exclude_kinds=("kt_ingest",)) == []  # both are leased now

@@ -62,7 +62,6 @@ function DefinitionDetail() {
   }, [definitionId, getToken]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch on mount
     load();
   }, [load]);
 

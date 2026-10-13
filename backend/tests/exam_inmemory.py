@@ -120,7 +120,7 @@ class _Query:
     def limit(self, count: int) -> "_Query":
         return _Query(self._db, self._path, self._filters, self._order, count, self._after)
 
-    def start_after(self, values: dict) -> "_Query":
+    def start_after(self, values: Any) -> "_Query":  # a field dict (ordered query) or a document snapshot
         return _Query(self._db, self._path, self._filters, self._order, self._limit, values)
 
     def stream(self, transaction: Optional["FakeTransaction"] = None):
@@ -146,6 +146,10 @@ class _Query:
             if self._after is not None:
                 cutoff = self._after[self._order]
                 rows = [item for item in rows if item[1].get(self._order) > cutoff]
+        elif self._after is not None or self._limit is not None:
+            rows.sort(key=lambda item: item[0][-1])  # Firestore orders an unordered query by document id
+            if self._after is not None:
+                rows = [item for item in rows if item[0][-1] > self._after.id]
         if self._limit is not None:
             rows = rows[: self._limit]
         return [_Snapshot(_DocRef(self._db, path), data) for path, data in rows]

@@ -1,8 +1,6 @@
-"""What in-process events tell the finalization sweep, so it can stay asleep instead of re-reading attempts.
+"""Admission hints for the finalization sweep, so it can sleep until the next deadline instead of scanning live attempts.
 
-A run with no live attempt is not re-read for a long time, and an admission names the new attempt's deadline, so the sweep
-sleeps until the earliest known deadline rather than scanning every live attempt on a timer. Everything here is advisory: the
-sweep still re-reads and re-decides inside its own transactions, and it still ticks at its idle ceiling as a safety net.
+Advisory only: the sweep still re-reads and decides inside its own transactions.
 """
 
 from __future__ import annotations
@@ -19,8 +17,7 @@ _planned_deadline: Optional[datetime] = None  # earliest live deadline the sweep
 
 
 def note_attempt_started(run_id: str, deadline: Optional[datetime]) -> None:
-    """A student was just admitted: the run has a live attempt again. Wakes the sweep only when this deadline is earlier than
-    the one it already sleeps until (admissions of one run arrive in deadline order, so the first one is the one that matters)."""
+    """A student was just admitted; wakes the sweep only if this deadline is earlier than the one it already sleeps until."""
     global _planned_deadline
     with _lock:
         _woken_runs.add(run_id)

@@ -26,21 +26,26 @@ const BASE_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 const ATTEMPTS_BEFORE_POLLING_FALLBACK = 5;
 const DEFAULT_POLL_INTERVAL_MS = 10000;
+const POLLING_MODE_RECONNECT_DELAY_MS = 120000;
 
 function wsUrlFromApiBase(apiBase: string): string {
   return apiBase.replace(/^http/, "ws").replace(/\/+$/, "");
 }
 
-function jitteredDelay(attempt: number): number {
-  const base = Math.min(BASE_RECONNECT_DELAY_MS * 2 ** attempt, MAX_RECONNECT_DELAY_MS);
+function withJitter(base: number): number {
   const jitter = base * 0.3 * (Math.random() * 2 - 1);
   return Math.max(250, base + jitter);
+}
+
+function jitteredDelay(attempt: number): number {
+  return withJitter(Math.min(BASE_RECONNECT_DELAY_MS * 2 ** attempt, MAX_RECONNECT_DELAY_MS));
 }
 
 export function useLiveSocket(options: {
   runId: string | null;
   getToken: () => Promise<string | undefined>;
   onReconcile: () => void;
+  onPoll?: () => void;
   apiBase?: string;
   pollIntervalMs?: number;
 }): { health: ConnectionHealth; lastEventAt: number | null } {
@@ -58,6 +63,8 @@ export function useLiveSocket(options: {
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onReconcileRef = useRef(onReconcile);
   onReconcileRef.current = onReconcile;
+  const onPollRef = useRef(options.onPoll);
+  onPollRef.current = options.onPoll;
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -75,7 +82,7 @@ export function useLiveSocket(options: {
     const startPollingFallback = () => {
       if (pollTimerRef.current) return;
       setHealth("polling");
-      pollTimerRef.current = setInterval(() => onReconcileRef.current(), pollIntervalMs);
+      pollTimerRef.current = setInterval(() => (onPollRef.current ?? onReconcileRef.current)(), pollIntervalMs);
     };
 
     const scheduleReconnect = () => {
@@ -86,7 +93,10 @@ export function useLiveSocket(options: {
       } else {
         setHealth("reconnecting");
       }
-      const delay = jitteredDelay(Math.min(attemptRef.current, 6));
+      // Every try mints a ticket (a database write), so a socket that cannot connect backs off far longer.
+      const delay = pollTimerRef.current
+        ? withJitter(POLLING_MODE_RECONNECT_DELAY_MS)
+        : jitteredDelay(Math.min(attemptRef.current, 6));
       reconnectTimerRef.current = setTimeout(connect, delay);
     };
 

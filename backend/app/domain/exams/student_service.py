@@ -280,8 +280,7 @@ class ExamStudentService:
         def _txn(transaction) -> DraftSaveOutcome:
             written.clear()  # the callback re-runs when the transaction is retried
             now = self._clock.now()
-            # The run only gates (paused/ended) and names the revision; a write this process makes drops the cached
-            # copy, so the hot save path spends its reads on the attempt and the draft it actually decides on.
+            # The cached run only gates (paused/ended); the save decides on the attempt and the draft read below.
             run = self.runs.get(run_id)
             if run is None:
                 raise LookupError(f"exam run {run_id} not found")

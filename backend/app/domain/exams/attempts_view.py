@@ -1,10 +1,7 @@
 """In-memory candidate grid for the faculty control room.
 
-Every live event makes each open control room reload the grid, and one page read costs a Firestore read per attempt, so a
-cohort starting or finishing multiplies into thousands of reads. This keeps one snapshot per run and re-reads only the rows
-the live publisher reports as changed (`mark_dirty`, called after the change committed). A full re-read happens at most every
-EXAM_ATTEMPT_VIEW_RESYNC_SECONDS as a safety net for a change that was never published; runs too large to hold fall back to
-the paged read.
+One snapshot per run, patched row by row from `mark_dirty` (called after a change committed). It is re-read in full at most
+every EXAM_ATTEMPT_VIEW_RESYNC_SECONDS, and runs over `_MAX_ROWS` use the paged read.
 """
 
 from __future__ import annotations

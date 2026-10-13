@@ -1,10 +1,7 @@
-"""Small in-process read cache for the exam module.
+"""In-process TTL read cache for the exam module.
 
-The free Firestore plan allows 50,000 document reads a day and most exam requests re-read the same few documents (the
-run, its lockdown profile, the caller's memberships). Entries expire quickly and are dropped the moment this process
-writes the underlying document, so a change made through this process is visible to the very next request.
-
-One cache set lives per database object (a weak registry), so test fakes and the real client never share entries.
+Entries expire quickly and are dropped as soon as this process writes the underlying document. One cache set lives per
+database object, so test fakes and the real client never share entries.
 """
 
 from __future__ import annotations

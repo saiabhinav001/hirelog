@@ -24,6 +24,7 @@ const AUTOSAVE_DEBOUNCE_MS = Number(process.env.NEXT_PUBLIC_EXAM_AUTOSAVE_DEBOUN
 const AUTOSAVE_MAX_WAIT_MS = Number(process.env.NEXT_PUBLIC_EXAM_AUTOSAVE_MAX_WAIT_MS) || 12000;
 const DEFAULT_TIME_WARNINGS = [10];
 const FINALIZING_POLL_MS = 3000;
+const LIVE_POLL_MS = 20000;
 
 // Visible, on-screen feedback for detections the backend already logs
 // silently — the ledger/warning counter existed before, but nothing told
@@ -69,6 +70,7 @@ function ExamContent() {
   const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewIndexRef = useRef<number | null>(null);
   const releasedIndexRef = useRef(0);
+  const knownVersionRef = useRef<number | null>(null);
   const { clock, tick } = useServerClock();
   void tick; // re-render every second so the timer advances
 
@@ -86,6 +88,7 @@ function ExamContent() {
     sampleClock(state.server_time, startedAt);
     setAttempt(state);
     releasedIndexRef.current = state.current_slot_index;
+    knownVersionRef.current = state.version;
     return state;
   }, [getToken, runId, sampleClock]);
 
@@ -157,7 +160,17 @@ function ExamContent() {
       .catch(() => undefined); // accommodations are an enhancement, never a blocker
   }, [getToken, runId]);
 
-  const { health } = useLiveSocket({ runId, getToken, onReconcile: refresh });
+  const checkForChange = useCallback(async () => {
+    const known = knownVersionRef.current;
+    try {
+      const state = await syncState();
+      if (known !== null && state.version !== known) await refresh();
+    } catch {
+      // the next tick tries again
+    }
+  }, [refresh, syncState]);
+
+  const { health } = useLiveSocket({ runId, getToken, onReconcile: refresh, onPoll: checkForChange, pollIntervalMs: LIVE_POLL_MS });
 
   const handleObservation = useCallback((kind: string) => {
     const message = LIVE_WARNING_MESSAGES[kind];

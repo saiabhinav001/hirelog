@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from app.domain.exams.models import OutboxEntry
+from app.domain.exams.models import Draft, OutboxEntry
 from app.domain.exams.repository import DraftRepository
 from app.domain.generation.models import CandidateStatus, ItemType
 from app.domain.generation.repository import GenerationRepository, VariantAssignmentRepository
@@ -45,10 +45,14 @@ class GradingTriggerOutboxHandler:
         if not uid:
             return
 
-        for question_id in self._drafts.all_versions(run_id, uid):
-            self._grade_one_question(run_id, uid, question_id)
+        for draft in self._drafts.list_all(run_id, uid):
+            self._grade_one_question(run_id, uid, draft)
 
-    def _grade_one_question(self, run_id: str, uid: str, question_id: str) -> None:
+    def _grade_one_question(self, run_id: str, uid: str, draft: Draft) -> None:
+        question_id = draft.question_id
+        answer = draft.answer
+        if not answer:
+            return  # blank — nothing to grade (counted as "blank" by the gradebook, Prompt 9)
         slot_index = _parse_slot_index(question_id)
         if slot_index is None:
             logger.warning("draft id %r is not a slot id — skipping grading", question_id)
@@ -62,11 +66,6 @@ class GradingTriggerOutboxHandler:
         if candidate is None or candidate.status not in (CandidateStatus.APPROVED, CandidateStatus.PUBLISHED):
             logger.warning("candidate %s not approved/published — skipping grading", candidate_id)
             return
-
-        draft = self._drafts.get(run_id, uid, question_id)
-        answer = draft.answer if draft else None
-        if not answer:
-            return  # blank — nothing to grade (counted as "blank" by the gradebook, Prompt 9)
 
         if candidate.item_type == ItemType.CODING:
             language_key = str(answer.get("language", ""))

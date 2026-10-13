@@ -30,8 +30,13 @@ vi.mock("@/lib/examAuth", () => ({
   useExamAuth: () => ({ user: { uid: "u1" }, loading: false, isFaculty: false, isStudent: true, getToken }),
 }));
 
+const liveSocket = vi.hoisted(() => ({ onPoll: undefined as undefined | (() => Promise<void>) }));
+
 vi.mock("@/lib/liveSocket", () => ({
-  useLiveSocket: () => ({ health: "connected", lastEventAt: null }),
+  useLiveSocket: (options: { onPoll?: () => Promise<void> }) => {
+    liveSocket.onPoll = options.onPoll;
+    return { health: "connected", lastEventAt: null };
+  },
 }));
 
 vi.mock("@/lib/examEndpoints", () => ({
@@ -173,6 +178,24 @@ describe("Student exam page — draft versus final", () => {
     await userEvent.type(await screen.findByRole("textbox", { name: "Your answer" }), "a");
     expect(await screen.findByText("Draft saved (v2) - not submitted", {}, { timeout: 4000 })).toBeInTheDocument();
     expect(screen.getByText(/Saving a draft is not submitting/)).toBeInTheDocument();
+  });
+});
+
+describe("Student exam page — when the live socket is down", () => {
+  it("polls with a single state read and reloads the question only when the attempt changed", async () => {
+    mockSingle();
+    render(<ExamPage />);
+    await screen.findByText("Explain recursion.");
+    [getStateMock, getCurrentQuestionMock, getMyDraftMock, listMyDraftVersionsMock, listReleasedSlotsMock].forEach((m) => m.mockClear());
+
+    await act(async () => { await liveSocket.onPoll?.(); });
+    expect(getStateMock).toHaveBeenCalledTimes(1);
+    expect([getCurrentQuestionMock, getMyDraftMock, listMyDraftVersionsMock, listReleasedSlotsMock].map((m) => m.mock.calls.length)).toEqual([0, 0, 0, 0]);
+
+    getStateMock.mockResolvedValue(state({ version: 2 }));
+    await act(async () => { await liveSocket.onPoll?.(); });
+    await waitFor(() => expect(getCurrentQuestionMock).toHaveBeenCalledTimes(1));
+    expect(listReleasedSlotsMock).toHaveBeenCalledTimes(1);
   });
 });
 

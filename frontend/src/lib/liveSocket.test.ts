@@ -142,4 +142,41 @@ describe("useLiveSocket", () => {
     unmount();
     expect(socket.closeCalls).toBe(1);
   });
+
+  describe("when the socket cannot connect", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0.5); // no jitter
+      examApiFetchMock.mockRejectedValue(new Error("ticket refused"));
+    });
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it("polls with onPoll instead of the full reconcile", async () => {
+      const onReconcile = vi.fn();
+      const onPoll = vi.fn();
+      renderHook(() => useLiveSocket({ runId: "run-1", getToken: async () => undefined, onReconcile, onPoll, pollIntervalMs: 20_000 }));
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(onPoll).toHaveBeenCalled();
+      expect(onReconcile).not.toHaveBeenCalled();
+    });
+
+    it("keeps reconciling in full when no lighter poll is given", async () => {
+      const onReconcile = vi.fn();
+      renderHook(() => useLiveSocket({ runId: "run-1", getToken: async () => undefined, onReconcile, pollIntervalMs: 20_000 }));
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(onReconcile).toHaveBeenCalled();
+    });
+
+    it("stops minting a ticket every few seconds once it has fallen back to polling", async () => {
+      renderHook(() => useLiveSocket({ runId: "run-1", getToken: async () => undefined, onReconcile: vi.fn(), pollIntervalMs: 20_000 }));
+      await vi.advanceTimersByTimeAsync(31_000); // five refused tries: now, +2 s, +4 s, +8 s, +16 s
+      const tickets = examApiFetchMock.mock.calls.length;
+      expect(tickets).toBe(5);
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(examApiFetchMock.mock.calls.length).toBe(tickets);
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(examApiFetchMock.mock.calls.length).toBe(tickets + 1);
+    });
+  });
 });

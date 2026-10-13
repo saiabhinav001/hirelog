@@ -178,7 +178,7 @@ class ExamRunRepository:
         return _run_cache(self._db)
 
     def invalidate(self, run_id: str) -> None:
-        """Drop the cached run; call it after any write of the run document (the writers below do it themselves)."""
+        """Drop the cached run (the writers below already do)."""
         invalidate_run_cache(self._db, run_id)
 
     def _load(self, run_id: str) -> Optional[ExamRun]:
@@ -188,8 +188,7 @@ class ExamRunRepository:
         return ExamRun.model_validate({**(snap.to_dict() or {}), "id": snap.id})
 
     def get(self, run_id: str) -> Optional[ExamRun]:
-        """Cached for a few seconds and dropped on every write made through this process. Anything that decides a
-        write must still use `get_in_transaction`."""
+        """Cached; anything that decides a write must still use `get_in_transaction`."""
         run = self._cache().get_or_load(run_id, lambda: self._load(run_id))
         return None if run is None else run.model_copy(deep=True)
 
@@ -377,14 +376,12 @@ class DraftRepository:
         return summaries
 
     def summaries(self, run_id: str, uid: str) -> dict[str, DraftSummary]:
-        """Per-question summary of one student's drafts for the navigator and the version list. Loaded once, then kept
-        current by `record_saved` (the only writer of drafts is this process's save path); never used to decide a write."""
+        """Per-question draft summaries for the navigator; loaded once, then kept current by `record_saved`. Never decides a write."""
         loaded = self._summary_cache().get_or_load((run_id, uid), lambda: self._load_summaries(run_id, uid))
         return dict(loaded)
 
     def record_saved(self, run_id: str, uid: str, draft: Draft) -> None:
-        """Write-through after an accepted, committed save. When nothing is cached the key is only fenced, so a load that
-        started before this save cannot store a result that misses it."""
+        """Write-through after a committed save; with nothing cached it only fences any load already in flight."""
         cache = self._summary_cache()
         key = (run_id, uid)
         with _summary_lock:
@@ -465,6 +462,9 @@ class CommandReceiptRepository:
         transaction.set(ref, receipt.model_dump(mode="json", exclude_none=True))
 
 
+_CLAIM_MAX_PAGES = 4
+
+
 class OutboxRepository:
     def __init__(self, db) -> None:
         self._db = db
@@ -483,30 +483,39 @@ class OutboxRepository:
         after the lease expires, hence handlers MUST be idempotent.
 
         `kinds` selects entries by kind (server-side); `exclude_kinds` skips kinds a loop must
-        not touch (slow jobs run in their own loop). The exclusion over-fetches and filters here
-        to avoid a composite index, so a very long backlog of excluded entries could delay others."""
+        not touch (slow jobs run in their own loop). The exclusion is filtered here, a page at a
+        time, to avoid a composite index; a backlog of excluded entries can delay others by up to
+        `_CLAIM_MAX_PAGES` pages."""
         query = self._db.collection(OUTBOX_COLLECTION).where(filter=firestore.FieldFilter("processed", "==", False))
         if kinds:
             query = query.where(filter=firestore.FieldFilter("kind", "in", list(kinds)))
-        query = query.limit(max(1, limit) * (4 if exclude_kinds else 1))
+        wanted = max(1, limit)
         claimed: list[OutboxEntry] = []
-        for doc in query.stream():
-            if len(claimed) >= max(1, limit):
+        last_doc = None
+        for _ in range(_CLAIM_MAX_PAGES):
+            page_query = query.limit(wanted)
+            if last_doc is not None:
+                page_query = page_query.start_after(last_doc)
+            page = list(page_query.stream())
+            for doc in page:
+                if len(claimed) >= wanted:
+                    break
+                data = doc.to_dict() or {}
+                if data.get("kind") in exclude_kinds:
+                    continue
+                claimed_at = data.get("claimed_at")
+                if claimed_at:
+                    try:
+                        claimed_dt = datetime.fromisoformat(claimed_at)
+                        if (now - claimed_dt).total_seconds() < lease_seconds:
+                            continue  # still leased by another worker
+                    except (TypeError, ValueError):
+                        pass
+                doc.reference.update({"claimed_at": now.isoformat(), "claimed_by": worker_id})
+                claimed.append(OutboxEntry.model_validate({**data, "id": doc.id}))
+            if len(claimed) >= wanted or len(page) < wanted:
                 break
-            data = doc.to_dict() or {}
-            if data.get("kind") in exclude_kinds:
-                continue
-            claimed_at = data.get("claimed_at")
-            if claimed_at:
-                try:
-                    claimed_dt = datetime.fromisoformat(claimed_at)
-                    if (now - claimed_dt).total_seconds() < lease_seconds:
-                        continue  # still leased by another worker
-                except (TypeError, ValueError):
-                    pass
-            doc.reference.update({"claimed_at": now.isoformat(), "claimed_by": worker_id})
-            entry = OutboxEntry.model_validate({**data, "id": doc.id})
-            claimed.append(entry)
+            last_doc = page[-1]
         return claimed
 
     def mark_processed(self, entry_id: str, *, now: datetime) -> None:
