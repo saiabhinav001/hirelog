@@ -124,6 +124,38 @@ describe("Student exam page — submit confirmation", () => {
     await waitFor(() => expect(getMyAccommodationsMock).toHaveBeenCalledWith("token", "run-1"));
   });
 
+  it("never opens the camera when the server has nowhere to keep snapshots", async () => {
+    const getUserMedia = vi.fn();
+    Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia }, configurable: true });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+    try {
+      getMyAccommodationsMock.mockResolvedValue({ extra_minutes: 0, camera_waived: false, camera_capture_available: false });
+      mockSingle();
+      render(<ExamPage />);
+      expect(await screen.findByText("Not in use")).toBeInTheDocument();
+      expect(getUserMedia).not.toHaveBeenCalled();
+      expect(fetchSpy.mock.calls.some(([url]) => String(url).includes("/snapshots"))).toBe(false);
+    } finally {
+      fetchSpy.mockRestore();
+      Object.defineProperty(navigator, "mediaDevices", { value: undefined, configurable: true });
+    }
+  });
+
+  it("still asks for the camera once, after the accommodations are known, when the server does not say", async () => {
+    const getUserMedia = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia }, configurable: true });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+    try {
+      mockSingle();
+      render(<ExamPage />);
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+      expect(getMyAccommodationsMock).toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      Object.defineProperty(navigator, "mediaDevices", { value: undefined, configurable: true });
+    }
+  });
+
   it("does not show a submit button before the last question", async () => {
     mockSingle({}, 3);
     render(<ExamPage />);

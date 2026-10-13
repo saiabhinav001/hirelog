@@ -17,6 +17,11 @@ describe("ExamShellHeader", () => {
     expect(screen.getByText("Unsupported")).toBeInTheDocument();
   });
 
+  it("says the camera is not in use when the exam takes no snapshots", () => {
+    render(<ExamShellHeader connectionHealth="connected" camera={{ permission: "off", lastCaptureAt: null }} />);
+    expect(screen.getByLabelText("Camera status")).toHaveTextContent("Not in use");
+  });
+
   it("shows capture age once granted and captured", () => {
     vi.useFakeTimers().setSystemTime(new Date("2026-06-01T10:00:30Z"));
     render(<ExamShellHeader connectionHealth="connected" camera={{ permission: "granted", lastCaptureAt: "2026-06-01T10:00:00Z" }} />);

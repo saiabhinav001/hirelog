@@ -58,6 +58,8 @@ export type PublicQuestion = {
 export type MyAccommodations = {
   extra_minutes: number;
   camera_waived: boolean;
+  /** False when the server has nowhere to keep snapshots; absent on servers that predate the field. */
+  camera_capture_available?: boolean;
 };
 
 export type LockdownProfile = {

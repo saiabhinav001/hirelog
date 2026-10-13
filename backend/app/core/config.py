@@ -282,6 +282,11 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.ENV == "production"
 
+    @property
+    def evidence_capture_available(self) -> bool:
+        """Camera snapshots need a bucket; outside production an in-memory stand-in is used instead."""
+        return bool(self.EXAM_EVIDENCE_STORAGE_BUCKET) or not self.is_production
+
     @staticmethod
     def _normalize_origin(origin: str) -> str:
         value = origin.strip()

@@ -54,6 +54,8 @@ function ExamContent() {
   const [publicRunResults, setPublicRunResults] = useState<unknown[]>([]);
   const [publicRunMessage, setPublicRunMessage] = useState<string | null>(null);
   const [cameraWaived, setCameraWaived] = useState(false);
+  const [captureAvailable, setCaptureAvailable] = useState(true);
+  const [accommodationsKnown, setAccommodationsKnown] = useState(false);
   const [codingTab, setCodingTab] = useState<"testcase" | "result">("testcase");
   const [liveWarning, setLiveWarning] = useState<string | null>(null);
   const [fullscreenSupported, setFullscreenSupported] = useState(false);
@@ -156,8 +158,12 @@ function ExamContent() {
   useEffect(() => {
     getToken()
       .then((token) => examEndpoints.getMyAccommodations(token, runId))
-      .then((accommodations) => setCameraWaived(accommodations.camera_waived))
-      .catch(() => undefined); // accommodations are an enhancement, never a blocker
+      .then((accommodations) => {
+        setCameraWaived(accommodations.camera_waived);
+        setCaptureAvailable(accommodations.camera_capture_available !== false);
+      })
+      .catch(() => undefined) // accommodations are an enhancement, never a blocker
+      .finally(() => setAccommodationsKnown(true));
   }, [getToken, runId]);
 
   const checkForChange = useCallback(async () => {
@@ -184,10 +190,12 @@ function ExamContent() {
     getToken,
     handleObservation
   );
+  // The first capture waits for the accommodations, so a waived or camera-less exam never opens the camera prompt.
   const { state: cameraState, captureNow } = useCameraCapture(
-    attempt?.status === "in_progress" ? runId : null,
+    attempt?.status === "in_progress" && accommodationsKnown ? runId : null,
     getToken,
-    cameraWaived
+    cameraWaived,
+    captureAvailable
   );
   // Hold back any service-worker update from the first render (the attempt is not loaded yet, so "unknown" counts as
   // active) until the attempt is known to be over; a blocked attempt can still resume, so it is held too.

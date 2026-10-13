@@ -6,6 +6,7 @@
  * still frame, and stops the stream immediately. A denied permission or
  * capture failure records an honest MISSING reason instead of blocking
  * anything (contract: submission acceptance never depends on this).
+ * When the server has nowhere to keep snapshots the camera is never started.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -14,8 +15,10 @@ const EXAMS_API_BASE = (process.env.NEXT_PUBLIC_EXAMS_API_BASE_URL || "http://lo
 
 export type CaptureState = {
   lastCaptureAt: string | null;
-  permission: "unknown" | "granted" | "denied" | "unsupported" | "waived";
+  permission: "unknown" | "granted" | "denied" | "unsupported" | "waived" | "off";
 };
+
+const CAMERA_OFF: CaptureState = { lastCaptureAt: null, permission: "off" };
 
 async function captureOneFrame(): Promise<Blob | { missingReason: string }> {
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -57,7 +60,8 @@ async function sha256Hex(blob: Blob): Promise<string> {
 export function useCameraCapture(
   runId: string | null,
   getToken: () => Promise<string | undefined>,
-  cameraWaived = false
+  cameraWaived = false,
+  captureAvailable = true
 ) {
   const [state, setState] = useState<CaptureState>({ lastCaptureAt: null, permission: "unknown" });
   const runIdRef = useRef(runId);
@@ -73,7 +77,7 @@ export function useCameraCapture(
   const capture = useCallback(
     async (kind: "check_in" | "periodic" | "submission") => {
       const currentRunId = runIdRef.current;
-      if (!currentRunId) return;
+      if (!currentRunId || !captureAvailable) return;
       const token = await getToken();
 
       if (cameraWaivedRef.current) {
@@ -142,16 +146,16 @@ export function useCameraCapture(
         // snapshot stays in its "requested" state server-side and is marked missing once its ticket lapses.
       }
     },
-    [getToken]
+    [getToken, captureAvailable]
   );
 
   useEffect(() => {
-    if (!runId) return undefined;
+    if (!runId || !captureAvailable) return undefined;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial check-in capture on mount
     void capture("check_in");
     const interval = setInterval(() => void capture("periodic"), 5 * 60_000);
     return () => clearInterval(interval);
-  }, [runId, capture]);
+  }, [runId, capture, captureAvailable]);
 
-  return { state, captureNow: capture };
+  return { state: captureAvailable ? state : CAMERA_OFF, captureNow: capture };
 }

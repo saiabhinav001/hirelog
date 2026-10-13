@@ -182,6 +182,7 @@ What produces the saving, in order of size:
 - The finalization sweep sleeps while a run has no live attempt (`EXAM_FINALIZATION_DORMANT_RUN_SECONDS`) and is woken by an admission; the judge sweep stops polling a student's test run that never finished (`EXAM_JUDGE_PUBLIC_RUN_STALE_SECONDS`).
 - The outbox claims one page of entries at a time, so a burst of submissions does not re-read the whole backlog on every tick, and grading reads each draft once.
 - When a browser cannot open the live socket, the student page polls with one state read every 20 s (it reloads the question only if the attempt changed) and asks for a new socket ticket every two minutes. Before this a refused socket meant five requests every 10 s from every student.
+- Camera snapshots are skipped in production when no evidence bucket is configured (`EXAM_EVIDENCE_STORAGE_BUCKET` unset): the accommodations response carries `camera_capture_available: false`, the student page never opens the camera and its header reads "Not in use". That also saves the permission prompt and a handful of reads and writes per student every 5 minutes, which was a refused snapshot request plus a missing-evidence record.
 
 Idle cost with exams enabled and nobody using them is now about 2 reads a minute (about 2,900 a day), lower than the idle-adaptive figure in the table above because the idle caps were raised to 10 minutes and the finalization sweep sleeps while no run has a live attempt.
 

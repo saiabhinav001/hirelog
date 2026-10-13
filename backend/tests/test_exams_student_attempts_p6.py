@@ -251,6 +251,20 @@ def test_a_saved_draft_reports_what_the_navigator_will_show_so_the_client_need_n
     assert (slot["answered"], slot["version"]) == (True, 3)
 
 
+def test_the_accommodations_say_whether_a_camera_snapshot_could_be_kept(api, monkeypatch) -> None:
+    def capture_available() -> bool:
+        return api.client.get(f"{BASE}/runs/{RUN}/accommodations").json()["camera_capture_available"]
+
+    monkeypatch.setattr(settings, "ENV", "production")
+    monkeypatch.setattr(settings, "EXAM_EVIDENCE_STORAGE_BUCKET", None)
+    assert capture_available() is False
+    monkeypatch.setattr(settings, "EXAM_EVIDENCE_STORAGE_BUCKET", "private-bucket")
+    assert capture_available() is True
+    monkeypatch.setattr(settings, "EXAM_EVIDENCE_STORAGE_BUCKET", None)
+    monkeypatch.setattr(settings, "ENV", "staging")
+    assert capture_available() is True
+
+
 def test_marking_for_review_is_a_flag_that_a_later_save_keeps_unless_told_otherwise(api) -> None:
     api.save(Q0, 0, {"selected": "A"}, marked_for_review=True)
     api.save(Q0, 1, {"selected": "B"})  # flag omitted: unchanged

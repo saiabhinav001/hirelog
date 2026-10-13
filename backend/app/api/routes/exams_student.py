@@ -111,6 +111,7 @@ def get_my_accommodations(run_id: str, response: Response, user: dict = Depends(
     return {
         "extra_minutes": run.policy.extra_minutes_for(user["uid"]),
         "camera_waived": run.policy.camera_waived_for(user["uid"]),
+        "camera_capture_available": settings.evidence_capture_available,
     }
 
 

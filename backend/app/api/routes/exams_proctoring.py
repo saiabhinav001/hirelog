@@ -78,7 +78,7 @@ def _storage():
 def _evidence_service() -> EvidenceService:
     """Evidence bytes need private storage. In production the in-memory stand-in is never used: without a bucket the
     caller is told evidence is unavailable (it is recorded as missing; nothing else depends on it)."""
-    if settings.is_production and not settings.EXAM_EVIDENCE_STORAGE_BUCKET:
+    if not settings.evidence_capture_available:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "evidence_storage_unavailable", "message": "Evidence storage is not configured."},

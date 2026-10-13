@@ -5,6 +5,7 @@ import { useCameraCapture } from "@/lib/useCameraCapture";
 
 describe("useCameraCapture — camera_waived accommodation", () => {
   const originalFetch = global.fetch;
+  const getToken = async () => "token"; // stable, like the page's: a new getter every render would re-run the capture effect
 
   beforeEach(() => {
     global.fetch = vi.fn().mockResolvedValue({ json: async () => ({}) });
@@ -43,5 +44,27 @@ describe("useCameraCapture — camera_waived accommodation", () => {
     renderHook(() => useCameraCapture(null, async () => "token", true));
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("never starts the camera or calls the server when the server cannot keep snapshots", async () => {
+    const getUserMediaSpy = vi.fn();
+    Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: getUserMediaSpy }, configurable: true });
+
+    const { result } = renderHook(() => useCameraCapture("run-1", getToken, false, false));
+    await result.current.captureNow("submission");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(getUserMediaSpy).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(result.current.state).toEqual({ lastCaptureAt: null, permission: "off" });
+  });
+
+  it("keeps capturing by default so servers that predate the flag behave as before", async () => {
+    const getUserMediaSpy = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: getUserMediaSpy }, configurable: true });
+
+    renderHook(() => useCameraCapture("run-1", getToken));
+
+    await vi.waitFor(() => expect(getUserMediaSpy).toHaveBeenCalledTimes(1));
   });
 });
