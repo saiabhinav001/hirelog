@@ -2,7 +2,8 @@
 
 The contract is deliberately vendor-neutral: POST one JSON body, get one JSON object back
 (optionally wrapped as `{"output": {...}, "model": "...", "usage": {...}}`). A vendor whose
-API differs sits behind a thin gateway the institution runs; nothing here knows a vendor.
+API differs sits behind a thin gateway the institution runs; the one exception is api.groq.com,
+whose chat-completion API is translated here (`_groq_payload`).
 Bounded: timeout, retries with backoff on timeouts / 429 / 5xx, response size cap. The API
 key is sent only as a bearer header and never logged.
 """

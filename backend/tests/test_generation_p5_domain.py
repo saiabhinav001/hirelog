@@ -5,11 +5,13 @@ the provider HTTP transport. Pure logic - no Firestore.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import httpx
 import pytest
 
+from app.core.config import settings
 from app.domain.generation.blueprint_spec import BlueprintSpec, expand_spec
 from app.domain.generation.capacity import compute_capacity
 from app.domain.generation.edit import CandidateEditError, decide_edit
@@ -524,6 +526,47 @@ def test_an_oversized_response_is_refused() -> None:
     with pytest.raises(HttpCallError) as caught:
         post_json("https://provider.example/v1", "k", {}, client=_client(lambda r: big))
     assert caught.value.kind == "too_large"
+
+
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+
+def test_a_groq_endpoint_gets_an_openai_style_chat_request_and_its_completion_is_unwrapped(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "EXAM_GROQ_MODEL", "test-model")
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.read())
+        content = json.dumps({"request_id": "req-1", "status": "draft", "candidates": []})
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}], "model": "test-model", "usage": {"total_tokens": 7}})
+
+    result = post_json(GROQ_URL, "k", {"system_prompt": "be careful", "input": {"topic": "arrays"}}, client=_client(handler))
+    body = seen["body"]
+    assert body["model"] == "test-model" and body["response_format"] == {"type": "json_object"}
+    assert [m["role"] for m in body["messages"]] == ["system", "user"] and "be careful" in body["messages"][0]["content"]
+    assert json.loads(body["messages"][1]["content"]) == {"topic": "arrays"}
+    assert result.output == {"request_id": "req-1", "status": "draft", "candidates": []}
+    assert result.model == "test-model" and result.usage == {"total_tokens": 7}
+
+
+@pytest.mark.parametrize("content", ["not json", "[1, 2]", None])
+def test_a_groq_completion_that_is_not_one_json_object_is_refused(content) -> None:
+    reply = httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+    with pytest.raises(HttpCallError) as caught:
+        post_json(GROQ_URL, "k", {"input": {}}, client=_client(lambda r: reply))
+    assert caught.value.kind == "invalid_json"
+
+
+def test_any_other_host_still_receives_the_neutral_body_unchanged() -> None:
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.read())
+        return httpx.Response(200, json={"ok": True})
+
+    body = {"system_prompt": "s", "input": {"a": 1}}
+    post_json("https://provider.example/v1", "k", body, client=_client(handler))
+    assert seen["body"] == body
 
 
 def test_the_reference_solution_is_not_a_field_the_student_facing_request_can_carry() -> None:

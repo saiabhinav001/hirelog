@@ -11,8 +11,10 @@ import threading
 import httpx
 import pytest
 
+from app.api.routes import exams_kt
+from app.core.config import settings
 from app.domain.kt import url_resolver
-from app.domain.kt.malware_scan import ClamdScanner, DeterministicFakeScanner, NullMalwareScanner, build_scanner
+from app.domain.kt.malware_scan import ClamdScanner, DeterministicFakeScanner, DevBypassScanner, NullMalwareScanner, build_scanner
 from app.domain.kt.url_resolver import (
     LimitedHttpClient,
     UnsafeUrlError,
@@ -116,6 +118,30 @@ def test_default_scanners_report_configuration_and_never_say_clean_without_a_rea
     assert not NullMalwareScanner().scan(b"hello").clean
     assert DeterministicFakeScanner().scan(b"EICAR-TEST-MARKER").infected
     assert build_scanner("h:3310").configured is True
+
+
+@pytest.mark.parametrize("env,flag,honoured", [
+    ("development", True, True), ("development", False, False),
+    ("production", True, False), ("staging", True, False), ("test", True, False),
+])
+def test_the_scan_bypass_is_honoured_only_in_development_and_only_when_asked_for(monkeypatch, env, flag, honoured) -> None:
+    monkeypatch.setattr(settings, "ENV", env)
+    monkeypatch.setattr(settings, "EXAM_MALWARE_SCAN_DEV_BYPASS", flag)
+    assert settings.malware_scan_dev_bypass_allowed() is honoured
+
+
+def test_the_upload_route_picks_the_bypass_scanner_only_when_the_gate_allows_it(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "EXAM_MALWARE_SCANNER_ENDPOINT", None)
+    monkeypatch.setattr(settings, "EXAM_MALWARE_SCAN_DEV_BYPASS", True)
+
+    monkeypatch.setattr(exams_kt, "_scanner_singleton", None)
+    monkeypatch.setattr(settings, "ENV", "development")
+    assert isinstance(exams_kt._scanner(), DevBypassScanner) and exams_kt._scanner().scan(b"x").clean
+
+    monkeypatch.setattr(exams_kt, "_scanner_singleton", None)
+    monkeypatch.setattr(settings, "ENV", "production")
+    scanner = exams_kt._scanner()
+    assert not isinstance(scanner, DevBypassScanner) and not scanner.scan(b"x").clean
 
 
 # -- URL validation -----------------------------------------------------------------------------------
