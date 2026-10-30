@@ -68,16 +68,24 @@ function DefinitionDetail() {
   const handleAddSourceUrl = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!sourceUrl.trim()) return;
-    const token = await getToken();
-    await examApiFetch("/api/exams/v1/faculty/kt/sources/from-url", { method: "POST", body: JSON.stringify({ url: sourceUrl.trim() }) }, token);
-    setSourceUrl("");
-    await load();
+    try {
+      const token = await getToken();
+      await examApiFetch("/api/exams/v1/faculty/kt/sources/from-url", { method: "POST", body: JSON.stringify({ url: sourceUrl.trim() }) }, token);
+      setSourceUrl("");
+      await load();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not add the reference link.");
+    }
   };
 
   const handleReviewSource = async (sourceId: string, decision: "approve" | "reject") => {
-    const token = await getToken();
-    await examEndpoints.reviewSource(token, sourceId, decision, decision === "approve" ? "Rights confirmed by faculty reviewer." : undefined);
-    await load();
+    try {
+      const token = await getToken();
+      await examEndpoints.reviewSource(token, sourceId, decision, decision === "approve" ? "Rights confirmed by faculty reviewer." : undefined);
+      await load();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not review the source.");
+    }
   };
 
   const handleCreateBlueprint = async (event: React.FormEvent) => {
@@ -150,30 +158,34 @@ function DefinitionDetail() {
       setNotice(built.error);
       return;
     }
-    const token = await getToken();
-    const enrolledUids = enrolledUidsText.split(",").map((s) => s.trim()).filter(Boolean);
-    const definitionsResp = await examEndpoints.listMyDefinitions(token);
-    const def = definitionsResp.results.find((d) => d.id === definitionId);
-    if (!def?.latest_published_revision_id) {
-      setNotice("Publish a revision first (use \"Publish revision\" above), then schedule the session.");
-      return;
+    try {
+      const token = await getToken();
+      const enrolledUids = enrolledUidsText.split(",").map((s) => s.trim()).filter(Boolean);
+      const definitionsResp = await examEndpoints.listMyDefinitions(token);
+      const def = definitionsResp.results.find((d) => d.id === definitionId);
+      if (!def?.latest_published_revision_id) {
+        setNotice("Publish a revision first (use \"Publish revision\" above), then schedule the session.");
+        return;
+      }
+      await examApiFetch(
+        "/api/exams/v1/faculty/runs",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            definition_id: definitionId,
+            revision_id: def.latest_published_revision_id,
+            policy: built.policy,
+            enrolled_uids: enrolledUids,
+          }),
+        },
+        token
+      );
+      setEnrolledUidsText("");
+      setNotice("Session scheduled.");
+      await load();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not schedule the session.");
     }
-    await examApiFetch(
-      "/api/exams/v1/faculty/runs",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          definition_id: definitionId,
-          revision_id: def.latest_published_revision_id,
-          policy: built.policy,
-          enrolled_uids: enrolledUids,
-        }),
-      },
-      token
-    );
-    setEnrolledUidsText("");
-    setNotice("Session scheduled.");
-    await load();
   };
 
   if (error) return <ErrorState title="Something went wrong" description={error} />;
